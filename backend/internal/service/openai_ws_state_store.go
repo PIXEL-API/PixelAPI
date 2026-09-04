@@ -4,15 +4,20 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 const (
 	openAIWSResponseAccountCachePrefix = "openai:response:"
+	openAIWSResponseOwnerCachePrefix   = "openai:response_owner:v2:"
 	openAIWSResponseSessionCachePrefix = "openai:response_session:"
 	openAIWSSessionLatestCachePrefix   = "openai:session_latest_response:"
 	openAIWSStateStoreCleanupInterval  = time.Minute
@@ -21,9 +26,21 @@ const (
 	openAIWSStateStoreRedisTimeout     = 3 * time.Second
 )
 
+var errOpenAIWSResponseOwnerInvalid = errors.New("openai websocket response owner record is invalid")
+
 type openAIWSAccountBinding struct {
 	accountID int64
 	expiresAt time.Time
+}
+
+// OpenAIWSResponseOwner is the immutable, API-key-scoped owner of a response.
+// GroupID may be zero for an ungrouped API key; AccountID and APIKeyID must be
+// positive. Version is persisted so future formats fail closed when decoded.
+type OpenAIWSResponseOwner struct {
+	Version   int   `json:"v"`
+	APIKeyID  int64 `json:"api_key_id"`
+	GroupID   int64 `json:"group_id"`
+	AccountID int64 `json:"account_id"`
 }
 
 type openAIWSConnBinding struct {
@@ -52,6 +69,13 @@ type openAIWSStringCache interface {
 	DeleteSessionString(ctx context.Context, groupID int64, sessionHash string) error
 }
 
+// openAIWSImmutableStringCache is deliberately narrower than GatewayCache.
+// The production Redis cache implements this as a single-key atomic script.
+// A non-atomic Get+Set fallback could silently change continuation ownership.
+type openAIWSImmutableStringCache interface {
+	BindSessionStringImmutable(ctx context.Context, groupID int64, sessionHash, value string, ttl time.Duration) (string, error)
+}
+
 // OpenAIWSStateStore 管理 WSv2 的粘连状态。
 // - response_id -> account_id 用于续链路由
 // - response_id -> conn_id 用于连接内上下文复用
@@ -63,13 +87,22 @@ type openAIWSStringCache interface {
 // session_hash -> latest_response_id / response_id -> session_hash 优先走可选 Redis 字符串缓存，
 // 不可用时退回本地缓存，仅提供本实例内纠偏。
 type OpenAIWSStateStore interface {
+	BindResponseOwner(ctx context.Context, apiKeyID, groupID int64, responseID string, accountID int64, ttl time.Duration) error
+	GetResponseOwnerStrict(ctx context.Context, apiKeyID int64, responseID string) (OpenAIWSResponseOwner, bool, error)
+	BindHTTPResponseOwner(ctx context.Context, groupID int64, responseID string, userID, apiKeyID, accountID int64, ttl time.Duration) error
+	GetHTTPResponseOwnerStrict(ctx context.Context, groupID int64, responseID string) (OpenAIHTTPResponseOwner, bool, error)
+
 	BindResponseAccount(ctx context.Context, groupID int64, responseID string, accountID int64, ttl time.Duration) error
+	PrimeResponseAccountLocal(groupID int64, responseID string, accountID int64, ttl time.Duration)
 	GetResponseAccount(ctx context.Context, groupID int64, responseID string) (int64, error)
+	GetResponseAccountStrict(ctx context.Context, groupID int64, responseID string) (int64, error)
 	DeleteResponseAccount(ctx context.Context, groupID int64, responseID string) error
 
 	BindSessionResponse(ctx context.Context, groupID int64, sessionHash, responseID string, ttl time.Duration) error
 	GetSessionLatestResponse(ctx context.Context, groupID int64, sessionHash string) (string, error)
+	GetSessionLatestResponseStrict(ctx context.Context, groupID int64, sessionHash string) (string, error)
 	GetResponseSession(ctx context.Context, groupID int64, responseID string) (string, error)
+	GetResponseSessionStrict(ctx context.Context, groupID int64, responseID string) (string, error)
 
 	BindResponseConn(responseID, connID string, ttl time.Duration)
 	GetResponseConn(responseID string) (string, bool)
@@ -118,19 +151,110 @@ func NewOpenAIWSStateStore(cache GatewayCache) OpenAIWSStateStore {
 	return store
 }
 
+func (s *defaultOpenAIWSStateStore) BindResponseOwner(
+	ctx context.Context,
+	apiKeyID, groupID int64,
+	responseID string,
+	accountID int64,
+	ttl time.Duration,
+) error {
+	if s == nil {
+		return errors.New("openai websocket state store is unavailable")
+	}
+	id := normalizeOpenAIWSResponseID(responseID)
+	if id == "" || apiKeyID <= 0 || groupID < 0 || accountID <= 0 {
+		return errors.New("invalid openai websocket response owner binding")
+	}
+	ttl = normalizeOpenAIWSTTL(ttl)
+	owner := OpenAIWSResponseOwner{
+		Version:   2,
+		APIKeyID:  apiKeyID,
+		GroupID:   groupID,
+		AccountID: accountID,
+	}
+	if s.cache == nil {
+		return errors.New("gateway cache is unavailable for durable response owner binding")
+	}
+	immutableCache, ok := s.cache.(openAIWSImmutableStringCache)
+	if !ok || immutableCache == nil {
+		return errors.New("gateway cache does not support immutable response owner bindings")
+	}
+	encoded, err := json.Marshal(owner)
+	if err != nil {
+		return fmt.Errorf("encode openai websocket response owner: %w", err)
+	}
+	cacheCtx, cancel := withOpenAIWSStateStoreRedisTimeout(ctx)
+	storedValue, err := immutableCache.BindSessionStringImmutable(
+		cacheCtx,
+		0,
+		openAIWSResponseOwnerCacheKey(apiKeyID, id),
+		string(encoded),
+		ttl,
+	)
+	cancel()
+	if err != nil {
+		return fmt.Errorf("persist openai websocket response owner: %w", err)
+	}
+	storedOwner, decodeErr := decodeOpenAIWSResponseOwner(storedValue, apiKeyID)
+	if decodeErr != nil {
+		return decodeErr
+	}
+	if storedOwner != owner {
+		return fmt.Errorf(
+			"openai websocket response owner conflict: response %s is owned by group %d account %d, attempted group %d account %d",
+			id,
+			storedOwner.GroupID,
+			storedOwner.AccountID,
+			groupID,
+			accountID,
+		)
+	}
+
+	return nil
+}
+
+func (s *defaultOpenAIWSStateStore) GetResponseOwnerStrict(
+	ctx context.Context,
+	apiKeyID int64,
+	responseID string,
+) (OpenAIWSResponseOwner, bool, error) {
+	if s == nil {
+		return OpenAIWSResponseOwner{}, false, errors.New("openai websocket state store is unavailable")
+	}
+	id := normalizeOpenAIWSResponseID(responseID)
+	if id == "" || apiKeyID <= 0 {
+		return OpenAIWSResponseOwner{}, false, nil
+	}
+
+	// Strict distributed reads always consult Redis; a process-local value must
+	// never hide a cache miss or outage during continuation routing.
+	if s.cache == nil {
+		return OpenAIWSResponseOwner{}, false, errors.New("gateway cache is unavailable for durable response owner lookup")
+	}
+	cacheCtx, cancel := withOpenAIWSStateStoreRedisTimeout(ctx)
+	storedValue, err := s.cache.GetSessionString(cacheCtx, 0, openAIWSResponseOwnerCacheKey(apiKeyID, id))
+	cancel()
+	if err != nil {
+		if errors.Is(err, ErrGatewaySessionStringNotFound) || errors.Is(err, redis.Nil) {
+			return OpenAIWSResponseOwner{}, false, nil
+		}
+		return OpenAIWSResponseOwner{}, false, err
+	}
+	owner, decodeErr := decodeOpenAIWSResponseOwner(storedValue, apiKeyID)
+	if decodeErr != nil {
+		return OpenAIWSResponseOwner{}, false, decodeErr
+	}
+	return owner, true, nil
+}
+
 func (s *defaultOpenAIWSStateStore) BindResponseAccount(ctx context.Context, groupID int64, responseID string, accountID int64, ttl time.Duration) error {
 	id := normalizeOpenAIWSResponseID(responseID)
-	if id == "" || accountID <= 0 {
+	localKey := openAIWSResponseGroupKey(groupID, id)
+	if localKey == "" || accountID <= 0 {
 		return nil
 	}
 	ttl = normalizeOpenAIWSTTL(ttl)
-	s.maybeCleanup()
-
-	expiresAt := time.Now().Add(ttl)
-	s.responseToAccountMu.Lock()
-	ensureBindingCapacity(s.responseToAccount, id, openAIWSStateStoreMaxEntriesPerMap)
-	s.responseToAccount[id] = openAIWSAccountBinding{accountID: accountID, expiresAt: expiresAt}
-	s.responseToAccountMu.Unlock()
+	s.PrimeResponseAccountLocal(groupID, id, accountID, ttl)
 
 	if s.cache == nil {
 		return nil
@@ -141,16 +265,50 @@ func (s *defaultOpenAIWSStateStore) BindResponseAccount(ctx context.Context, gro
 	return s.cache.SetSessionAccountID(cacheCtx, groupID, cacheKey, accountID, ttl)
 }
 
-func (s *defaultOpenAIWSStateStore) GetResponseAccount(ctx context.Context, groupID int64, responseID string) (int64, error) {
+func (s *defaultOpenAIWSStateStore) PrimeResponseAccountLocal(
+	groupID int64,
+	responseID string,
+	accountID int64,
+	ttl time.Duration,
+) {
+	if s == nil {
+		return
+	}
 	id := normalizeOpenAIWSResponseID(responseID)
-	if id == "" {
+	localKey := openAIWSResponseGroupKey(groupID, id)
+	if localKey == "" || accountID <= 0 {
+		return
+	}
+	ttl = normalizeOpenAIWSTTL(ttl)
+	s.maybeCleanup()
+
+	s.responseToAccountMu.Lock()
+	ensureBindingCapacity(s.responseToAccount, localKey, openAIWSStateStoreMaxEntriesPerMap)
+	s.responseToAccount[localKey] = openAIWSAccountBinding{accountID: accountID, expiresAt: time.Now().Add(ttl)}
+	s.responseToAccountMu.Unlock()
+}
+
+func (s *defaultOpenAIWSStateStore) GetResponseAccount(ctx context.Context, groupID int64, responseID string) (int64, error) {
+	accountID, err := s.GetResponseAccountStrict(ctx, groupID, responseID)
+	if err != nil {
+		// Compatibility path: a transient cache failure historically behaved as
+		// a miss. Strict continuation route resolution uses the method below.
+		return 0, nil
+	}
+	return accountID, nil
+}
+
+func (s *defaultOpenAIWSStateStore) GetResponseAccountStrict(ctx context.Context, groupID int64, responseID string) (int64, error) {
+	id := normalizeOpenAIWSResponseID(responseID)
+	localKey := openAIWSResponseGroupKey(groupID, id)
+	if localKey == "" {
 		return 0, nil
 	}
 	s.maybeCleanup()
 
 	now := time.Now()
 	s.responseToAccountMu.RLock()
-	if binding, ok := s.responseToAccount[id]; ok {
+	if binding, ok := s.responseToAccount[localKey]; ok {
 		if now.Before(binding.expiresAt) {
 			accountID := binding.accountID
 			s.responseToAccountMu.RUnlock()
@@ -167,8 +325,13 @@ func (s *defaultOpenAIWSStateStore) GetResponseAccount(ctx context.Context, grou
 	cacheCtx, cancel := withOpenAIWSStateStoreRedisTimeout(ctx)
 	defer cancel()
 	accountID, err := s.cache.GetSessionAccountID(cacheCtx, groupID, cacheKey)
-	if err != nil || accountID <= 0 {
-		// 缓存读取失败不阻断主流程，按未命中降级。
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if accountID <= 0 {
 		return 0, nil
 	}
 	return accountID, nil
@@ -176,11 +339,12 @@ func (s *defaultOpenAIWSStateStore) GetResponseAccount(ctx context.Context, grou
 
 func (s *defaultOpenAIWSStateStore) DeleteResponseAccount(ctx context.Context, groupID int64, responseID string) error {
 	id := normalizeOpenAIWSResponseID(responseID)
-	if id == "" {
+	localKey := openAIWSResponseGroupKey(groupID, id)
+	if localKey == "" {
 		return nil
 	}
 	s.responseToAccountMu.Lock()
-	delete(s.responseToAccount, id)
+	delete(s.responseToAccount, localKey)
 	s.responseToAccountMu.Unlock()
 
 	if s.cache == nil {
@@ -227,6 +391,15 @@ func (s *defaultOpenAIWSStateStore) BindSessionResponse(ctx context.Context, gro
 }
 
 func (s *defaultOpenAIWSStateStore) GetSessionLatestResponse(ctx context.Context, groupID int64, sessionHash string) (string, error) {
+	value, err := s.GetSessionLatestResponseStrict(ctx, groupID, sessionHash)
+	if err != nil {
+		// Compatibility path for non-routing repair callers.
+		return "", nil
+	}
+	return value, nil
+}
+
+func (s *defaultOpenAIWSStateStore) GetSessionLatestResponseStrict(ctx context.Context, groupID int64, sessionHash string) (string, error) {
 	key := openAIWSSessionTurnStateKey(groupID, sessionHash)
 	if key == "" {
 		return "", nil
@@ -239,7 +412,10 @@ func (s *defaultOpenAIWSStateStore) GetSessionLatestResponse(ctx context.Context
 		defer cancel()
 		value, err := stringCache.GetSessionString(cacheCtx, groupID, openAIWSSessionLatestResponseCacheKey(sessionHash))
 		if err != nil {
-			return "", nil
+			if errors.Is(err, ErrGatewaySessionStringNotFound) {
+				return "", nil
+			}
+			return "", err
 		}
 		return strings.TrimSpace(value), nil
 	}
@@ -258,6 +434,15 @@ func (s *defaultOpenAIWSStateStore) GetSessionLatestResponse(ctx context.Context
 }
 
 func (s *defaultOpenAIWSStateStore) GetResponseSession(ctx context.Context, groupID int64, responseID string) (string, error) {
+	value, err := s.GetResponseSessionStrict(ctx, groupID, responseID)
+	if err != nil {
+		// Compatibility path for non-routing repair callers.
+		return "", nil
+	}
+	return value, nil
+}
+
+func (s *defaultOpenAIWSStateStore) GetResponseSessionStrict(ctx context.Context, groupID int64, responseID string) (string, error) {
 	key := openAIWSResponseGroupKey(groupID, responseID)
 	if key == "" {
 		return "", nil
@@ -283,7 +468,10 @@ func (s *defaultOpenAIWSStateStore) GetResponseSession(ctx context.Context, grou
 	defer cancel()
 	value, err := stringCache.GetSessionString(cacheCtx, groupID, openAIWSResponseSessionCacheKey(responseID))
 	if err != nil {
-		return "", nil
+		if errors.Is(err, ErrGatewaySessionStringNotFound) {
+			return "", nil
+		}
+		return "", err
 	}
 	return strings.TrimSpace(value), nil
 }
@@ -563,6 +751,26 @@ func normalizeOpenAIWSResponseID(responseID string) string {
 func openAIWSResponseAccountCacheKey(responseID string) string {
 	sum := sha256.Sum256([]byte(responseID))
 	return openAIWSResponseAccountCachePrefix + hex.EncodeToString(sum[:])
+}
+
+func openAIWSResponseOwnerCacheKey(apiKeyID int64, responseID string) string {
+	id := normalizeOpenAIWSResponseID(responseID)
+	if apiKeyID <= 0 || id == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(id))
+	return fmt.Sprintf("%s%d:%s", openAIWSResponseOwnerCachePrefix, apiKeyID, hex.EncodeToString(sum[:]))
+}
+
+func decodeOpenAIWSResponseOwner(raw string, expectedAPIKeyID int64) (OpenAIWSResponseOwner, error) {
+	var owner OpenAIWSResponseOwner
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &owner); err != nil {
+		return OpenAIWSResponseOwner{}, fmt.Errorf("%w: decode: %v", errOpenAIWSResponseOwnerInvalid, err)
+	}
+	if owner.Version != 2 || owner.APIKeyID <= 0 || owner.APIKeyID != expectedAPIKeyID || owner.GroupID < 0 || owner.AccountID <= 0 {
+		return OpenAIWSResponseOwner{}, errOpenAIWSResponseOwnerInvalid
+	}
+	return owner, nil
 }
 
 func openAIWSResponseSessionCacheKey(responseID string) string {

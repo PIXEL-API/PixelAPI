@@ -7,9 +7,42 @@ import (
 	"testing"
 	"time"
 
+	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+type openAIWSRouteResolutionCache struct {
+	stubGatewayCache
+	accountErr error
+	stringErr  error
+}
+
+type openAIWSOwnerBindErrorCache struct {
+	stubGatewayCache
+	bindErr error
+}
+
+func (c *openAIWSOwnerBindErrorCache) BindSessionStringImmutable(
+	context.Context,
+	int64,
+	string,
+	string,
+	time.Duration,
+) (string, error) {
+	return "", c.bindErr
+}
+
+func (c *openAIWSRouteResolutionCache) GetSessionAccountID(context.Context, int64, string) (int64, error) {
+	return 0, c.accountErr
+}
+
+func (c *openAIWSRouteResolutionCache) GetSessionString(context.Context, int64, string) (string, error) {
+	if c.stringErr != nil {
+		return "", c.stringErr
+	}
+	return "", ErrGatewaySessionStringNotFound
+}
 
 func TestOpenAIWSStateStore_BindGetDeleteResponseAccount(t *testing.T) {
 	cache := &stubGatewayCache{}
@@ -27,6 +60,343 @@ func TestOpenAIWSStateStore_BindGetDeleteResponseAccount(t *testing.T) {
 	accountID, err = store.GetResponseAccount(ctx, groupID, "resp_abc")
 	require.NoError(t, err)
 	require.Zero(t, accountID)
+}
+
+func TestOpenAIWSStateStore_ResponseAccountBindingIsolatedByGroup(t *testing.T) {
+	store := NewOpenAIWSStateStore(nil)
+	ctx := context.Background()
+
+	require.NoError(t, store.BindResponseAccount(ctx, 7, "resp_group_scoped", 101, time.Minute))
+
+	accountID, err := store.GetResponseAccount(ctx, 8, "resp_group_scoped")
+	require.NoError(t, err)
+	require.Zero(t, accountID, "a local hot-cache hit must not leak across route groups")
+
+	accountID, err = store.GetResponseAccount(ctx, 7, "resp_group_scoped")
+	require.NoError(t, err)
+	require.Equal(t, int64(101), accountID)
+
+	require.NoError(t, store.DeleteResponseAccount(ctx, 8, "resp_group_scoped"))
+	accountID, err = store.GetResponseAccount(ctx, 7, "resp_group_scoped")
+	require.NoError(t, err)
+	require.Equal(t, int64(101), accountID, "deleting another group's miss must not remove the owner group's binding")
+}
+
+func TestOpenAIWSStateStore_ResponseOwnerIsImmutableAndAPIKeyScoped(t *testing.T) {
+	ctx := context.Background()
+	cache := &stubGatewayCache{}
+	firstStore := NewOpenAIWSStateStore(cache)
+	secondStore := NewOpenAIWSStateStore(cache)
+
+	require.NoError(t, firstStore.BindResponseOwner(ctx, 77, 22, "resp_owner", 202, time.Minute))
+	require.NoError(t, firstStore.BindResponseOwner(ctx, 77, 22, "resp_owner", 202, time.Minute), "same owner must be idempotent")
+	require.ErrorContains(t, firstStore.BindResponseOwner(ctx, 77, 33, "resp_owner", 303, time.Minute), "owner conflict")
+
+	owner, found, err := secondStore.GetResponseOwnerStrict(ctx, 77, "resp_owner")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, OpenAIWSResponseOwner{Version: 2, APIKeyID: 77, GroupID: 22, AccountID: 202}, owner)
+
+	_, found, err = secondStore.GetResponseOwnerStrict(ctx, 78, "resp_owner")
+	require.NoError(t, err)
+	require.False(t, found, "another API key must not observe the owner")
+}
+
+func TestOpenAIWSStateStore_ResponseOwnerRequiresDurableCache(t *testing.T) {
+	store := NewOpenAIWSStateStore(nil)
+	err := store.BindResponseOwner(context.Background(), 77, 22, "resp_owner", 202, time.Minute)
+	require.ErrorContains(t, err, "durable response owner")
+
+	_, found, err := store.GetResponseOwnerStrict(context.Background(), 77, "resp_owner")
+	require.ErrorContains(t, err, "durable response owner")
+	require.False(t, found)
+}
+
+func TestOpenAIWSStateStore_ResponseOwnerPropagatesCacheAndFormatErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("bind error", func(t *testing.T) {
+		bindErr := errors.New("immutable owner write unavailable")
+		store := NewOpenAIWSStateStore(&openAIWSOwnerBindErrorCache{bindErr: bindErr})
+		err := store.BindResponseOwner(ctx, 77, 22, "resp_bind_error", 202, time.Minute)
+		require.ErrorIs(t, err, bindErr)
+	})
+
+	t.Run("read error", func(t *testing.T) {
+		readErr := errors.New("owner cache read unavailable")
+		store := NewOpenAIWSStateStore(&openAIWSRouteResolutionCache{stringErr: readErr})
+		_, found, err := store.GetResponseOwnerStrict(ctx, 77, "resp_read_error")
+		require.ErrorIs(t, err, readErr)
+		require.False(t, found)
+	})
+
+	t.Run("corrupt record", func(t *testing.T) {
+		cache := &stubGatewayCache{stringBindings: map[string]string{
+			openAIWSResponseOwnerCacheKey(77, "resp_corrupt"): `{"v":99,"api_key_id":77,"group_id":22,"account_id":202}`,
+		}}
+		store := NewOpenAIWSStateStore(cache)
+		_, found, err := store.GetResponseOwnerStrict(ctx, 77, "resp_corrupt")
+		require.ErrorContains(t, err, "response owner record is invalid")
+		require.False(t, found)
+	})
+}
+
+func TestOpenAIGatewayService_ResolveContinuationRouteGroupUsesV2OwnerAcrossStores(t *testing.T) {
+	ctx := context.Background()
+	cache := &stubGatewayCache{}
+	writerStore := NewOpenAIWSStateStore(cache)
+	readerStore := NewOpenAIWSStateStore(cache)
+	require.NoError(t, writerStore.BindResponseOwner(ctx, 77, 22, "resp_v2_owner", 202, time.Minute))
+
+	svc := &OpenAIGatewayService{openaiWSStateStore: readerStore}
+	groupID, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(ctx, 77, "resp_v2_owner", "", []int64{11, 33})
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, int64(22), groupID, "removed owners remain authoritative so the handler can fail route pinning")
+
+	accountID, getErr := readerStore.GetResponseAccountStrict(ctx, 22, "resp_v2_owner")
+	require.NoError(t, getErr)
+	require.Equal(t, int64(202), accountID, "v2 owner must prime the local compatibility index before scheduling")
+}
+
+func TestOpenAIGatewayService_ResolveContinuationRouteGroupRejectsLegacyOwner(t *testing.T) {
+	ctx := context.Background()
+	store := NewOpenAIWSStateStore(nil)
+	require.NoError(t, store.BindResponseAccount(ctx, 22, "resp_fallback_group", 202, time.Minute))
+
+	svc := &OpenAIGatewayService{openaiWSStateStore: store}
+	groupID, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(
+		ctx,
+		0,
+		"resp_fallback_group",
+		"",
+		[]int64{11, 22, 33},
+	)
+	require.ErrorIs(t, err, errOpenAIWSContinuationAccountUnresolved)
+	require.False(t, found)
+	require.Zero(t, groupID)
+
+	groupID, found, err = svc.ResolveOpenAIWSContinuationRouteGroup(
+		ctx,
+		0,
+		"resp_missing",
+		"",
+		[]int64{11, 22, 33},
+	)
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Zero(t, groupID)
+}
+
+func TestOpenAIGatewayService_ResolveContinuationRouteGroupRejectsResponseSessionWithoutOwner(t *testing.T) {
+	ctx := context.Background()
+	sessionHash := "shared_session"
+	store := NewOpenAIWSStateStore(nil)
+	require.NoError(t, store.BindSessionResponse(ctx, 22, sessionHash, "resp_target", time.Minute))
+	cache := &stubGatewayCache{sessionBindings: map[string]int64{"openai:" + sessionHash: 202}}
+
+	svc := &OpenAIGatewayService{cache: cache, openaiWSStateStore: store}
+	groupID, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(
+		ctx,
+		0,
+		"resp_target",
+		sessionHash,
+		[]int64{11, 22},
+	)
+	require.ErrorIs(t, err, errOpenAIWSContinuationAccountUnresolved)
+	require.False(t, found)
+	require.Zero(t, groupID)
+	boundAccountID, getErr := store.GetResponseAccountStrict(ctx, 22, "resp_target")
+	require.NoError(t, getErr)
+	require.Zero(t, boundAccountID, "mutable session stickiness must not manufacture historical response ownership")
+}
+
+func TestOpenAIGatewayService_ResolveContinuationRouteGroupDoesNotBindArbitraryPreviousResponse(t *testing.T) {
+	ctx := context.Background()
+	store := NewOpenAIWSStateStore(nil)
+	require.NoError(t, store.BindSessionResponse(ctx, 22, "owner_session", "resp_latest", time.Minute))
+	cache := &stubGatewayCache{sessionBindings: map[string]int64{"openai:owner_session": 202}}
+
+	svc := &OpenAIGatewayService{cache: cache, openaiWSStateStore: store}
+	groupID, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(
+		ctx,
+		0,
+		"resp_arbitrary",
+		"owner_session",
+		[]int64{11, 22},
+	)
+	require.NoError(t, err)
+	require.False(t, found)
+	require.Zero(t, groupID)
+	boundAccountID, getErr := store.GetResponseAccountStrict(ctx, 22, "resp_arbitrary")
+	require.NoError(t, getErr)
+	require.Zero(t, boundAccountID)
+}
+
+func TestOpenAIGatewayService_ResolveContinuationRouteGroupSupportsUngroupedNamespace(t *testing.T) {
+	ctx := context.Background()
+	cache := &stubGatewayCache{}
+	store := NewOpenAIWSStateStore(cache)
+	require.NoError(t, store.BindResponseOwner(ctx, 77, 0, "resp_ungrouped", 303, time.Minute))
+
+	svc := &OpenAIGatewayService{openaiWSStateStore: store}
+	groupID, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(
+		ctx,
+		77,
+		"resp_ungrouped",
+		"ungrouped_session",
+		[]int64{0},
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Zero(t, groupID)
+	boundAccountID, getErr := store.GetResponseAccountStrict(ctx, 0, "resp_ungrouped")
+	require.NoError(t, getErr)
+	require.Equal(t, int64(303), boundAccountID)
+}
+
+func TestOpenAIGatewayService_ResolveContinuationRouteGroupRejectsSessionOnlyRoute(t *testing.T) {
+	ctx := context.Background()
+	store := NewOpenAIWSStateStore(nil)
+	require.NoError(t, store.BindSessionResponse(ctx, 22, "owner_without_account", "resp_without_account", time.Minute))
+	svc := &OpenAIGatewayService{cache: &stubGatewayCache{}, openaiWSStateStore: store}
+
+	groupID, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(
+		ctx,
+		0,
+		"resp_without_account",
+		"different_request_session",
+		[]int64{11, 22},
+	)
+	require.ErrorIs(t, err, errOpenAIWSContinuationAccountUnresolved)
+	require.False(t, found)
+	require.Zero(t, groupID)
+	boundAccountID, getErr := store.GetResponseAccountStrict(ctx, 22, "resp_without_account")
+	require.NoError(t, getErr)
+	require.Zero(t, boundAccountID)
+}
+
+func TestOpenAIGatewayService_ValidateOpenAIWSContinuationAccount(t *testing.T) {
+	ctx := context.Background()
+	store := NewOpenAIWSStateStore(nil)
+	require.NoError(t, store.BindResponseAccount(ctx, 22, "resp_validate", 202, time.Minute))
+	svc := &OpenAIGatewayService{openaiWSStateStore: store}
+
+	require.NoError(t, svc.ValidateOpenAIWSContinuationAccount(ctx, 0, 22, "resp_validate", 202))
+	require.ErrorContains(t, svc.ValidateOpenAIWSContinuationAccount(ctx, 0, 22, "resp_validate", 203), "continuation account mismatch")
+	require.NoError(t, svc.ValidateOpenAIWSContinuationAccount(ctx, 0, 22, "resp_missing", 202))
+	require.NoError(t, store.BindSessionResponse(ctx, 22, "session_partial", "resp_partial", time.Minute))
+	require.ErrorIs(t, svc.ValidateOpenAIWSContinuationAccount(ctx, 0, 22, "resp_partial", 202), errOpenAIWSContinuationAccountUnresolved)
+	require.NoError(t, svc.ValidateOpenAIWSContinuationAccount(ctx, 0, 22, "", 203))
+}
+
+func TestOpenAIGatewayService_ValidateOpenAIWSContinuationAccountUsesV2Owner(t *testing.T) {
+	ctx := context.Background()
+	cache := &stubGatewayCache{}
+	store := NewOpenAIWSStateStore(cache)
+	require.NoError(t, store.BindResponseOwner(ctx, 77, 22, "resp_validate_v2", 202, time.Minute))
+	svc := &OpenAIGatewayService{openaiWSStateStore: store}
+
+	require.NoError(t, svc.ValidateOpenAIWSContinuationAccount(ctx, 77, 22, "resp_validate_v2", 202))
+	mismatchErr := svc.ValidateOpenAIWSContinuationAccount(ctx, 77, 22, "resp_validate_v2", 203)
+	require.True(t, IsOpenAIWSContinuationPermanentError(mismatchErr))
+
+	var closeErr *OpenAIWSClientCloseError
+	require.ErrorAs(t, newOpenAIWSContinuationClientCloseError(mismatchErr), &closeErr)
+	require.Equal(t, coderws.StatusPolicyViolation, closeErr.StatusCode())
+	require.Contains(t, closeErr.Reason(), "start a new conversation")
+}
+
+func TestOpenAIGatewayService_RequireOpenAIWSContinuationAccount(t *testing.T) {
+	ctx := context.Background()
+	store := NewOpenAIWSStateStore(nil)
+	require.NoError(t, store.BindResponseAccount(ctx, 22, "resp_share", 202, time.Minute))
+	svc := &OpenAIGatewayService{openaiWSStateStore: store}
+
+	require.NoError(t, svc.RequireOpenAIWSContinuationAccount(ctx, 0, 22, "resp_share", 202))
+	require.ErrorContains(t, svc.RequireOpenAIWSContinuationAccount(ctx, 0, 22, "resp_share", 203), "continuation account mismatch")
+	require.ErrorIs(t, svc.RequireOpenAIWSContinuationAccount(ctx, 0, 22, "resp_share_missing", 202), errOpenAIWSContinuationAccountUnresolved)
+}
+
+func TestOpenAIGatewayService_ResolveContinuationRouteGroupRejectsAmbiguousSession(t *testing.T) {
+	ctx := context.Background()
+	store := NewOpenAIWSStateStore(nil)
+	require.NoError(t, store.BindSessionResponse(ctx, 11, "shared_session", "resp_group_11", time.Minute))
+	require.NoError(t, store.BindSessionResponse(ctx, 22, "shared_session", "resp_group_22", time.Minute))
+
+	svc := &OpenAIGatewayService{openaiWSStateStore: store}
+	groupID, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(
+		ctx,
+		0,
+		"",
+		"shared_session",
+		[]int64{11, 22},
+	)
+	require.ErrorContains(t, err, "session state exists in multiple route groups")
+	require.False(t, found)
+	require.Zero(t, groupID)
+}
+
+func TestOpenAIGatewayService_ResolveContinuationRouteGroupRejectsAmbiguousResponseOwnership(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("response account", func(t *testing.T) {
+		store := NewOpenAIWSStateStore(nil)
+		require.NoError(t, store.BindResponseAccount(ctx, 11, "resp_ambiguous_account", 101, time.Minute))
+		require.NoError(t, store.BindResponseAccount(ctx, 22, "resp_ambiguous_account", 202, time.Minute))
+
+		svc := &OpenAIGatewayService{openaiWSStateStore: store}
+		groupID, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(ctx, 0, "resp_ambiguous_account", "", []int64{11, 22})
+		require.ErrorContains(t, err, "response account exists in multiple route groups")
+		require.False(t, found)
+		require.Zero(t, groupID)
+	})
+
+	t.Run("response session is not account ownership", func(t *testing.T) {
+		store := NewOpenAIWSStateStore(nil)
+		require.NoError(t, store.BindSessionResponse(ctx, 11, "owner_11", "resp_ambiguous_session", time.Minute))
+		require.NoError(t, store.BindSessionResponse(ctx, 22, "owner_22", "resp_ambiguous_session", time.Minute))
+
+		svc := &OpenAIGatewayService{openaiWSStateStore: store}
+		groupID, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(ctx, 0, "resp_ambiguous_session", "", []int64{11, 22})
+		require.ErrorContains(t, err, "response session exists in multiple route groups")
+		require.False(t, found)
+		require.Zero(t, groupID)
+	})
+}
+
+func TestOpenAIGatewayService_ResolveContinuationRouteGroupPropagatesCacheErrors(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("response binding lookup", func(t *testing.T) {
+		lookupErr := errors.New("response binding cache unavailable")
+		store := NewOpenAIWSStateStore(&openAIWSRouteResolutionCache{accountErr: lookupErr})
+		svc := &OpenAIGatewayService{openaiWSStateStore: store}
+
+		_, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(ctx, 0, "resp_lookup_error", "", []int64{11})
+		require.ErrorIs(t, err, lookupErr)
+		require.False(t, found)
+	})
+
+	t.Run("session binding lookup", func(t *testing.T) {
+		lookupErr := errors.New("session binding cache unavailable")
+		store := NewOpenAIWSStateStore(&openAIWSRouteResolutionCache{stringErr: lookupErr})
+		svc := &OpenAIGatewayService{openaiWSStateStore: store}
+
+		_, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(ctx, 0, "", "session_lookup_error", []int64{11})
+		require.ErrorIs(t, err, lookupErr)
+		require.False(t, found)
+	})
+
+	t.Run("response session lookup", func(t *testing.T) {
+		lookupErr := errors.New("response session cache unavailable")
+		store := NewOpenAIWSStateStore(&openAIWSRouteResolutionCache{stringErr: lookupErr})
+		svc := &OpenAIGatewayService{openaiWSStateStore: store}
+
+		_, found, err := svc.ResolveOpenAIWSContinuationRouteGroup(ctx, 0, "resp_session_lookup_error", "", []int64{11})
+		require.ErrorIs(t, err, lookupErr)
+		require.False(t, found)
+	})
 }
 
 func TestOpenAIWSStateStore_ResponseConnTTL(t *testing.T) {

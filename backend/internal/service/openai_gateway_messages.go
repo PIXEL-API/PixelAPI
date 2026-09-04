@@ -318,6 +318,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
 	resp, err := s.doOpenAIAccountUpstream(upstreamReq, proxyURL, account)
+	releaseOpenAIRequestBodyReplay(upstreamReq)
 	if err != nil {
 		if account.Platform == PlatformGrok {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)

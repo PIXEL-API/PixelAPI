@@ -75,17 +75,59 @@ type RelayExit struct {
 	WroteDownstream bool
 }
 
+// terminalForwardThenCloseError marks a terminal pre-frame failure whose
+// terminal event must still be delivered before the relay closes. Use this only
+// after the turn has been finalized: ordinary ownership or validation failures
+// remain fail-closed and continue to withhold the frame.
+type terminalForwardThenCloseError struct {
+	err error
+}
+
+func (e *terminalForwardThenCloseError) Error() string {
+	if e == nil || e.err == nil {
+		return "terminal frame must be forwarded before close"
+	}
+	return e.err.Error()
+}
+
+func (e *terminalForwardThenCloseError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+// NewTerminalForwardThenCloseError preserves err while asking Relay to forward
+// the already-observed terminal frame before returning the failure.
+func NewTerminalForwardThenCloseError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &terminalForwardThenCloseError{err: err}
+}
+
+func shouldForwardTerminalThenClose(err error) bool {
+	var target *terminalForwardThenCloseError
+	return errors.As(err, &target)
+}
+
 type RelayOptions struct {
 	WriteTimeout         time.Duration
 	IdleTimeout          time.Duration
 	UpstreamDrainTimeout time.Duration
-	FirstMessageType     coderws.MessageType
-	OnUsageParseFailure  func(eventType string, usageRaw string)
-	OnTurnComplete       func(turn RelayTurnResult)
-	BeforeTerminalFrame  func(turn RelayTurnResult) error
-	BeforeClientFrame    func(msgType coderws.MessageType, payload []byte) error
-	OnTrace              func(event RelayTraceEvent)
-	Now                  func() time.Time
+	// DownstreamWriteContext may exclude a separate account/turn lease
+	// cancellation while still following the real client lifecycle. This lets
+	// a frame already read from upstream finish its commit-before-exposure gate
+	// and client write without allowing any new upstream work.
+	DownstreamWriteContext context.Context
+	FirstMessageType       coderws.MessageType
+	OnUsageParseFailure    func(eventType string, usageRaw string)
+	OnTurnComplete         func(turn RelayTurnResult)
+	BeforeUpstreamFrame    func(ctx context.Context, msgType coderws.MessageType, payload []byte, responseID string) error
+	BeforeTerminalFrame    func(ctx context.Context, turn RelayTurnResult) error
+	BeforeClientFrame      func(ctx context.Context, msgType coderws.MessageType, payload []byte) error
+	OnTrace                func(event RelayTraceEvent)
+	Now                    func() time.Time
 }
 
 type RelayTraceEvent struct {
@@ -275,6 +317,16 @@ func Relay(
 
 	relayCtx, relayCancel := context.WithCancel(ctx)
 	defer relayCancel()
+	frameCommitParent := relayCtx
+	if options.DownstreamWriteContext != nil {
+		frameCommitParent = options.DownstreamWriteContext
+	}
+	// A frame already read from upstream must be allowed to finish its durable
+	// state commit and downstream write when only the account/turn lease is
+	// canceled. Relay still owns this child context and cancels it at the drain
+	// deadline (or on any other relay exit), so hooks cannot outlive Relay.
+	frameCommitCtx, cancelFrameCommit := context.WithCancel(frameCommitParent)
+	defer cancelFrameCommit()
 
 	lastActivity := atomic.Int64{}
 	lastActivity.Store(nowFn().UnixNano())
@@ -288,7 +340,7 @@ func Relay(
 		return upstreamConn.WriteFrame(writeCtx, msgType, payload)
 	}
 	writeClient := func(msgType coderws.MessageType, payload []byte) error {
-		writeCtx, cancel := context.WithTimeout(relayCtx, writeTimeout)
+		writeCtx, cancel := context.WithTimeout(frameCommitCtx, writeTimeout)
 		defer cancel()
 		return clientConn.WriteFrame(writeCtx, msgType, payload)
 	}
@@ -303,7 +355,7 @@ func Relay(
 	})
 
 	if options.BeforeClientFrame != nil {
-		if err := options.BeforeClientFrame(firstMessageType, firstClientMessage); err != nil {
+		if err := options.BeforeClientFrame(relayCtx, firstMessageType, firstClientMessage); err != nil {
 			result.Duration = nowFn().Sub(startAt)
 			emitRelayTrace(onTrace, RelayTraceEvent{
 				Stage:        "before_first_client_frame_failed",
@@ -337,24 +389,34 @@ func Relay(
 
 	exitCh := make(chan relayExitSignal, 3)
 	dropDownstreamWrites := atomic.Bool{}
-	go runClientToUpstream(relayCtx, clientConn, writeUpstream, markActivity, clientToUpstreamFrames, options.BeforeClientFrame, onTrace, exitCh)
-	go runUpstreamToClient(
-		relayCtx,
-		upstreamConn,
-		writeClient,
-		startAt,
-		nowFn,
-		state,
-		options.OnUsageParseFailure,
-		options.OnTurnComplete,
-		options.BeforeTerminalFrame,
-		&dropDownstreamWrites,
-		upstreamToClientFrames,
-		droppedDownstreamFrames,
-		markActivity,
-		onTrace,
-		exitCh,
-	)
+	clientDone := make(chan struct{})
+	go func() {
+		defer close(clientDone)
+		runClientToUpstream(relayCtx, clientConn, writeUpstream, markActivity, clientToUpstreamFrames, options.BeforeClientFrame, onTrace, exitCh)
+	}()
+	upstreamDone := make(chan struct{})
+	go func() {
+		defer close(upstreamDone)
+		runUpstreamToClient(
+			relayCtx,
+			frameCommitCtx,
+			upstreamConn,
+			writeClient,
+			startAt,
+			nowFn,
+			state,
+			options.OnUsageParseFailure,
+			options.OnTurnComplete,
+			options.BeforeUpstreamFrame,
+			options.BeforeTerminalFrame,
+			&dropDownstreamWrites,
+			upstreamToClientFrames,
+			droppedDownstreamFrames,
+			markActivity,
+			onTrace,
+			exitCh,
+		)
+	}()
 	go runIdleWatchdog(relayCtx, nowFn, options.IdleTimeout, &lastActivity, onTrace, exitCh)
 
 	firstExit := <-exitCh
@@ -371,7 +433,13 @@ func Relay(
 
 	// 客户端断开后尽力继续读取上游短窗口，捕获延迟 usage/terminal 事件用于计费。
 	if firstExit.stage == "read_client" && firstExit.graceful {
-		dropDownstreamWrites.Store(true)
+		preserveInFlightFrame := errors.Is(firstExit.err, context.Canceled) &&
+			ctx.Err() != nil &&
+			options.DownstreamWriteContext != nil &&
+			options.DownstreamWriteContext.Err() == nil
+		if !preserveInFlightFrame {
+			dropDownstreamWrites.Store(true)
+		}
 		secondExit, hasSecondExit = waitRelayExit(exitCh, drainTimeout)
 	} else {
 		relayCancel()
@@ -390,7 +458,12 @@ func Relay(
 	}
 
 	relayCancel()
+	cancelFrameCommit()
 	_ = upstreamConn.Close()
+	// The upstream worker owns relayState. Wait until it has observed cancellation
+	// before reading the aggregate result or releasing the caller's resources.
+	<-upstreamDone
+	<-clientDone
 
 	enrichResult(&result, state, nowFn().Sub(startAt))
 	result.ClientToUpstreamFrames = clientToUpstreamFrames.Load()
@@ -471,7 +544,7 @@ func runClientToUpstream(
 	writeUpstream func(msgType coderws.MessageType, payload []byte) error,
 	markActivity func(),
 	forwardedFrames *atomic.Int64,
-	beforeClientFrame func(msgType coderws.MessageType, payload []byte) error,
+	beforeClientFrame func(ctx context.Context, msgType coderws.MessageType, payload []byte) error,
 	onTrace func(event RelayTraceEvent),
 	exitCh chan<- relayExitSignal,
 ) {
@@ -489,7 +562,8 @@ func runClientToUpstream(
 		}
 		markActivity()
 		if beforeClientFrame != nil {
-			if err := beforeClientFrame(msgType, payload); err != nil {
+			if err := beforeClientFrame(ctx, msgType, payload); err != nil {
+				graceful := ctx.Err() != nil && errors.Is(err, ctx.Err())
 				emitRelayTrace(onTrace, RelayTraceEvent{
 					Stage:        "before_client_frame_failed",
 					Direction:    "client_to_upstream",
@@ -497,7 +571,7 @@ func runClientToUpstream(
 					PayloadBytes: len(payload),
 					Error:        err.Error(),
 				})
-				exitCh <- relayExitSignal{stage: "before_client_frame", err: err}
+				exitCh <- relayExitSignal{stage: "before_client_frame", err: err, graceful: graceful}
 				return
 			}
 		}
@@ -521,6 +595,7 @@ func runClientToUpstream(
 
 func runUpstreamToClient(
 	ctx context.Context,
+	frameCommitCtx context.Context,
 	upstreamConn FrameConn,
 	writeClient func(msgType coderws.MessageType, payload []byte) error,
 	startAt time.Time,
@@ -528,7 +603,8 @@ func runUpstreamToClient(
 	state *relayState,
 	onUsageParseFailure func(eventType string, usageRaw string),
 	onTurnComplete func(turn RelayTurnResult),
-	beforeTerminalFrame func(turn RelayTurnResult) error,
+	beforeUpstreamFrame func(ctx context.Context, msgType coderws.MessageType, payload []byte, responseID string) error,
+	beforeTerminalFrame func(ctx context.Context, turn RelayTurnResult) error,
 	dropDownstreamWrites *atomic.Bool,
 	forwardedFrames *atomic.Int64,
 	droppedFrames *atomic.Int64,
@@ -589,9 +665,29 @@ func runUpstreamToClient(
 				WroteDownstream: wroteDownstream,
 			})
 		}
+		dropFrame := dropDownstreamWrites != nil && dropDownstreamWrites.Load()
+		if !dropFrame && !observedEvent.duplicateTerminal && beforeUpstreamFrame != nil {
+			if err := beforeUpstreamFrame(frameCommitCtx, msgType, payload, observedEvent.responseID); err != nil {
+				emitRelayTrace(onTrace, RelayTraceEvent{
+					Stage:           "before_upstream_frame_failed",
+					Direction:       "upstream_to_client",
+					MessageType:     relayMessageTypeString(msgType),
+					PayloadBytes:    len(payload),
+					WroteDownstream: wroteDownstream,
+					Error:           err.Error(),
+				})
+				exitCh <- relayExitSignal{
+					stage:           "before_upstream_frame",
+					err:             err,
+					wroteDownstream: wroteDownstream,
+				}
+				return
+			}
+		}
 		turnResult, terminalObserved := buildRelayTurnResult(state, observedEvent)
+		var terminalHookErr error
 		if terminalObserved && beforeTerminalFrame != nil {
-			if err := beforeTerminalFrame(turnResult); err != nil {
+			if err := beforeTerminalFrame(frameCommitCtx, turnResult); err != nil {
 				emitRelayTrace(onTrace, RelayTraceEvent{
 					Stage:           "before_terminal_frame_failed",
 					Direction:       "upstream_to_client",
@@ -600,18 +696,25 @@ func runUpstreamToClient(
 					WroteDownstream: wroteDownstream,
 					Error:           err.Error(),
 				})
-				exitCh <- relayExitSignal{
-					stage:           "before_terminal_frame",
-					err:             err,
-					wroteDownstream: wroteDownstream,
+				if !shouldForwardTerminalThenClose(err) {
+					exitCh <- relayExitSignal{
+						stage:           "before_terminal_frame",
+						err:             err,
+						wroteDownstream: wroteDownstream,
+					}
+					return
 				}
-				return
+				terminalHookErr = err
 			}
 		}
 		if terminalObserved && onTurnComplete != nil && strings.TrimSpace(turnResult.RequestID) != "" {
 			onTurnComplete(turnResult)
 		}
-		if dropDownstreamWrites != nil && dropDownstreamWrites.Load() {
+		// A client can disconnect while a pre-frame hook is waiting on durable
+		// state or billing. Re-sample immediately before writing so drain mode
+		// never uses the stale pre-hook decision.
+		dropFrame = dropDownstreamWrites != nil && dropDownstreamWrites.Load()
+		if dropFrame {
 			if droppedFrames != nil {
 				droppedFrames.Add(1)
 			}
@@ -623,6 +726,14 @@ func runUpstreamToClient(
 				WroteDownstream: wroteDownstream,
 			})
 			if observedEvent.terminal {
+				if terminalHookErr != nil {
+					exitCh <- relayExitSignal{
+						stage:           "before_terminal_frame",
+						err:             terminalHookErr,
+						wroteDownstream: wroteDownstream,
+					}
+					return
+				}
 				exitCh <- relayExitSignal{
 					stage:           "drain_terminal",
 					graceful:        true,
@@ -634,15 +745,19 @@ func runUpstreamToClient(
 			continue
 		}
 		if err := writeClient(msgType, payload); err != nil {
+			writeErr := err
+			if terminalHookErr != nil {
+				writeErr = errors.Join(writeErr, terminalHookErr)
+			}
 			emitRelayTrace(onTrace, RelayTraceEvent{
 				Stage:           "write_client_failed",
 				Direction:       "upstream_to_client",
 				MessageType:     relayMessageTypeString(msgType),
 				PayloadBytes:    len(payload),
 				WroteDownstream: wroteDownstream,
-				Error:           err.Error(),
+				Error:           writeErr.Error(),
 			})
-			exitCh <- relayExitSignal{stage: "write_client", err: err, wroteDownstream: wroteDownstream}
+			exitCh <- relayExitSignal{stage: "write_client", err: writeErr, wroteDownstream: wroteDownstream}
 			return
 		}
 		wroteDownstream = true
@@ -650,6 +765,22 @@ func runUpstreamToClient(
 			forwardedFrames.Add(1)
 		}
 		markActivity()
+		if terminalHookErr != nil {
+			emitRelayTrace(onTrace, RelayTraceEvent{
+				Stage:           "terminal_forwarded_after_commit_failure",
+				Direction:       "upstream_to_client",
+				MessageType:     relayMessageTypeString(msgType),
+				PayloadBytes:    len(payload),
+				WroteDownstream: true,
+				Error:           terminalHookErr.Error(),
+			})
+			exitCh <- relayExitSignal{
+				stage:           "before_terminal_frame",
+				err:             terminalHookErr,
+				wroteDownstream: true,
+			}
+			return
+		}
 	}
 }
 
@@ -713,7 +844,7 @@ func relayDirectionFromStage(stage string) string {
 	switch stage {
 	case "read_client", "write_upstream":
 		return "client_to_upstream"
-	case "read_upstream", "write_client", "drain_terminal":
+	case "read_upstream", "before_upstream_frame", "before_terminal_frame", "write_client", "drain_terminal":
 		return "upstream_to_client"
 	case "idle_timeout":
 		return "watchdog"

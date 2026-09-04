@@ -264,6 +264,18 @@ func TestNormalizeOpenAIModelForUpstream(t *testing.T) {
 			want:    "gpt-5.4",
 		},
 		{
+			name:    "oauth preserves gpt-6-astra",
+			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			model:   "gpt-6-astra",
+			want:    "gpt-6-astra",
+		},
+		{
+			name:    "oauth preserves future gpt model not yet in compatibility table",
+			account: &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+			model:   "gpt-7-next",
+			want:    "gpt-7-next",
+		},
+		{
 			name:    "grok oauth preserves mapped grok model",
 			account: &Account{Platform: PlatformGrok, Type: AccountTypeOAuth},
 			model:   "grok-4.5",

@@ -1226,54 +1226,59 @@ func wrapTrackedBody(body io.ReadCloser, onDone func()) io.ReadCloser {
 
 // decompressResponseBody 根据 Content-Encoding 解压响应体。
 // 当请求显式设置了 accept-encoding 时，Go 的 Transport 不会自动解压，需要手动处理。
-// 解压成功后会删除 Content-Encoding 和 Content-Length header（长度已不准确）。
+// 响应元数据在返回前同步调整，解码器延迟到首次 Read 初始化，
+// 让业务层读取超时也能覆盖压缩头尚未到达的阶段。
 func decompressResponseBody(resp *http.Response) {
 	if resp == nil || resp.Body == nil {
 		return
 	}
 	ce := strings.ToLower(strings.TrimSpace(resp.Header.Get("Content-Encoding")))
-	if ce == "" {
-		return
-	}
-
-	originalBody := resp.Body
-	var reader io.Reader
 	switch ce {
-	case "gzip":
-		gr, err := gzip.NewReader(resp.Body)
-		if err != nil {
-			return // 解压失败，保持原样
-		}
-		reader = gr
-	case "br":
-		reader = brotli.NewReader(resp.Body)
-	case "deflate":
-		reader = flate.NewReader(resp.Body)
-	case "zstd":
-		bufferedBody := bufio.NewReader(resp.Body)
-		resp.Body = &decompressedBody{reader: bufferedBody, closer: originalBody}
-
-		headerBytes, _ := bufferedBody.Peek(zstd.HeaderMaxSize)
-		var header zstd.Header
-		if err := header.Decode(headerBytes); err != nil {
-			slog.Warn("zstd_decompress_failed", "error", err)
-			return
-		}
-
-		zr, err := zstd.NewReader(bufferedBody)
-		if err != nil {
-			slog.Warn("zstd_decompress_failed", "error", err)
-			return
-		}
-		reader = &zstdResponseReader{ReadCloser: zr.IOReadCloser()}
+	case "gzip", "br", "deflate", "zstd":
 	default:
 		return
 	}
 
-	resp.Body = &decompressedBody{reader: reader, closer: originalBody}
+	originalBody := resp.Body
+	resp.Body = &decompressedBody{
+		closer: originalBody,
+		initialize: func() (io.Reader, error) {
+			reader, err := newUpstreamResponseDecompressionReader(originalBody, ce)
+			if err != nil {
+				return nil, fmt.Errorf("initialize %s upstream decompression: %w", ce, err)
+			}
+			return reader, nil
+		},
+	}
 	resp.Header.Del("Content-Encoding")
 	resp.Header.Del("Content-Length") // 解压后长度不确定
 	resp.ContentLength = -1
+}
+
+func newUpstreamResponseDecompressionReader(body io.Reader, encoding string) (io.Reader, error) {
+	switch encoding {
+	case "gzip":
+		return gzip.NewReader(body)
+	case "br":
+		return brotli.NewReader(body), nil
+	case "deflate":
+		return flate.NewReader(body), nil
+	case "zstd":
+		bufferedBody := bufio.NewReader(body)
+		headerBytes, _ := bufferedBody.Peek(zstd.HeaderMaxSize)
+		var header zstd.Header
+		if err := header.Decode(headerBytes); err != nil {
+			return nil, err
+		}
+
+		zr, err := zstd.NewReader(bufferedBody)
+		if err != nil {
+			return nil, err
+		}
+		return &zstdResponseReader{ReadCloser: zr.IOReadCloser()}, nil
+	default:
+		return nil, fmt.Errorf("unsupported upstream content encoding: %s", encoding)
+	}
 }
 
 type zstdResponseReader struct {
@@ -1293,18 +1298,47 @@ func (r *zstdResponseReader) Read(p []byte) (int, error) {
 
 // decompressedBody 组合解压 reader 和原始 body 的 close。
 type decompressedBody struct {
-	reader io.Reader
-	closer io.Closer
+	reader     io.Reader
+	closer     io.Closer
+	initialize func() (io.Reader, error)
+	initErr    error
+	readMu     sync.Mutex
+	closed     atomic.Bool
+	closeOnce  sync.Once
+	closeErr   error
 }
 
 func (d *decompressedBody) Read(p []byte) (int, error) {
+	d.readMu.Lock()
+	defer d.readMu.Unlock()
+	if d.closed.Load() {
+		return 0, io.ErrClosedPipe
+	}
+	if d.initialize != nil {
+		initialize := d.initialize
+		d.initialize = nil
+		d.reader, d.initErr = initialize()
+	}
+	if d.initErr != nil {
+		return 0, d.initErr
+	}
 	return d.reader.Read(p)
 }
 
 func (d *decompressedBody) Close() error {
-	// 如果 reader 本身也是 Closer（如 gzip.Reader），先关闭它
-	if rc, ok := d.reader.(io.Closer); ok {
-		_ = rc.Close()
-	}
-	return d.closer.Close()
+	d.closeOnce.Do(func() {
+		d.closed.Store(true)
+		// Interrupt the network read before waiting for decoder cleanup. In
+		// particular, zstd.Close drains workers that may still need input.
+		d.closeErr = d.closer.Close()
+		// Compression readers do not support Close racing with Read. Once the
+		// source is closed, let the active Read return before releasing them.
+		d.readMu.Lock()
+		defer d.readMu.Unlock()
+		d.initialize = nil
+		if rc, ok := d.reader.(io.Closer); ok {
+			_ = rc.Close()
+		}
+	})
+	return d.closeErr
 }

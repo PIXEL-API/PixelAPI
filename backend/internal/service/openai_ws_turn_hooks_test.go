@@ -87,7 +87,7 @@ func TestOpenAIWSPassthroughTurnLifecyclePayloadHooksAreTurnScoped(t *testing.T)
 			legacyAfter = append(legacyAfter, turn)
 			mu.Unlock()
 		},
-		BeforeTurnPayload: func(turn int, payload []byte) (context.Context, error) {
+		BeforeTurnPayload: func(_ context.Context, turn int, payload []byte) (context.Context, error) {
 			mu.Lock()
 			beforePayloads = append(beforePayloads, string(payload))
 			mu.Unlock()
@@ -140,6 +140,43 @@ func TestOpenAIWSPassthroughTurnLifecyclePayloadHooksAreTurnScoped(t *testing.T)
 	require.Equal(t, beforePayloads, afterPayloads)
 }
 
+func TestOpenAIWSPassthroughTurnLifecycleBeginUsesFrameContext(t *testing.T) {
+	t.Parallel()
+
+	hookStarted := make(chan struct{})
+	lifecycle := newOpenAIWSPassthroughTurnLifecycleWithContext(
+		context.Background(),
+		&OpenAIWSIngressHooks{
+			BeforeTurnPayload: func(frameCtx context.Context, _ int, _ []byte) (context.Context, error) {
+				close(hookStarted)
+				<-frameCtx.Done()
+				return nil, frameCtx.Err()
+			},
+		},
+		nil,
+	)
+	frameCtx, cancelFrame := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := lifecycle.beginWithContext(frameCtx, []byte(`{"type":"response.create","model":"gpt-5.1"}`))
+		done <- err
+	}()
+
+	select {
+	case <-hookStarted:
+	case <-time.After(time.Second):
+		t.Fatal("before-turn payload hook did not start")
+	}
+	cancelFrame()
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, lifecycle.hasActive())
+	case <-time.After(time.Second):
+		t.Fatal("turn begin did not observe frame context cancellation")
+	}
+}
+
 func TestOpenAIWSPassthroughTurnLifecyclePropagatesTurnContextLossOnce(t *testing.T) {
 	t.Parallel()
 
@@ -153,7 +190,7 @@ func TestOpenAIWSPassthroughTurnLifecyclePropagatesTurnContextLossOnce(t *testin
 	lifecycle := newOpenAIWSPassthroughTurnLifecycleWithContext(
 		context.Background(),
 		&OpenAIWSIngressHooks{
-			BeforeTurnPayload: func(_ int, _ []byte) (context.Context, error) {
+			BeforeTurnPayload: func(_ context.Context, _ int, _ []byte) (context.Context, error) {
 				return turnCtx, nil
 			},
 			AfterTurnPayload: func(_ int, _ []byte, _ *OpenAIForwardResult, turnErr error) error {

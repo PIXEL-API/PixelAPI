@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -123,6 +124,144 @@ func TestAccountShareModeWSCloseDetailsSeparatesUnboundFromRecovering(t *testing
 			require.True(t, handled)
 			require.Equal(t, test.status, status)
 			require.Equal(t, test.reason, reason)
+		})
+	}
+}
+
+func TestOpenAIWSContinuationCloseDetailsKeepsStatusAndInstructionConsistent(t *testing.T) {
+	tests := []struct {
+		name            string
+		restartRequired bool
+		retryReason     string
+		status          coderws.StatusCode
+		reason          string
+	}{
+		{
+			name:            "restart required",
+			restartRequired: true,
+			retryReason:     "temporary owner lookup failure; please retry later",
+			status:          coderws.StatusPolicyViolation,
+			reason:          openAIWSContinuationRestartReason,
+		},
+		{
+			name:            "retryable",
+			restartRequired: false,
+			retryReason:     "temporary owner lookup failure; please retry later",
+			status:          coderws.StatusTryAgainLater,
+			reason:          "temporary owner lookup failure; please retry later",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			status, reason := openAIWSContinuationCloseDetails(test.restartRequired, test.retryReason)
+
+			require.Equal(t, test.status, status)
+			require.Equal(t, test.reason, reason)
+		})
+	}
+}
+
+func TestDecideOpenAIWSDispatchRevalidationOrdersSpecificErrorsAndCancellation(t *testing.T) {
+	groupID := int64(17)
+	selected := &service.Account{
+		ID:          701,
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		GroupIDs:    []int64{groupID},
+	}
+	latest := *selected
+	latest.Status = service.StatusDisabled
+	gatewayService := service.NewOpenAIGatewayService(
+		&openAIWSHandlerAccountRepo{account: &latest},
+		nil, nil, nil, nil, nil, nil,
+		nil,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	_, dispatchErr := gatewayService.RevalidateSelectedOpenAIAccountForDispatch(
+		context.Background(),
+		&groupID,
+		selected,
+		service.OpenAIAccountDispatchRequirements{},
+	)
+	require.Error(t, dispatchErr)
+	require.True(t, service.IsOpenAIDispatchAccountUnavailable(dispatchErr))
+	require.True(t, service.IsOpenAIWSContinuationPermanentError(dispatchErr))
+
+	accountShareErr := fmt.Errorf("%w: %w", service.ErrAccountShareModeUnsupportedModel, dispatchErr)
+	tests := []struct {
+		name               string
+		clientGone         bool
+		previousResponseID string
+		accountShareMode   bool
+		err                error
+		disposition        openAIWSDispatchRevalidationDisposition
+		status             coderws.StatusCode
+		reason             string
+	}{
+		{
+			name:               "account share contract wins over continuation restart",
+			previousResponseID: "resp_1",
+			accountShareMode:   true,
+			err:                accountShareErr,
+			disposition:        openAIWSDispatchRevalidationClose,
+			status:             coderws.StatusPolicyViolation,
+			reason:             "模型不支持",
+		},
+		{
+			name:               "continuation permanent error requires restart",
+			previousResponseID: "resp_1",
+			err:                dispatchErr,
+			disposition:        openAIWSDispatchRevalidationClose,
+			status:             coderws.StatusPolicyViolation,
+			reason:             openAIWSContinuationRestartReason,
+		},
+		{
+			name:               "continuation infrastructure error remains retryable",
+			previousResponseID: "resp_1",
+			err:                fmt.Errorf("repository unavailable"),
+			disposition:        openAIWSDispatchRevalidationClose,
+			status:             coderws.StatusTryAgainLater,
+			reason:             "selected account is temporarily unavailable; please reconnect",
+		},
+		{
+			name:        "fresh normal request retries selection on dispatch invalidation",
+			err:         dispatchErr,
+			disposition: openAIWSDispatchRevalidationRetrySelection,
+		},
+		{
+			name:             "fresh account share request never silently reselects",
+			accountShareMode: true,
+			err:              dispatchErr,
+			disposition:      openAIWSDispatchRevalidationClose,
+			status:           coderws.StatusTryAgainLater,
+			reason:           "selected account is no longer available; please reconnect",
+		},
+		{
+			name:               "client cancellation aborts before any mapping or retry",
+			clientGone:         true,
+			previousResponseID: "resp_1",
+			accountShareMode:   true,
+			err:                accountShareErr,
+			disposition:        openAIWSDispatchRevalidationAbort,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			decision := decideOpenAIWSDispatchRevalidation(
+				test.clientGone,
+				test.previousResponseID,
+				test.accountShareMode,
+				test.err,
+			)
+
+			require.Equal(t, test.disposition, decision.disposition)
+			require.Equal(t, test.status, decision.status)
+			require.Equal(t, test.reason, decision.reason)
 		})
 	}
 }

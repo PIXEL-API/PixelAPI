@@ -272,7 +272,8 @@ func (s *OpsService) retryWithErrorLog(ctx context.Context, requestedByUserID in
 	execCtx, cancel := context.WithTimeout(ctx, opsRetryTimeout)
 	defer cancel()
 
-	execRes := s.executeRetry(execCtx, errorLog, execMode, pinned)
+	executionBody := prepareOpsRetryBody(mode, errorLog)
+	execRes := s.executeRetry(execCtx, errorLog, executionBody, execMode, pinned)
 
 	finishedAt := time.Now()
 	result.FinishedAt = finishedAt
@@ -348,7 +349,29 @@ type opsRetryExecution struct {
 	errorMessage string
 }
 
-func (s *OpsService) executeRetry(ctx context.Context, errorLog *OpsErrorLogDetail, mode string, pinnedAccountID *int64) *opsRetryExecution {
+func prepareOpsRetryBody(mode string, errorLog *OpsErrorLogDetail) []byte {
+	if errorLog == nil {
+		return nil
+	}
+	body := []byte(errorLog.RequestBody)
+	requestType := detectOpsRetryType(errorLog.RequestPath)
+	if requestType == opsRetryTypeMessages {
+		return FilterThinkingBlocksForRetry(body)
+	}
+	if requestType != opsRetryTypeOpenAI ||
+		!IsOpenAIResponsesCreatePath(errorLog.RequestPath) ||
+		errorLog.RequestBodyTruncated ||
+		strings.EqualFold(strings.TrimSpace(mode), OpsRetryModeUpstreamEvent) {
+		return body
+	}
+	normalized, _, changed := NormalizeOpenAICodexBootstrap(body)
+	if !changed {
+		return body
+	}
+	return normalized
+}
+
+func (s *OpsService) executeRetry(ctx context.Context, errorLog *OpsErrorLogDetail, bodyBytes []byte, mode string, pinnedAccountID *int64) *opsRetryExecution {
 	if errorLog == nil {
 		return &opsRetryExecution{
 			status:       opsRetryStatusFailed,
@@ -357,14 +380,6 @@ func (s *OpsService) executeRetry(ctx context.Context, errorLog *OpsErrorLogDeta
 	}
 
 	reqType := detectOpsRetryType(errorLog.RequestPath)
-	bodyBytes := []byte(errorLog.RequestBody)
-
-	switch reqType {
-	case opsRetryTypeMessages:
-		bodyBytes = FilterThinkingBlocksForRetry(bodyBytes)
-	case opsRetryTypeOpenAI, opsRetryTypeGeminiV1B:
-		// No-op
-	}
 
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case OpsRetryModeUpstream:

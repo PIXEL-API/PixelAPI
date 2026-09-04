@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 
@@ -16,17 +17,50 @@ import (
 const (
 	requestBodyReadInitCap    = 512
 	requestBodyReadMaxInitCap = 1 << 20
+	// MaxDecompressedRequestBodySize is the maximum decoded request body size.
+	// Callers that reserve memory before decoding compressed requests must use
+	// this same value so admission and decoding cannot drift apart.
+	MaxDecompressedRequestBodySize int64 = 64 << 20
+	// MaxCompressedRequestBodyMemoryReservation covers the bounded decoded
+	// buffer's growth peak plus gzip/deflate decoder state and framing slack.
+	MaxCompressedRequestBodyMemoryReservation int64 = 3 * MaxDecompressedRequestBodySize
+	// MaxZstdRequestBodyMemoryReservation additionally covers the bounded zstd
+	// history window and decoder overhead. It is the largest compressed-body
+	// reservation and therefore the minimum capacity for an enabled body gate.
+	MaxZstdRequestBodyMemoryReservation int64 = MaxCompressedRequestBodyMemoryReservation + int64(maxZstdDecoderWindowSize) + (4 << 20)
+	// maxZstdDecoderWindowSize preserves support for every payload within the
+	// library encoder's normal maximum window while rejecting custom frames
+	// that advertise the decoder default's much larger (512 MiB) window.
+	maxZstdDecoderWindowSize uint64 = 8 << 20
 	// maxDecompressedBodySize limits the decompressed request body to 64 MB
 	// to prevent decompression bomb attacks.
-	maxDecompressedBodySize = 64 << 20
+	maxDecompressedBodySize = MaxDecompressedRequestBodySize
 )
 
 // ReadRequestBodyWithPrealloc reads request body with preallocated buffer based
 // on content length, transparently decoding any Content-Encoding the upstream
 // client used to compress the body (zstd, gzip, deflate).
 func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
+	return readRequestBody(req, 0)
+}
+
+// ReadRequestBodyWithLimit reads a request with a caller-provided hard limit.
+// Identity bodies with a trustworthy, in-range Content-Length are allocated
+// exactly once; unknown-length bodies use bounded growth that never doubles
+// merely to probe EOF.
+func ReadRequestBodyWithLimit(req *http.Request, maxBodySize int64) ([]byte, error) {
+	if maxBodySize <= 0 {
+		return nil, errors.New("request body limit must be positive")
+	}
+	return readRequestBody(req, maxBodySize)
+}
+
+func readRequestBody(req *http.Request, maxBodySize int64) ([]byte, error) {
 	if req == nil || req.Body == nil {
 		return nil, nil
+	}
+	if maxBodySize > 0 && req.ContentLength > maxBodySize {
+		return nil, &http.MaxBytesError{Limit: maxBodySize}
 	}
 
 	enc := strings.ToLower(strings.TrimSpace(req.Header.Get("Content-Encoding")))
@@ -44,6 +78,12 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 		req.Header.Del("Content-Length")
 		req.ContentLength = int64(len(decoded))
 		return decoded, nil
+	}
+	if maxBodySize > 0 {
+		if req.ContentLength > 0 && len(req.TransferEncoding) == 0 {
+			return readBodyWithExactLength(req.Body, req.ContentLength)
+		}
+		return readBodyUpToLimit(req.Body, maxBodySize)
 	}
 
 	capHint := requestBodyReadInitCap
@@ -65,6 +105,34 @@ func ReadRequestBodyWithPrealloc(req *http.Request) ([]byte, error) {
 	return buf.Bytes(), nil
 }
 
+func readBodyWithExactLength(reader io.Reader, length int64) ([]byte, error) {
+	if reader == nil {
+		return nil, errors.New("body reader is nil")
+	}
+	if length < 0 || uint64(length) > uint64(math.MaxInt) {
+		return nil, errors.New("request body length cannot be represented in memory")
+	}
+	body := make([]byte, int(length))
+	if _, err := io.ReadFull(reader, body); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+// BoundedRequestBodyMemoryReservation returns a conservative upper bound for
+// the live byte slices used while a bounded buffer doubles. The largest growth
+// retains the previous half-sized slice while allocating the final slice.
+func BoundedRequestBodyMemoryReservation(limit int64) int64 {
+	if limit <= 0 {
+		return 0
+	}
+	half := limit/2 + limit%2
+	if limit > math.MaxInt64-half {
+		return math.MaxInt64
+	}
+	return limit + half
+}
+
 func decompressRequestBody(encoding string, source io.Reader) ([]byte, error) {
 	if source == nil {
 		return nil, errors.New("compressed request body is nil")
@@ -74,7 +142,14 @@ func decompressRequestBody(encoding string, source io.Reader) ([]byte, error) {
 	var closeReader func()
 	switch encoding {
 	case "zstd":
-		dec, err := zstd.NewReader(source)
+		dec, err := zstd.NewReader(
+			source,
+			zstd.WithDecoderConcurrency(1),
+			zstd.WithDecoderLowmem(true),
+			zstd.WithDecoderMaxMemory(uint64(MaxDecompressedRequestBodySize)),
+			zstd.WithDecoderMaxWindow(maxZstdDecoderWindowSize),
+			zstd.WithDecodeBuffersBelow(0),
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -111,15 +186,75 @@ func readBodyUpToLimit(reader io.Reader, limit int64) ([]byte, error) {
 	if limit < 0 {
 		return nil, errors.New("body limit is negative")
 	}
-	// Read one byte beyond the limit so an oversized decoded payload is
-	// rejected instead of silently truncated into invalid JSON. Returning the
-	// standard error type lets gateway handlers consistently answer 413.
-	decoded, err := io.ReadAll(io.LimitReader(reader, limit+1))
-	if err != nil {
+	if uint64(limit) > uint64(math.MaxInt) {
+		return nil, errors.New("body limit cannot be represented in memory")
+	}
+	if limit == 0 {
+		var probe [1]byte
+		n, err := reader.Read(probe[:])
+		if n > 0 {
+			return nil, &http.MaxBytesError{Limit: limit}
+		}
+		if err == nil || errors.Is(err, io.EOF) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	if int64(len(decoded)) > limit {
-		return nil, &http.MaxBytesError{Limit: limit}
+
+	halfLimit := limit/2 + limit%2
+	initialCapacity := int64(requestBodyReadInitCap)
+	if initialCapacity > halfLimit {
+		initialCapacity = halfLimit
 	}
-	return decoded, nil
+	body := make([]byte, 0, int(initialCapacity))
+	for {
+		if len(body) == cap(body) {
+			if int64(len(body)) == limit {
+				var probe [1]byte
+				n, err := reader.Read(probe[:])
+				if n > 0 {
+					return nil, &http.MaxBytesError{Limit: limit}
+				}
+				if errors.Is(err, io.EOF) {
+					return body, nil
+				}
+				if err != nil {
+					return nil, err
+				}
+				continue
+			}
+
+			newCapacity := nextBoundedRequestBodyCapacity(int64(cap(body)), limit)
+			grown := make([]byte, len(body), int(newCapacity))
+			copy(grown, body)
+			body = grown
+		}
+
+		n, err := reader.Read(body[len(body):cap(body)])
+		if n < 0 || n > cap(body)-len(body) {
+			return nil, errors.New("invalid body reader result")
+		}
+		body = body[:len(body)+n]
+		if errors.Is(err, io.EOF) {
+			return body, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+}
+
+func nextBoundedRequestBodyCapacity(current, limit int64) int64 {
+	if current >= limit {
+		return limit
+	}
+	halfLimit := limit/2 + limit%2
+	if current >= halfLimit {
+		return limit
+	}
+	next := current * 2
+	if next > halfLimit {
+		return halfLimit
+	}
+	return next
 }

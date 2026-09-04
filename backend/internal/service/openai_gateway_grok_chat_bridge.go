@@ -784,6 +784,7 @@ func (s *OpenAIGatewayService) forwardGrokRawChatCompletions(
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
+	resp.Request = nil
 	defer func(body io.ReadCloser) { _ = body.Close() }(resp.Body)
 
 	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
@@ -827,7 +828,7 @@ func (s *OpenAIGatewayService) forwardGrokRawChatCompletions(
 	if !clientStream {
 		readCtx, cancelRead := s.detachedNonStreamingReadContext(ctx)
 		defer cancelRead()
-		respBody, readErr := ReadUpstreamResponseBodyWithContext(readCtx, resp.Body, s.cfg, c, openAITooLargeError)
+		respBody, readErr := ReadUpstreamResponseBodyWithIdleTimeout(readCtx, resp.Body, s.cfg, c, openAITooLargeError, s.nonStreamingReadIdleTimeout())
 		if readErr != nil {
 			if !errors.Is(readErr, ErrUpstreamResponseBodyTooLarge) {
 				writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")

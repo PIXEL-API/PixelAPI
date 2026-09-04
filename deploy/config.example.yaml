@@ -198,6 +198,13 @@ gateway:
   # Max request body size in bytes (default: 256MB)
   # 请求体最大字节数（默认 256MB）
   max_body_size: 268435456
+  # OpenAI Responses 请求体进程级总字节预算。默认关闭；启用前必须根据同版本压测和主机余量填写。
+  openai_responses_body_budget:
+    enabled: false
+    capacity_bytes: 0
+    wait_timeout_seconds: 0
+    read_timeout_seconds: 0
+    retry_after_seconds: 0
   # Max bytes to read for non-stream upstream responses (default: 128MB)
   # 非流式上游响应体读取上限（默认 128MB）
   upstream_response_read_max_bytes: 134217728

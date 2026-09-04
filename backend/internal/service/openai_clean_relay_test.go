@@ -20,8 +20,36 @@ type cleanRelayErrorGatewayCache struct {
 	getErr error
 }
 
+type cleanRelayAccountRepoErrorStub struct {
+	stubOpenAIAccountRepo
+	getErrors map[int64]error
+}
+
+func (r cleanRelayAccountRepoErrorStub) GetByID(ctx context.Context, id int64) (*Account, error) {
+	if err := r.getErrors[id]; err != nil {
+		return nil, err
+	}
+	return r.stubOpenAIAccountRepo.GetByID(ctx, id)
+}
+
 type cleanRelaySettingRepoStub struct {
 	values map[string]string
+}
+
+type cleanRelayConcurrencyCacheSpy struct {
+	schedulerTestConcurrencyCache
+	acquireCalls []int64
+	releaseCalls []int64
+}
+
+func (c *cleanRelayConcurrencyCacheSpy) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
+	c.acquireCalls = append(c.acquireCalls, accountID)
+	return c.schedulerTestConcurrencyCache.AcquireAccountSlot(ctx, accountID, maxConcurrency, requestID)
+}
+
+func (c *cleanRelayConcurrencyCacheSpy) ReleaseAccountSlot(ctx context.Context, accountID int64, requestID string) error {
+	c.releaseCalls = append(c.releaseCalls, accountID)
+	return nil
 }
 
 func (s *cleanRelaySettingRepoStub) Get(ctx context.Context, key string) (*Setting, error) {
@@ -355,6 +383,429 @@ func TestOpenAICleanRelay_PreselectsCachedAccountBeforeScheduler(t *testing.T) {
 	}
 }
 
+func TestOpenAICleanRelay_BusyMappedAccountFallsBackToAvailableAccount(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(202)
+	mappedAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(303), groupID)
+	busyAlternative := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(404), groupID)
+	availableAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(505), groupID)
+	mappedAccount.Priority = -10
+	busyAlternative.Priority = 0
+	availableAccount.Priority = 10
+
+	cache := &stubGatewayCache{
+		sessionBindings: map[string]int64{"openai:client-session": mappedAccount.ID},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+	concurrencyCache := &cleanRelayConcurrencyCacheSpy{
+		schedulerTestConcurrencyCache: schedulerTestConcurrencyCache{
+			acquireResults: map[int64]bool{
+				mappedAccount.ID:    false,
+				busyAlternative.ID:  false,
+				availableAccount.ID: true,
+			},
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        stubOpenAIAccountRepo{accounts: []Account{mappedAccount, busyAlternative, availableAccount}},
+		cache:              cache,
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+		settingService:     newCleanRelaySettingService(true),
+	}
+	defer func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	}()
+
+	c := newCleanRelayGinContext(101, groupID)
+	body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache"}`)
+	mapping := newOpenAICleanRelayMapping(mappedAccount.ID, 1, resolveConvergedInstallationID(&mappedAccount))
+	encoded, err := marshalOpenAICleanRelayMapping(mapping)
+	require.NoError(t, err)
+	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-session")
+	require.NoError(t, cache.SetSessionString(ctx, groupID, cacheKey, encoded, time.Hour))
+
+	excludedIDs := map[int64]struct{}{999: {}}
+	selection, decision, err := svc.SelectAccountWithCleanRelayScheduler(
+		ctx,
+		c,
+		&groupID,
+		"",
+		"client-session",
+		"codex-auto-review",
+		"gpt-5.1",
+		excludedIDs,
+		OpenAIUpstreamTransportAny,
+		false,
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, availableAccount.ID, selection.Account.ID)
+	require.True(t, selection.Acquired)
+	require.Nil(t, selection.WaitPlan)
+	require.NotNil(t, selection.ReleaseFunc)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.False(t, decision.StickySessionHit)
+	require.Equal(t, []int64{mappedAccount.ID, busyAlternative.ID, availableAccount.ID}, concurrencyCache.acquireCalls)
+	require.Len(t, excludedIDs, 1)
+	_, mappedWasExcluded := excludedIDs[mappedAccount.ID]
+	require.False(t, mappedWasExcluded)
+	require.Equal(t, availableAccount.ID, cache.sessionBindings["openai:client-session"])
+	selection.ReleaseFunc()
+	require.Equal(t, []int64{availableAccount.ID}, concurrencyCache.releaseCalls)
+
+	rewritten, state, changed, err := svc.applyOpenAICleanRelayToRawBody(ctx, c, selection.Account, body, body)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.NotNil(t, state)
+	require.True(t, state.CleanStart)
+	require.Equal(t, availableAccount.ID, state.Mapping.AccountID)
+	require.Equal(t, mapping.Epoch+1, state.Mapping.Epoch)
+	require.Equal(t, state.Mapping.PromptCacheKey, gjson.GetBytes(rewritten, "prompt_cache_key").String())
+}
+
+func TestOpenAICleanRelay_FallbackSkipsNonCleanRelayAccounts(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(203)
+	mappedAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(603), groupID)
+	apiKeyAccount := openAITestAccountWithGroupIfUnset(Account{
+		ID:          604,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    0,
+	}, groupID)
+	availableOAuth := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(605), groupID)
+	mappedAccount.Priority = -10
+	availableOAuth.Priority = 10
+
+	cache := &stubGatewayCache{}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+	concurrencyCache := &cleanRelayConcurrencyCacheSpy{
+		schedulerTestConcurrencyCache: schedulerTestConcurrencyCache{
+			acquireResults: map[int64]bool{
+				mappedAccount.ID:  false,
+				apiKeyAccount.ID:  true,
+				availableOAuth.ID: true,
+			},
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        stubOpenAIAccountRepo{accounts: []Account{mappedAccount, apiKeyAccount, availableOAuth}},
+		cache:              cache,
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+		settingService:     newCleanRelaySettingService(true),
+	}
+	t.Cleanup(func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	})
+
+	c := newCleanRelayGinContext(101, groupID)
+	body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache"}`)
+	mapping := newOpenAICleanRelayMapping(mappedAccount.ID, 1, resolveConvergedInstallationID(&mappedAccount))
+	encoded, err := marshalOpenAICleanRelayMapping(mapping)
+	require.NoError(t, err)
+	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-session")
+	require.NoError(t, cache.SetSessionString(ctx, groupID, cacheKey, encoded, time.Hour))
+
+	selection, _, err := svc.SelectAccountWithCleanRelayScheduler(
+		ctx,
+		c,
+		&groupID,
+		"",
+		"",
+		"codex-auto-review",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, availableOAuth.ID, selection.Account.ID)
+	require.True(t, selection.Acquired)
+	require.Equal(t, []int64{mappedAccount.ID, availableOAuth.ID}, concurrencyCache.acquireCalls)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAICleanRelay_AdvancedSchedulerFallsBackToAvailableAccount(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	t.Cleanup(resetOpenAIAdvancedSchedulerSettingCacheForTest)
+
+	ctx := context.Background()
+	groupID := int64(204)
+	mappedAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(703), groupID)
+	availableAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(704), groupID)
+	mappedAccount.Priority = -10
+	availableAccount.Priority = 10
+
+	cache := &stubGatewayCache{}
+	concurrencyCache := &cleanRelayConcurrencyCacheSpy{
+		schedulerTestConcurrencyCache: schedulerTestConcurrencyCache{
+			loadMap: map[int64]*AccountLoadInfo{
+				mappedAccount.ID:    {AccountID: mappedAccount.ID, CurrentConcurrency: 1, LoadRate: 100},
+				availableAccount.ID: {AccountID: availableAccount.ID, CurrentConcurrency: 0, LoadRate: 0},
+			},
+			acquireResults: map[int64]bool{
+				mappedAccount.ID:    false,
+				availableAccount.ID: true,
+			},
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        stubOpenAIAccountRepo{accounts: []Account{mappedAccount, availableAccount}},
+		cache:              cache,
+		cfg:                &config.Config{},
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+		settingService:     newCleanRelaySettingService(true),
+	}
+	t.Cleanup(func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	})
+
+	c := newCleanRelayGinContext(101, groupID)
+	body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache"}`)
+	mapping := newOpenAICleanRelayMapping(mappedAccount.ID, 1, resolveConvergedInstallationID(&mappedAccount))
+	encoded, err := marshalOpenAICleanRelayMapping(mapping)
+	require.NoError(t, err)
+	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-session")
+	require.NoError(t, cache.SetSessionString(ctx, groupID, cacheKey, encoded, time.Hour))
+
+	selection, decision, err := svc.SelectAccountWithCleanRelayScheduler(
+		ctx,
+		c,
+		&groupID,
+		"",
+		"",
+		"codex-auto-review",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, availableAccount.ID, selection.Account.ID)
+	require.True(t, selection.Acquired)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.Equal(t, []int64{mappedAccount.ID, availableAccount.ID}, concurrencyCache.acquireCalls)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAICleanRelay_FallbackAcquireErrorIsNotConvertedToMappedWait(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(205)
+	mappedAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(803), groupID)
+	otherAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(804), groupID)
+	mappedAccount.Priority = -10
+	otherAccount.Priority = 10
+	acquireErr := errors.New("account slot cache failed")
+
+	cache := &stubGatewayCache{}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+	concurrencyCache := &cleanRelayConcurrencyCacheSpy{
+		schedulerTestConcurrencyCache: schedulerTestConcurrencyCache{
+			acquireResults: map[int64]bool{mappedAccount.ID: false},
+			acquireErrors:  map[int64]error{otherAccount.ID: acquireErr},
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        stubOpenAIAccountRepo{accounts: []Account{mappedAccount, otherAccount}},
+		cache:              cache,
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+		settingService:     newCleanRelaySettingService(true),
+	}
+	t.Cleanup(func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	})
+
+	c := newCleanRelayGinContext(101, groupID)
+	body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache"}`)
+	mapping := newOpenAICleanRelayMapping(mappedAccount.ID, 1, resolveConvergedInstallationID(&mappedAccount))
+	encoded, err := marshalOpenAICleanRelayMapping(mapping)
+	require.NoError(t, err)
+	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-session")
+	require.NoError(t, cache.SetSessionString(ctx, groupID, cacheKey, encoded, time.Hour))
+
+	selection, _, err := svc.SelectAccountWithCleanRelayScheduler(
+		ctx,
+		c,
+		&groupID,
+		"",
+		"",
+		"codex-auto-review",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+		body,
+	)
+	require.ErrorIs(t, err, acquireErr)
+	require.Nil(t, selection)
+}
+
+func TestOpenAICleanRelay_AllAccountsBusyKeepsMappedWaitPlan(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(202)
+	mappedAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(303), groupID)
+	otherAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(404), groupID)
+	mappedAccount.Priority = -10
+	otherAccount.Priority = 10
+
+	cache := &stubGatewayCache{
+		sessionBindings: map[string]int64{"openai:client-session": mappedAccount.ID},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = true
+	concurrencyCache := &cleanRelayConcurrencyCacheSpy{
+		schedulerTestConcurrencyCache: schedulerTestConcurrencyCache{
+			loadMap: map[int64]*AccountLoadInfo{
+				mappedAccount.ID: {AccountID: mappedAccount.ID, LoadRate: 100},
+				otherAccount.ID:  {AccountID: otherAccount.ID, LoadRate: 0},
+			},
+			acquireResults: map[int64]bool{
+				mappedAccount.ID: false,
+				otherAccount.ID:  false,
+			},
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        stubOpenAIAccountRepo{accounts: []Account{mappedAccount, otherAccount}},
+		cache:              cache,
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+		settingService:     newCleanRelaySettingService(true),
+	}
+	defer func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	}()
+
+	c := newCleanRelayGinContext(101, groupID)
+	body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache"}`)
+	mapping := newOpenAICleanRelayMapping(mappedAccount.ID, 1, resolveConvergedInstallationID(&mappedAccount))
+	encoded, err := marshalOpenAICleanRelayMapping(mapping)
+	require.NoError(t, err)
+	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-session")
+	require.NoError(t, cache.SetSessionString(ctx, groupID, cacheKey, encoded, time.Hour))
+
+	selection, decision, err := svc.SelectAccountWithCleanRelayScheduler(
+		ctx,
+		c,
+		&groupID,
+		"",
+		"client-session",
+		"codex-auto-review",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, mappedAccount.ID, selection.Account.ID)
+	require.False(t, selection.Acquired)
+	require.NotNil(t, selection.WaitPlan)
+	require.Equal(t, mappedAccount.ID, selection.WaitPlan.AccountID)
+	require.Equal(t, openAIAccountScheduleLayerCleanRelay, decision.Layer)
+	require.True(t, decision.StickySessionHit)
+	require.Equal(t, []int64{mappedAccount.ID, otherAccount.ID}, concurrencyCache.acquireCalls)
+	require.Empty(t, concurrencyCache.releaseCalls)
+	require.Equal(t, mappedAccount.ID, cache.sessionBindings["openai:client-session"])
+}
+
+func TestOpenAICleanRelay_BusyMappedContinuationKeepsMappedWaitPlan(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(202)
+	mappedAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(303), groupID)
+	availableAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(404), groupID)
+	mappedAccount.Priority = -10
+	availableAccount.Priority = 10
+
+	cache := &stubGatewayCache{}
+	cfg := newOpenAIWSV2TestConfig()
+	cfg.Gateway.Scheduling.LoadBatchEnabled = true
+	concurrencyCache := &cleanRelayConcurrencyCacheSpy{
+		schedulerTestConcurrencyCache: schedulerTestConcurrencyCache{
+			loadMap: map[int64]*AccountLoadInfo{
+				mappedAccount.ID:    {AccountID: mappedAccount.ID, LoadRate: 100},
+				availableAccount.ID: {AccountID: availableAccount.ID, LoadRate: 0},
+			},
+			acquireResults: map[int64]bool{
+				mappedAccount.ID:    false,
+				availableAccount.ID: true,
+			},
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        stubOpenAIAccountRepo{accounts: []Account{mappedAccount, availableAccount}},
+		cache:              cache,
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+		settingService:     newCleanRelaySettingService(true),
+	}
+	defer func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	}()
+
+	c := newCleanRelayGinContext(101, groupID)
+	body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache","previous_response_id":"resp_old"}`)
+	mapping := newOpenAICleanRelayMapping(mappedAccount.ID, 1, resolveConvergedInstallationID(&mappedAccount))
+	encoded, err := marshalOpenAICleanRelayMapping(mapping)
+	require.NoError(t, err)
+	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-session")
+	require.NoError(t, cache.SetSessionString(ctx, groupID, cacheKey, encoded, time.Hour))
+
+	selection, decision, err := svc.SelectAccountWithCleanRelayScheduler(
+		ctx,
+		c,
+		&groupID,
+		"resp_old",
+		"",
+		"codex-auto-review",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportResponsesWebsocketV2,
+		false,
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, mappedAccount.ID, selection.Account.ID)
+	require.False(t, selection.Acquired)
+	require.NotNil(t, selection.WaitPlan)
+	require.Equal(t, mappedAccount.ID, selection.WaitPlan.AccountID)
+	require.Equal(t, openAIAccountScheduleLayerCleanRelay, decision.Layer)
+	require.True(t, decision.StickySessionHit)
+	require.Equal(t, []int64{mappedAccount.ID}, concurrencyCache.acquireCalls)
+	require.Empty(t, concurrencyCache.releaseCalls)
+}
+
 func TestOpenAICleanRelay_AccountShareModeUsesMembershipAccount(t *testing.T) {
 	modeGroupID := int64(61711)
 	privateGroupID := int64(61761)
@@ -419,11 +870,21 @@ func TestOpenAICleanRelay_PreselectFallsBackWhenCachedAccountUnavailable(t *test
 	ctx := context.Background()
 	groupID := int64(202)
 	unavailableAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(303), groupID)
+	apiKeyAccount := openAITestAccountWithGroupIfUnset(Account{
+		ID:          403,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    -10,
+	}, groupID)
 	availableAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(404), groupID)
 	unavailableAccount.Status = StatusDisabled
+	availableAccount.Priority = 10
 	cache := &stubGatewayCache{}
 	svc := &OpenAIGatewayService{
-		accountRepo:    stubOpenAIAccountRepo{accounts: []Account{unavailableAccount, availableAccount}},
+		accountRepo:    stubOpenAIAccountRepo{accounts: []Account{unavailableAccount, apiKeyAccount, availableAccount}},
 		cache:          cache,
 		settingService: newCleanRelaySettingService(true),
 	}
@@ -436,7 +897,7 @@ func TestOpenAICleanRelay_PreselectFallsBackWhenCachedAccountUnavailable(t *test
 	mapping := newOpenAICleanRelayMapping(unavailableAccount.ID, 1, resolveConvergedInstallationID(&unavailableAccount))
 	encoded, err := marshalOpenAICleanRelayMapping(mapping)
 	require.NoError(t, err)
-	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-cache")
+	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-session")
 	require.NoError(t, cache.SetSessionString(ctx, groupID, cacheKey, encoded, time.Hour))
 
 	selection, decision, err := svc.SelectAccountWithCleanRelayScheduler(
@@ -460,6 +921,157 @@ func TestOpenAICleanRelay_PreselectFallsBackWhenCachedAccountUnavailable(t *test
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
 	if selection.ReleaseFunc != nil {
 		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAICleanRelay_UnavailableMappedContinuationDoesNotSwitchAccount(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(206)
+	unavailableAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(903), groupID)
+	availableAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(904), groupID)
+	unavailableAccount.Status = StatusDisabled
+	cache := &stubGatewayCache{}
+	svc := &OpenAIGatewayService{
+		accountRepo:    stubOpenAIAccountRepo{accounts: []Account{unavailableAccount, availableAccount}},
+		cache:          cache,
+		settingService: newCleanRelaySettingService(true),
+	}
+	t.Cleanup(func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	})
+
+	c := newCleanRelayGinContext(101, groupID)
+	body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache","previous_response_id":"resp_old"}`)
+	mapping := newOpenAICleanRelayMapping(unavailableAccount.ID, 1, resolveConvergedInstallationID(&unavailableAccount))
+	encoded, err := marshalOpenAICleanRelayMapping(mapping)
+	require.NoError(t, err)
+	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-session")
+	require.NoError(t, cache.SetSessionString(ctx, groupID, cacheKey, encoded, time.Hour))
+
+	selection, _, err := svc.SelectAccountWithCleanRelayScheduler(
+		ctx,
+		c,
+		&groupID,
+		"resp_old",
+		"",
+		"codex-auto-review",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+		body,
+	)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.True(t, IsOpenAIWSContinuationPermanentError(err), "a disabled mapped continuation owner requires a new conversation")
+	require.Nil(t, selection)
+}
+
+func TestOpenAICleanRelay_RateLimitedMappedContinuationRemainsRetryable(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(208)
+	rateLimitedUntil := time.Now().Add(30 * time.Minute)
+	mappedAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(1103), groupID)
+	mappedAccount.RateLimitResetAt = &rateLimitedUntil
+	availableAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(1104), groupID)
+	cache := &stubGatewayCache{}
+	svc := &OpenAIGatewayService{
+		accountRepo:    stubOpenAIAccountRepo{accounts: []Account{mappedAccount, availableAccount}},
+		cache:          cache,
+		settingService: newCleanRelaySettingService(true),
+	}
+	t.Cleanup(func() {
+		svc.settingService = newCleanRelaySettingService(false)
+	})
+
+	c := newCleanRelayGinContext(101, groupID)
+	body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache","previous_response_id":"resp_rate_limited"}`)
+	mapping := newOpenAICleanRelayMapping(mappedAccount.ID, 1, resolveConvergedInstallationID(&mappedAccount))
+	encoded, err := marshalOpenAICleanRelayMapping(mapping)
+	require.NoError(t, err)
+	cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-session")
+	require.NoError(t, cache.SetSessionString(ctx, groupID, cacheKey, encoded, time.Hour))
+
+	selection, _, err := svc.SelectAccountWithCleanRelayScheduler(
+		ctx,
+		c,
+		&groupID,
+		"resp_rate_limited",
+		"",
+		"codex-auto-review",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportAny,
+		false,
+		body,
+	)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.False(t, IsOpenAIWSContinuationPermanentError(err), "rate-limited mapped owners must remain retryable")
+	require.Nil(t, selection, "a continuation must not switch to the available account")
+}
+
+func TestOpenAICleanRelay_MappedAccountLookupErrorsAreReturned(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(207)
+	mappedAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(1003), groupID)
+	availableAccount := openAITestAccountWithGroupIfUnset(*newCleanRelayOAuthAccount(1004), groupID)
+	lookupErr := errors.New("account lookup failed")
+
+	for _, tc := range []struct {
+		name              string
+		schedulerSnapshot *SchedulerSnapshotService
+	}{
+		{name: "direct repository lookup"},
+		{
+			name: "database recheck after snapshot lookup",
+			schedulerSnapshot: &SchedulerSnapshotService{cache: &openAISnapshotCacheStub{
+				snapshotAccounts: []*Account{&mappedAccount, &availableAccount},
+				accountsByID: map[int64]*Account{
+					mappedAccount.ID:    &mappedAccount,
+					availableAccount.ID: &availableAccount,
+				},
+			}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cache := &stubGatewayCache{}
+			repo := cleanRelayAccountRepoErrorStub{
+				stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{mappedAccount, availableAccount}},
+				getErrors:             map[int64]error{mappedAccount.ID: lookupErr},
+			}
+			svc := &OpenAIGatewayService{
+				accountRepo:       repo,
+				cache:             cache,
+				schedulerSnapshot: tc.schedulerSnapshot,
+				settingService:    newCleanRelaySettingService(true),
+			}
+			t.Cleanup(func() {
+				svc.settingService = newCleanRelaySettingService(false)
+			})
+
+			c := newCleanRelayGinContext(101, groupID)
+			body := []byte(`{"model":"codex-auto-review","prompt_cache_key":"client-cache"}`)
+			mapping := newOpenAICleanRelayMapping(mappedAccount.ID, 1, resolveConvergedInstallationID(&mappedAccount))
+			encoded, err := marshalOpenAICleanRelayMapping(mapping)
+			require.NoError(t, err)
+			cacheKey := openAICleanRelayCacheKey(101, groupID, "client-installation", "client-session")
+			require.NoError(t, cache.SetSessionString(ctx, groupID, cacheKey, encoded, time.Hour))
+
+			selection, _, err := svc.SelectAccountWithCleanRelayScheduler(
+				ctx,
+				c,
+				&groupID,
+				"",
+				"",
+				"codex-auto-review",
+				"gpt-5.1",
+				nil,
+				OpenAIUpstreamTransportAny,
+				false,
+				body,
+			)
+			require.ErrorIs(t, err, lookupErr)
+			require.Nil(t, selection)
+		})
 	}
 }
 

@@ -3,7 +3,7 @@
 **生成日期**：2026-08-28  
 **适用项目**：`sub2api-0.1.119`  
 **实施类型**：跨后端服务、API、管理端/用户端前端、测试、发布的高复杂度改造  
-**当前状态**：仅完成方案设计；本方案生成时未修改业务代码、未读取或修改数据库、未连接生产环境
+**当前状态**：方案主体已形成；2026-09-04 已按新生产机的只读现场基线更新发布章节。本轮同步未读取或修改数据库，也未修改生产配置、服务或数据
 
 ## 1. 目标与已确认决策
 
@@ -225,10 +225,10 @@ resolver 必须区分：
 ### Task 0.1：记录工作区和构建基线
 
 - **位置**：仓库根目录、`backend/cmd/server/VERSION`、`backend/migrations/`、`frontend/package.json`。
-- **操作**：记录 `git rev-parse HEAD`、`git status --short`、版本号、最高 migration 编号、Node/pnpm/Go 版本；不修改任何文件。
+- **操作**：记录 `git rev-parse HEAD`、`git status --short`、版本号、完整 migration filename/runtime-checksum 集合、Node/pnpm/Go 版本；不修改任何文件。
 - **依赖**：无。
-- **当前已知基线**：`backend/cmd/server/VERSION` 为 `1.2.52`；本地目录当前最高迁移文件为未提交的 `279_ideas_plaza.sql`，且它属于用户正在开发的其他功能，不属于本模型目录改造。
-- **验收**：基线记录可用于后续 diff；已确认 `ideas-plaza` 相关修改不会被覆盖或被本功能提交；发布构建不得在未确认时把 `279_ideas_plaza.sql` 作为无关迁移带入生产。
+- **当前已知基线**：`backend/cmd/server/VERSION` 为 `1.2.61`；本地目录当前最高迁移文件是已跟踪的 `279_ideas_plaza.sql`。生产端实际已应用集合仍必须在获得数据库只读授权后按 filename/runtime-checksum 现场判定，不能从本地最高文件名推断。
+- **验收**：基线记录可用于后续 diff；发布构建必须包含用户确认的精确源码和 migration 集合，不能因文件已经被跟踪就默认获准在生产执行。
 - **验证**：`git status --short` 前后内容一致；不得产生构建产物。
 
 ### Task 0.2：冻结模型来源清单
@@ -681,83 +681,93 @@ resolver 必须区分：
 
 **目标**：在本地和预发布门全部通过后，按 Pixel 当前 binary+systemd+nginx 发布流程上线；生产发布前必须重新确认是否同步文档站。
 
-### Task 10.1：发布前文档站选择门
+### Task 10.1：发布范围与文档站选择门
 
-- **操作**：发布前明确询问“是否同步部署 `docs/site` 到 `pixel-docs.service:8082`”；只有当前对话明确回复“同步”才执行文档站阶段。
-- **依赖**：所有代码和测试 Sprint 完成。
-- **验收**：记录 `DOCS_SYNC=yes/no`；未确认时只发布主项目。
+- **操作**：先从用户当前请求确定 `MAIN_DEPLOY=yes/no`；再明确询问“是否同步部署 `docs/site` 到 `pixel-docs.service:8082`”，只有当前对话明确回复“同步”才记录 `DOCS_SYNC=yes`。两个开关至少一个为 yes；它们分别授权主程序和文档站，不能相互扩张。
+- **依赖**：`MAIN_DEPLOY=yes` 时要求主项目相关代码和测试 Sprint 完成；`DOCS_SYNC=yes` 时要求文档站相关改动和测试门完成。docs-only 不依赖无关主项目 Sprint。
+- **验收**：同时记录 `MAIN_DEPLOY=yes/no` 与 `DOCS_SYNC=yes/no`；仅主程序、仅文档站、主程序加文档站三条路径都具有明确且互不越权的执行范围。
 
 ### Task 10.2：本地版本、BOM、静态检查和测试门
 
 - **操作**：
-  - 检查工作区、版本和完整 migration 文件目录；迁移名存在 `006b`、`108a` 等字母后缀，禁止使用 `[int](filename.Split('_')[0])` 这类会报错或漏迁移的解析方法，应按 `migrationFilesThrough` 相同的完整文件名字典序和 checksum 语义比较；
-  - 扫描 `backend/migrations/*.sql` UTF-8 BOM，仅在发现时去除 BOM 字节；
-  - `go vet -C backend ./...`；
-  - 运行受影响 Go 测试；
-  - `pnpm --dir frontend run build`，确认 `backend/internal/web/dist` 新文件时间晚于构建开始；
-  - 用 `-tags embed`、`GOOS=linux GOARCH=amd64 CGO_ENABLED=0` 编译二进制；
-  - 检查 ELF 头 `7f 45 4c 46`、64 位 little-endian；
-  - 交叉编译后恢复 `GOOS/GOARCH/CGO_ENABLED` 环境变量。
-- **依赖**：Sprint 8 完成。
+  - 公共检查工作区、提交和精确发布内容；
+  - `MAIN_DEPLOY=yes` 时检查版本和完整 migration 文件目录；迁移名存在 `006b`、`108a` 等字母后缀，禁止使用 `[int](filename.Split('_')[0])` 这类会报错或漏迁移的解析方法，应按 `migrationFilesThrough` 相同的完整文件名字典序和 checksum 语义比较；
+  - `MAIN_DEPLOY=yes` 时扫描 `backend/migrations/*.sql` 的编码和 UTF-8 BOM；migration 是已发布的不可变输入，发现 BOM 或异常编码时阻断并报告，不由发布流程改写；runtime-checksum 必须复用迁移器的 `strings.TrimSpace` 后 SHA256 算法，不能用原始文件 SHA256 代替；
+  - `MAIN_DEPLOY=yes` 时运行 `go vet -C backend ./...`、受影响 Go 测试和 `pnpm --dir frontend run build`，确认 `backend/internal/web/dist` 新文件时间晚于构建开始；
+  - `MAIN_DEPLOY=yes` 时用 `-tags embed`、`GOOS=linux GOARCH=amd64 CGO_ENABLED=0` 编译二进制，检查 ELF 头 `7f 45 4c 46`、64 位 little-endian，并在交叉编译后恢复 `GOOS/GOARCH/CGO_ENABLED` 环境变量；
+  - `DOCS_SYNC=yes` 时独立运行文档站 lint、链接检查、本地 build 和源码打包门；docs-only 不执行主程序构建。
+- **依赖**：`MAIN_DEPLOY=yes` 时依赖主项目相关 Sprint 完成；`DOCS_SYNC=yes` 时只依赖文档站相关改动及其门完成。docs-only 不被无关主项目 Sprint 阻断。
 - **验收**：新增/修改目标测试、touched package、lint、typecheck、构建必须 100% 通过；全仓如果存在已知且可复现的无关预存失败，必须记录命令、测试名、错误和无关证据并交由用户决定是否放行，不能自行忽略。工作区 dirty 时 BuildType 必须为 `dev`，不得谎报 release；若要求可复现 release，必须在用户指定的干净提交/工作树上重建。
-- **发布内容门**：当前工作区包含 Ideas Plaza 等其他未提交功能，直接构建会把全部源码和全部 embedded migration 一起带入二进制。生产发布前必须让用户明确选择“本次一起发布这些改动”或“从指定提交/独立干净工作树仅构建模型目录变更”；默认推荐后者。未确认发布内容集合时不得构建生产包。
+- **发布内容门**：每次发布前重新读取工作区和提交状态；直接构建会把当前源码和全部 embedded migration 一起带入二进制。生产发布前必须让用户确认精确发布内容，或从用户指定的干净提交/独立工作树构建；不得沿用本方案写作时的旧工作区判断。未确认发布内容集合时不得构建生产包。
 
-### Task 10.3：生产远程只读预检
+### Task 10.3：生产远程只读预检（按发布域条件化）
 
-- **操作**：按 `pixeldeploy` 技能执行一轮 SSH 只读预检：
-  - SSH 身份、sudo、systemd unit、WorkingDirectory、ExecStart；
-  - 当前 release、资源目录、服务状态；
-  - PostgreSQL `schema_migrations` 的 `filename/checksum` 集合与本地嵌入 migration 目录对比；当前代码表结构是 `filename` 主键，不存在 `version` 列，因此禁止执行 `max(version)`；
-  - `/health`、`/health/ready`、nginx 80/443 基线；
-  - 磁盘空间、监听端口、迁移 drop-in；
-  - 记录精确集合判定：`PENDING = LOCAL_EMBEDDED_FILES - REMOTE_APPLIED_FILES`；`REMOTE_ONLY = REMOTE_APPLIED_FILES - LOCAL_EMBEDDED_FILES`；并核对交集中每个文件的 checksum。`PENDING` 非空表示待迁移，`REMOTE_ONLY` 非空表示当前 checkout 落后，checksum 不一致表示已应用 migration 被修改，后两者都必须阻断。
+- **操作**：按 `pixeldeploy` 技能只连接当前生产机 `s766@207.32.218.139:22` 执行一轮 SSH 只读预检；旧服务器只可用于用户明确要求的历史调查：
+  - 公共检查 SSH 身份、sudo 模式、磁盘空间和 nginx；再只检查本次授权域对应的 systemd unit、WorkingDirectory、ExecStart、current release 与公网基线；
+  - 仅在 `MAIN_DEPLOY=yes` 时检查主程序 release、resources、`pixel.service`、PostgreSQL、Redis 和主站健康；
+  - 仅在 `MAIN_DEPLOY=yes` 时检查 `pricing.data_dir` 与其他运行时写路径；新机当前未显式配置该项，默认解析到 `/opt/sub2api/current/data`，因此把新 release 改成 root 所有且服务用户只读前，必须另行授权将状态外置到 `/var/lib/sub2api` 专用子目录并完成复制/哈希/回滚验证；
+  - 仅在 `MAIN_DEPLOY=yes` 且已取得数据库只读授权时，将 PostgreSQL `schema_migrations` 的 `filename/checksum` 集合与本地嵌入 migration 目录对比；当前代码表结构是 `filename` 主键，不存在 `version` 列，因此禁止执行 `max(version)`；docs-only 不访问数据库；
+  - `MAIN_DEPLOY=yes` 时必须在上传前另外取得 `SCHEDULER_STATE_READ_APPROVED=yes`：Redis 仅可读取 `sched:buckets`、由其成员派生的 ready/active/version snapshot 键和 `sched:outbox:watermark`；PostgreSQL 仅可在 10 秒 statement timeout、2 秒 lock timeout 的只读事务中读取 `scheduler_outbox.id/created_at`，无 JOIN，只返回 `max_id` 与 watermark 后第一条事件的 `oldest_pending_created_at`。该授权不能借用 `schema_migrations` 只读授权，未获授权即阻断主程序发布；
+  - 仅在 `MAIN_DEPLOY=yes` 时检查 `/health`、`/health/ready`、主程序监听端口和 migration drop-in，并记录精确集合判定：`PENDING = LOCAL_EMBEDDED_FILES - REMOTE_APPLIED_FILES`、`REMOTE_ONLY = REMOTE_APPLIED_FILES - LOCAL_EMBEDDED_FILES`，再核对交集中每个 checksum；
+  - 仅在 `DOCS_SYNC=yes` 时检查 `pixel-docs.service`、`/opt/pixel-docs/current`、独立 Node/Corepack runtime、`pixel-docs-build` 身份、8082 和文档站公网基线；docs-only 不读取主程序配置或数据库。
 - **依赖**：Task 10.2。
-- **验收**：旧版本健康、sudo 可用、磁盘足够、数据库没有本地缺失的迁移文件、已应用 migration checksum 与本地一致；若已有故障、DB 包含本地不存在的迁移，或 checksum 漂移，立即停止。
-- **数据库边界**：`schema_migrations` 查询属于数据库读取。正式执行前必须向用户展示只读 SQL、用途和零写入影响并取得授权；不得执行数据修改。
-- **灰度门校验**：`DATABASE_MIGRATION_THROUGH` 必须是实际嵌入的完整 `.sql` 文件名或空值；如果生产配置不是这种格式、`MIGRATION_MODE` 不是 `validate`，立即阻断并报告，不能按数字简称猜测。
+- **验收**：相关现行服务健康、sudo 模式已确认且磁盘足够；`MAIN_DEPLOY=yes` 时还要求数据库没有本地缺失的迁移文件、已应用 migration checksum 精确匹配或被代码中的同一 compatibility rule 接受。若已有故障、DB 包含本地不存在的迁移，或 checksum 不被接受，立即停止。
+- **数据库边界**：`schema_migrations` 与 `scheduler_outbox` 是目的、表和返回字段完全不同的两个只读范围，必须分别展示 SQL、用途、采样时间窗和零写入影响并分别取得授权；前者只返回 migration `filename/checksum`，后者只在发布后取两组 `max_id/oldest_pending_created_at` 样本。两者都使用超时只读事务，不得执行数据修改；docs-only 明确跳过。
+- **单机迁移配置门**：仅在 `MAIN_DEPLOY=yes` 时应用。新机当前没有持久 migration override，代码默认 `DATABASE_MIGRATION_MODE=migrate`、`DATABASE_MIGRATION_THROUGH` 为空。若现场出现 `validate`、非空 through 或 cluster enabled，视为拓扑漂移并立即停止，不能沿用旧多实例灰度策略或按数字简称猜测。
 
 ### Task 10.4：压缩上传、校验和、分阶段 smoke test
 
 - **操作**：
-  - 将 Linux 二进制 gzip 压缩上传到 `/home/pixel/sub2api_release_uploads`；
-  - 远端解压后比较 SHA256 和 ELF 头；
-  - 在 `/opt/sub2api/releases/<timestamp>` 建目录，复制二进制和当前 `resources/`；
-  - 以 `sub2api` 用户执行 staged binary `--version`；
-  - 确认旧 `current` 仍服务 `200`。
-- **依赖**：Task 10.3。
-- **验收**：哈希一致、版本/commit/BuildType 正确、旧 release 未被切换。
+  - 仅当 `MAIN_DEPLOY=yes` 或 `DOCS_SYNC=yes` 时，确认 `/opt/sub2api/release-maintenance` 是 canonical、非 symlink 的 `root:s766 0750` 维护根，`uploads` 是其 canonical 直接子目录并精确为 `root:s766 1730`；本次制品直接以含 `RELEASE_TOKEN` 的唯一文件名放入 uploads，不另建嵌套目录。新机当前维护根、retention service/timer 均不存在且 release 根仍为 `sub2api:sub2api 0750`，所以 `RETENTION_ISOLATION_READY=no`；创建/改权/安装必须另获 `RETENTION_MAINTENANCE_APPROVED`，普通部署不得顺带执行或临时放宽。retention 删除过期上传时必须重验 direct entry、s766 owner、regular/non-symlink、单硬链接、年龄和 device/inode；上传项先原子移入同一维护根内 `root:root 0700` 的 `quarantine`。cleanup unit 使用 `ProtectSystem=strict`，对 uploads/quarantine 只开放同一个 `ReadWritePaths=/opt/sub2api/release-maintenance`，并在自身 mount namespace 内证明两者具有相同 containing mount、`stat -c %m` 和 device，避免跨 bind mount 的 `mv` 退化为复制删除。只删除隔离后身份仍匹配的 inode，任何不匹配项都无覆盖恢复或保留现场。release 项只删除重新核验后的原 direct entry，禁止解析 symlink 后删除其目标；
+  - `MAIN_DEPLOY=yes` 时上传 gzip binary、同源码 resources 和 migration manifest；`DOCS_SYNC=yes` 时独立上传固定名 `docs-source-${RELEASE_TOKEN}.tar.gz`，确保 docs-only 不依赖主程序阶段；所有目标文件必须原先不存在并逐个复核 SHA256，进入 maintenance lock 后在消费上传物前再次核验 exact path、非 symlink 和本地清单中的预期 hash；
+  - `MAIN_DEPLOY=yes` 时才远端解压并比较 binary SHA256 和 ELF 头，在 `/opt/sub2api/releases/<timestamp>` 建目录，安装二进制，并解压与该 binary 完全相同源码状态构建、单独哈希并上传的 `resources` 包；禁止从在线 current 复制旧资源；
+  - `MAIN_DEPLOY=yes` 时，只有预检已经证明所有运行时写路径均外置且 `MAIN_READONLY_READY=yes`，才把 release 设为 root 所有、`sub2api` 只读执行；否则在 staging 前阻断，不能依靠健康 200 掩盖动态价格同步写失败；
+  - `MAIN_DEPLOY=yes` 时以 `sub2api` 用户执行 staged binary `--version`，并确认旧 `current` 仍服务 `200`；docs-only 跳过全部主程序 staging、数据库判定和 `pixel.service` 操作。
+- **依赖**：Task 10.2 与 Task 10.3 中对应本次 `MAIN_DEPLOY`/`DOCS_SYNC` 范围的门；docs-only 不依赖主程序或数据库子步骤。
+- **验收**：所有已上传制品本地/远端哈希一致；`MAIN_DEPLOY=yes` 时版本、commit、BuildType 正确且旧主 release 未被切换；docs-only 时 docs source hash 正确且主程序 current、数据库和 `pixel.service` 均未触碰。
 
-### Task 10.5：数据库迁移判定和安全门
+### Task 10.5：数据库迁移判定和安全门（仅 `MAIN_DEPLOY=yes`）
 
-- **操作**：本功能预期不新增 SQL migration。以“本地嵌入文件集合减去远端已应用 filename 集合”计算待执行文件，并逐个核对 checksum；若待执行项来自其他未提交功能（例如当前 `279_ideas_plaza.sql`），立即阻断本次发布，不得因本功能发布顺带应用。只有用户另行授权这些具体 migration 后，才按 `pixeldeploy` 规则执行选择性 schema/相关表备份，使用 staged binary 的 `--migrate-only` 并显式清空 `DATABASE_MIGRATION_THROUGH`。
+- **操作**：本功能预期不新增 SQL migration。以“本地嵌入文件集合减去远端已应用 filename 集合”计算待执行文件，并逐个核对 checksum；若出现任何不属于本次批准范围的 pending 项，立即阻断，不得顺带应用。只有用户另行授权精确的 filename/runtime-checksum 集合、逐项证明旧 binary 对新 schema 向后兼容，并完成受影响 schema/数据定点备份后，才可执行 staged binary 的 `--migrate-only`。备份必须进入 root 0700 的唯一 attempt 目录，由局部子 shell 的 `umask 077` 与 `noclobber` 覆盖所有 dump/manifest 写入；所有获批关联表用一次 `pg_dump -Fc --strict-names` 的重复 `--table` 参数导出，确保数据来自单一 snapshot，再生成并自校验 SHA256SUMS。在线 snapshot 到迁移开始之间仍可能有新写；若目标要求零数据损失，必须另行授权短暂写冻结，不能用备份命令掩盖该窗口。子 shell 结束后恢复外层环境，不能污染随后文档构建的权限。即使 `DATABASE_MIGRATION_THROUGH` 为空，执行前也必须重算并证明实际全部 pending 与获批集合完全一致。
 - **依赖**：Task 10.3、Task 10.4。
-- **验收**：迁移文件名、checksum、备份路径、执行前后已应用集合和 gray-release ceiling 全部记录；失败时不切换 symlink。任何 `--migrate-only` 都属于数据库修改，必须在展示具体待执行文件和备份范围后再次获得明确授权。
-- **禁止**：full `pg_dump` 599GB 数据库、手写 DDL、回填 `model_mapping`、修改 migration drop-in。
+- **验收**：迁移文件名、checksum、备份路径、保留期、执行前后已应用集合和 checksum compatibility 判定全部记录；失败时不切换 symlink。任何 `--migrate-only` 都属于数据库修改，必须在展示具体待执行文件和备份范围后再次获得明确授权。
+- **禁止**：全库数据 `pg_dump`、手写 DDL、回填 `model_mapping`、修改 migration override；大型日志/账本表是否能做定点备份必须依据当次只读容量和迁移副作用评估，不能沿用旧服务器容量数字。
 
-### Task 10.6：切换、重启和应用验证
+### Task 10.6：切换、重启和应用验证（仅 `MAIN_DEPLOY=yes`）
 
-- **操作**：记录 `PREVIOUS`、`RELEASE`、`STAMP`、可直接执行的 `ROLLBACK_CMD`；切换 `/opt/sub2api/current`；只重启 `pixel.service`；轮询 `/health/ready` 至 200；检查 systemd、SHA256、版本、依赖服务、nginx 基线、监听端口和日志。
-- **依赖**：Task 10.5。
-- **验收**：服务 running、ready 200、nginx 结果不低于部署前基线、无 panic/反复 error/缺失列或表日志；旧 release 保留用于回滚。
+- **操作**：记录 `PREVIOUS`、`RELEASE`、`STAMP`、可直接执行的 `ROLLBACK_CMD`；staging、同目录临时 symlink + `mv -T` 原子切换、回滚和上传清理必须始终持有 `/run/pixel-release-maintenance.lock`；只有 current 解析到 RELEASE 后才重启 `pixel.service`；轮询 `/health/ready` 至 200；检查 systemd、SHA256、版本、依赖服务、nginx 基线、监听端口和日志。
+- **控制流硬门**：切换前把全部只读业务验证实现为不调用 `exit`、不改 symlink/服务且每项显式返回错误的 gate function；切换后只能由统一 orchestrator 在显式条件中调用“业务门 + attempt-local comparator”。comparator 使用三态：0 为通过、1 为证据完整且确认发现异常、2 为读取/身份/rotation/truncate/pipeline 等导致不可判定；状态 2 永久置位当前操作 latch。目标失败时必须先封存带 label 的 pre/post NRestarts、MemoryCurrent、memory.events、journal cursor、nginx log offsets 和脱敏业务失败分类，再恢复旧 release 并完整重复同一门；恢复 helper 自身在 swap、restart 或早期 ready 失败时也必须先封存该恢复 attempt。任何失败 attempt 采证不完整都置位 latch，恢复仍优先执行，但最终强制返回“恢复/证据不完整”，不能降成“已完整恢复”。返回码固定区分目标成功、恢复成功和恢复/证据不完整，禁止顶层裸 `exit 1` 绕过恢复。
+- **容量与内存门**：`/run` quarantine 在第一份复制前按所有并存制品总字节加固定 reserve 校验；若为 tmpfs 还要校验 MemAvailable reserve。主服务除 memory.events 外，在启动热身、初始 scheduler snapshot 和周期观察结束分别采样 MemoryCurrent/可用时的 MemoryPeak 与主机 MemAvailable，阈值来自同版预发布测量和生产安全余量；不得改 HTTP 连接池或凭事件计数为零忽略内存增长。
+- **nginx 门**：从 `nginx -T` 冻结每个日志的类型与生效 log_format。默认 combined access 只解析请求字段后的 `$status`，error log 只匹配 FD/worker 容量错误；未知格式阻断，禁止在整行搜索任意三位 `5xx`。
+- **依赖**：Task 10.5，且 `SCHEDULER_STATE_READ_APPROVED=yes` 已在上传前取得。
+- **验收**：服务 running、ready 精确为 200、nginx 结果不低于部署前基线、无 panic/反复 error/缺失列或表日志；JWT/TOTP 密钥仅以存在性、长度和 SHA256 脱敏指纹证明重启前后未变化。跨重启认证 smoke 必须使用重启前已成功的同一受控 Bearer access token；但 `/api/v1/auth/me` 会经过 `jwtAuth -> TouchLastActiveForUser -> UpdateUserLastActiveAt`，可能更新该用户的 `users.last_active_at`，所以执行前必须说明用户范围、两次请求和精确写入影响并取得独立授权，不能称为纯只读。未授权时明确记录“跨重启认证 smoke 未验证”，不得用 ready=200、新 token 或 cookie 代替。Scheduler 要先在最多 130 秒内取得 `sched:buckets` 中每个 bucket 的 ready=1、正 active version、对应 snapshot 存在的闭合快照；full rebuild interval 大于 0 时至少观察 `interval + 130 秒` 并证明持续存在 bucket 的版本前进，关闭时明确记录只验初始闭合。按独立授权以至少 `max(5 秒, 2 * outbox poll interval)` 间隔取得两组 watermark/max id/oldest pending 样本；有效 lag warn 大于 0 时 pending lag 必须低于阈值且第二组不恶化，为 0 时不自造阈值，改为要求两组都 `watermark >= max_id` 且 `oldest_pending_created_at IS NULL`。已消费行会在 watermark 推进后删除，健康空表允许 `max_id=0` 而 watermark 保留历史正值。日志只检查本次窗口内 logger 为 `service.scheduler_snapshot` 或消息以 `[Scheduler]` 开头的行；禁止裸匹配全应用的 `context deadline exceeded`。任一闭环失败即回滚，不能用 ready=200 或没有 success 日志代替；旧 release 保留用于回滚。
 
-### Task 10.6a：生产功能冒烟授权边界
+### Task 10.6a：生产功能冒烟授权边界（仅 `MAIN_DEPLOY=yes`）
 
-- **默认允许范围**：只读调用渠道 `model-options`、账号 `/models`、网关 `/v1/models` 并核对 UI，不改变渠道状态、价格、mapping、房间、计划或任务。
+- **默认允许范围**：未认证的健康与公开页面检查不改变业务数据。渠道 `model-options`、账号 `/models`、网关 `/v1/models` 等接口在业务语义上是查询，但只要经过 JWT 中间件就可能防抖更新 `users.last_active_at`；因此任何带登录会话的冒烟都必须先说明受控用户、请求数和该 incidental write，并取得独立授权。
 - **额外授权范围**：真实“测试连接”会访问上游，可能产生费用并写 usage/log；批量测试和计划测试还会创建任务/计划数据。执行前必须列明测试账号、模型、请求数、预计费用和写入影响并取得明确授权。
 - **禁止在生产构造的场景**：禁用/启用渠道、增删价格、制造空 mapping、创建临时房间等写场景只在本地隔离测试栈验证，不为冒烟临时修改生产配置或数据。
-- **验收**：默认发布验证不产生业务写入或上游计费；任何额外冒烟都有当前会话授权记录。
+- **验收**：默认发布验证不产生业务写入或上游计费；已授权认证冒烟只允许发生已披露的 `users.last_active_at` 触达，任何上游测试或其他写入另行授权并留有当前会话记录。
 
 ### Task 10.7：可选文档站独立发布
 
-- **前提**：Task 10.1 明确 `DOCS_SYNC=yes` 且主项目验证通过。
-- **操作**：先只读断言 `docs/site/next.config.ts` 含 `output: 'standalone'`，`docs/site/pnpm-workspace.yaml` 允许 `esbuild`、`sharp`、`unrs-resolver` 构建脚本；缺失即停止并单独修复。随后按 `pixeldeploy`：只打包源码到临时目录，服务器端 `pnpm install --frozen-lockfile` 和 standalone build；复制 `.next/static`、`public`；用 `cp -a` 保留 pnpm symlink；切换 `/opt/pixel-docs/current`，只重启 `pixel-docs.service`；验证 8082、页面内容、CSS/JS 和日志。
+- **前提**：Task 10.1 明确 `DOCS_SYNC=yes`；若 `MAIN_DEPLOY=yes`，还必须先通过主项目验证；docs-only 不依赖主项目构建、数据库判定或重启。
+- **操作**：
+  - 先只读断言 `docs/site/next.config.ts` 含 `output: 'standalone'`，`docs/site/pnpm-workspace.yaml` 允许 `esbuild`、`sharp`、`unrs-resolver` 构建脚本；缺失即停止并单独修复。
+  - 新机当前没有 `pixel-docs-build` 专用系统用户，且 `/opt/pixel-docs` 位于 XFS `noquota` 根盘；首次安全 docs 发布需分别获得系统账号与存储隔离授权，创建 nologin 构建身份。当前 `pixeldeploy` 的机械门要求 `/opt/pixel-docs/build` 是精确 mountpoint、FSROOT 为 `/`、`st_dev` 与 MAJ:MIN 均不同于根盘，并通过真实块设备链排除 loop；若未来改用 XFS project quota，必须先补充并审查 project-id、挂载参数、hard limit 与消费路径闭合 verifier，不能直接把 gate 改为 yes。不能让 lifecycle 与 `pixel.service` 共用 `sub2api` UID，也不能仅靠 `df` 预估替代硬存储边界。
+  - 在同版本 Linux 上量出 frozen fetch/install/build 以及 stage runtime 的内存、CPU、task、时长峰值；分别量出构建树（源码、store、node_modules、`.next`）峰值和最终 release 的字节/inode。独立构建盘必须满足构建树上限加自身 reserve，生产根文件系统必须在复制前满足 release 上限加在线 reserve；复制后还要机械验证 release 实际值与根盘 reserve。`/tmp`、`/var/tmp` 使用有 size/inode 上限的私有 tmpfs。新机约 3 GB swap 已启用，build 与 stage 必须分别设置并回读 `MemorySwapMax=0`，停止前证明同一 cgroup 的 `memory.swap.current=0` 且 swap events 的 high/max/fail 全为 0；任一证据缺失都阻断。缺少任一测量、reserve 或硬构建盘边界时阻断 docs，不在生产在线试错。
+  - 使用 `/opt/pixel-docs/runtime/current/bin` 中的 Node/Corepack 和固定 `pnpm@10.33.4`。在创建/解压 build 和注册 trap 前，要求 fetch、build、stage-first、stage-second 四个精确 unit 均为 `LoadState=not-found`；注册只清理 exact build direct child 和这四个本次 owned unit 的 EXIT trap。
+  - 源码包按精确 hash/member/unpacked bytes 做流式审计；解压后用 GNU `find -exec ... {} +` 分批、无落盘地把每个 symlink 交给 `readlink -e`，证明目标真实存在且闭合在 build 内；禁止把可控路径清单写入 `/run` 或 shell 变量。第一阶段允许网络但只做 frozen `pnpm fetch`；第二阶段以 `PrivateNetwork=true` 做 offline frozen install/build。两者用 `pixel-docs-build` 的 oneshot + `RemainAfterExit` runner，显式采集结果、CPU、cgroup `memory.events`、`memory.swap.*` 和 tree usage 后 stop；不使用 `--collect` 提前丢失证据。
+  - build unit 完成并证明专用构建 UID 没有残留进程后，先把 build 树转为 root 所有并收紧 mode；扩展/default ACL 与 capability 都通过流式“生产者完整退出且无输出”门检查，不能把递归输出捕获进 root shell 内存。再拒绝 group/other write、多硬链接、特殊节点、suid/sgid 和逃逸/断裂链接，形成构建身份不可再改写的冻结输入；按三个精确来源树累计字节/inode 并要求不超过预先测得的 release 上限，避免先无界复制再发现超限。复制不得保留 build 控制的 owner/mode/ACL/xattr，也不得跟随链接；standalone 落位后、复制 static/public 前先证明重定位后的全部链接闭合、`.next` 为新 release 内 root 拥有的真实目录且两个目标尚不存在，再精确创建目标。随后终审 `DOCS_RELEASE`：只允许 file/dir/symlink、regular file 单硬链接、无 suid/sgid/capability、无从父目录继承的扩展/default ACL、root:sub2api 和明确 0640/0750 mode；所有 symlink 再用无落盘流式 helper 证明闭合。任何特殊节点、断链、外链或工作集/reserve 超限都禁止 stage。
+  - stage-first/stage-second 使用独立 `Type=exec` runner：UID/GID 为 `sub2api`、工作目录为 `DOCS_RELEASE`、release 只读、宿主网络可见 127.0.0.1:18082，并应用单独测得的 runtime 资源上限与 `MemorySwapMax=0`。不得复用 build oneshot，也不得继承 `PrivateNetwork=true`。每次完整 smoke 后、stop 前必须证明 unit 仍为同一 active/running PID、NRestarts=0、18082 仍监听、MemoryCurrent/CPU accounting 可读、实际 resource properties 与批准值一致、memory.events 四项为 0、swap current 和 high/max/fail 均为 0；随后才 stop 并验证无进程/监听。第一次完成后删除 build，再从已删除 build 的状态运行第二次；两次均验证 `/docs`、search、静态资源、404、无落盘和 unit/端口完全回收。
+  - 最终验证和 cleanup 成功后才解除 trap。最后持同一 maintenance lock 原子切换 `/opt/pixel-docs/current`，只重启 `pixel-docs.service`；所有业务门和机械 comparator 必须通过统一 orchestration，失败先封存证据、恢复旧 docs release、完整验证恢复版本，再返回确定的 1/2 状态。
 - **验收**：文档站失败不回滚主项目；成功后清理临时源码包和构建目录，保留 release 目录作为回滚路径。
 
 ### Task 10.8：发布失败回滚
 
-- **快速回滚**：将 `/opt/sub2api/current` 指回 `PREVIOUS`，重启 `pixel.service`，轮询 `/health/ready`，检查日志和 nginx。
-- **数据库边界**：symlink 回滚不撤销已应用 migration；只有旧二进制确实无法兼容新 schema 时，才在用户明确确认后考虑选择性 schema/表恢复；恢复表 dump 会覆盖备份后写入的数据，必须先说明数据损失范围。
-- **文档站回滚**：只切换 `/opt/pixel-docs/current` 并重启 `pixel-docs.service`，不影响主项目。
+- **主程序快速回滚（仅 `MAIN_DEPLOY=yes`）**：同一发布会话使用已记录的 `PREVIOUS`；独立 rollback-only 必须从可信发布记录和用户指定版本重新选择目标，canonical 校验为 releases 根的直接子目录，核验版本/SHA/manifest，并重新证明旧 binary 与当前 schema 兼容。随后持有 `/run/pixel-release-maintenance.lock`，以临时 symlink + `mv -T` 原子切换，确认解析目标正确后重启 `pixel.service`，轮询 `/health/ready`，检查日志和 nginx。若执行过 migration，只能在发布前已经证明旧 binary/schema 兼容时自动回滚 binary；回滚目标启动失败时还要原子恢复操作前 current。
+- **数据库边界（仅 `MAIN_DEPLOY=yes`）**：symlink 回滚不撤销已应用 migration；只有旧二进制确实无法兼容新 schema 时，才在用户明确确认后考虑选择性 schema/表恢复；恢复表 dump 会覆盖备份后写入的数据，必须先说明数据损失范围。
+- **文档站回滚（仅 `DOCS_SYNC=yes`）**：独立 rollback-only 必须从可信发布记录和用户指定版本重新选择目标，canonical 校验为 docs releases 根的直接子目录，并复核完整制品身份。随后持有同一 maintenance lock，以同目录临时 symlink + `mv -T` 原子切换 `/opt/pixel-docs/current`，确认目标后重启 `pixel-docs.service`，通过与正常发布完全相同的业务门和 attempt-local comparator；失败时先封存目标 attempt，再恢复操作前 docs current 并完整验证恢复 attempt，不影响主项目。
 - **验收**：回滚命令、路径、版本和健康结果均有记录；不删除旧 release、不清理日志、不进行未经批准的数据恢复。
 
 ### Task 10.9：发布验收记录模板
@@ -766,6 +776,11 @@ resolver 必须区分：
 
 ```text
 部署结果：成功 / 失败 / 部分成功
+
+【范围】
+- MAIN_DEPLOY=yes/no：
+- DOCS_SYNC=yes/no：
+- 当前生产目标：s766@207.32.218.139:22
 
 【版本】
 - VERSION / Commit / BuildType / BuildDate：
@@ -782,23 +797,31 @@ resolver 必须区分：
 - LOCAL_EMBEDDED_FILES 数量 / REMOTE_APPLIED_FILES 数量：
 - PENDING / REMOTE_ONLY / checksum 差异：
 - 迁移判定：无漂移已跳过 / 已授权并应用的具体文件：
-- 备份路径：本次无迁移 / 实际路径：
+- 备份路径、attempt、owner/mode、SHA256、保留截止：本次无迁移 / 实际值：
 - DATABASE_MIGRATION_MODE / DATABASE_MIGRATION_THROUGH：
 
 【验证】
-- systemctl is-active pixel / postgresql-18 / redis / nginx：
+- systemctl is-active pixel.service / postgresql@18-main.service / redis.service / nginx.service：
 - /health /health/live /health/ready：
 - nginx 80 / 443：部署前基线 → 部署后：
 - 公网访问：
 - 当前 symlink / 服务器 binary hash / version：
 - 端口监听：
 - NRestarts：
+- JWT/TOTP 脱敏指纹、跨重启旧会话：
+- 认证冒烟授权 / 受控用户 / 请求次数 / users.last_active_at 影响：
+- SCHEDULER_STATE_READ_APPROVED / Redis 键范围 / scheduler_outbox SQL / 两组采样时间：
+- Scheduler rebuild/retry、bucket version 前进、ready-active-snapshot 闭合、watermark-max-lag：
 - 日志异常：无 / 摘要：
 - 功能冒烟：只读项 / 额外授权项：
 
 【文档站】
 - DOCS_SYNC=yes/no（用户当前会话明确决定）：
 - 若同步：DOCS_PREVIOUS / DOCS_RELEASE / DOCS_ROLLBACK_CMD / 8082 验证：
+- DOCS_BUILD_ISOLATION_READY / pixel-docs-build：
+- DOCS_BUILD_RESOURCE_BUDGET_READY / MemoryHigh / MemoryMax / MemorySwapMax=0 / CPUQuota / TasksMax / TimeoutSec / 预测峰值来源 / fetch 与 build 的 memory.events、memory.swap.current、memory.swap.events：
+- DOCS_BUILD_STORAGE_ISOLATION_READY / build 独立挂载 / build 与 release 字节、inode 上限 / 两个 reserve：
+- DOCS_STAGE_RESOURCE_BUDGET_READY / MemorySwapMax=0 / stage-first 与 stage-second 的 memory.events、memory.swap.current、memory.swap.events 结果：
 
 【风险与遗留】
 -
@@ -940,15 +963,15 @@ Gemini、Codex、上游同步、Usage 查询并不是同一种“可选择模型
 
 ### 9.2 发布层快速回滚
 
-- 发布前记录 `PREVIOUS`、`RELEASE`、`STAMP`、二进制 SHA256 和可执行 `ROLLBACK_CMD`。
-- 发现新版本 crash-loop、ready 非 200、网关模型异常或关键日志错误时，只切回旧 `current` 并重启 `pixel.service`。
-- 旧 release 不删除；验证回滚后的 ready、nginx 和日志。
+- 发布前记录 `PREVIOUS`、`RELEASE`、`STAMP`、二进制 SHA256、manifest/schema compatibility 结论和可执行 `ROLLBACK_CMD`。
+- 发现新版本 crash-loop、ready 非 200、网关模型异常或关键日志错误时，不得使用“只切 current + ready”旁路；统一执行 Task 10.8 与 `pixeldeploy` 技能的 rollback-only 流程，包括可信目标选择、canonical/hash/manifest/schema 兼容核验、maintenance lock、原子切换、attempt 基线与完整业务/机械门。
+- 回滚目标失败时先封存该 attempt，再恢复操作前 current 并完整验证恢复 attempt；证据不可判定固定返回状态 2。旧 release 不删除，未经单独授权不回滚数据库。
 
 ### 9.3 数据层回滚
 
 - 本次正常代码发布不应写账号 mapping，原则上无需数据回滚。
 - 如果另行授权执行历史回填，必须在独立变更中保存最小范围备份/旧值；回滚只恢复批准字段和批准账号。
-- 不使用全库 dump；不恢复 599GB 日志表；任何表恢复会覆盖备份后写入的数据，必须由用户再次确认。
+- 不使用全库数据 dump；不恢复大型日志/账本表；任何表恢复会覆盖备份后写入的数据，必须由用户再次确认并依据当次只读容量评估范围。
 
 ## 10. 完成定义（Definition of Done）
 

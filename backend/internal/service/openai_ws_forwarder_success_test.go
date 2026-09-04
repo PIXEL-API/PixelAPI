@@ -103,8 +103,11 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
 	c.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
-	groupID := int64(1001)
-	c.Set("api_key", &APIKey{GroupID: &groupID})
+	authGroupID := int64(1001)
+	effectiveGroupID := int64(1002)
+	apiKeyID := int64(7001)
+	c.Set("api_key", &APIKey{ID: apiKeyID, GroupID: &authGroupID})
+	setOpenAIEffectiveGroupID(c, &effectiveGroupID)
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
@@ -128,13 +131,15 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 		},
 	}
 
-	cache := &stubGatewayCache{}
+	ownerCache := &openAIWSCountingOwnerCache{
+		stubGatewayCache: stubGatewayCache{isolateByGroup: true},
+	}
 	svc := &OpenAIGatewayService{
-		cfg:              cfg,
-		httpUpstream:     upstream,
-		cache:            cache,
-		openaiWSResolver: NewOpenAIWSProtocolResolver(cfg),
-		toolCorrector:    NewCodexToolCorrector(),
+		cfg:                cfg,
+		httpUpstream:       upstream,
+		openaiWSResolver:   NewOpenAIWSProtocolResolver(cfg),
+		openaiWSStateStore: NewOpenAIWSStateStore(ownerCache),
+		toolCorrector:      NewCodexToolCorrector(),
 	}
 
 	account := &Account{
@@ -174,9 +179,22 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 	require.False(t, received.Stream, "应保持客户端 stream=false 的原始语义")
 
 	store := svc.getOpenAIWSStateStore()
-	mappedAccountID, getErr := store.GetResponseAccount(context.Background(), groupID, "resp_new_1")
+	mappedAccountID, getErr := store.GetResponseAccount(context.Background(), effectiveGroupID, "resp_new_1")
 	require.NoError(t, getErr)
 	require.Equal(t, account.ID, mappedAccountID)
+	mappedAccountID, getErr = store.GetResponseAccount(context.Background(), authGroupID, "resp_new_1")
+	require.NoError(t, getErr)
+	require.Zero(t, mappedAccountID, "fallback route response binding must not be written to the authentication group's namespace")
+	owner, ownerFound, ownerErr := store.GetResponseOwnerStrict(context.Background(), apiKeyID, "resp_new_1")
+	require.NoError(t, ownerErr)
+	require.True(t, ownerFound)
+	require.Equal(t, OpenAIWSResponseOwner{
+		Version:   2,
+		APIKeyID:  apiKeyID,
+		GroupID:   effectiveGroupID,
+		AccountID: account.ID,
+	}, owner)
+	require.Equal(t, 2, ownerCache.ImmutableBindCalls(), "response.created must bind before exposure and response.done must refresh the owner TTL")
 	connID, ok := store.GetResponseConn("resp_new_1")
 	require.True(t, ok)
 	require.NotEmpty(t, connID)
@@ -184,6 +202,196 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 	responseBody := rec.Body.Bytes()
 	require.Equal(t, "resp_new_1", gjson.GetBytes(responseBody, "id").String())
 	require.Equal(t, "completed", gjson.GetBytes(responseBody, "output.0.status").String())
+}
+
+func TestOpenAIGatewayService_Forward_WSv2_OwnerBindFailureWithholdsHTTPResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket failed: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+
+		var request map[string]any
+		if err := conn.ReadJSON(&request); err != nil {
+			t.Errorf("read ws request failed: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type": "response.created",
+			"id":   "evt_owner_bind_failure",
+			"response": map[string]any{
+				"id":    "resp_owner_bind_failure_http",
+				"model": "gpt-5.1",
+			},
+		}); err != nil {
+			t.Errorf("write response.created failed: %v", err)
+		}
+	}))
+	defer wsServer.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	groupID := int64(1002)
+	c.Set("api_key", &APIKey{ID: 7002, GroupID: &groupID})
+	setOpenAIEffectiveGroupID(c, &groupID)
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 30
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 10
+	cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds = 3600
+
+	httpFallback := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"id":"unexpected_http_fallback"}`)),
+		},
+	}
+	bindErr := errors.New("response owner persistence unavailable")
+	svc := &OpenAIGatewayService{
+		cfg:                cfg,
+		httpUpstream:       httpFallback,
+		openaiWSResolver:   NewOpenAIWSProtocolResolver(cfg),
+		openaiWSStateStore: NewOpenAIWSStateStore(&openAIWSOwnerBindErrorCache{bindErr: bindErr}),
+		toolCorrector:      NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          9,
+		Name:        "openai-ws",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 2,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": wsServer.URL,
+		},
+		Extra: map[string]any{"responses_websockets_v2_enabled": true},
+	}
+
+	result, err := svc.Forward(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"gpt-5.1","stream":true,"input":"hello"}`),
+	)
+	require.Nil(t, result)
+	require.ErrorIs(t, err, bindErr)
+	require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	require.Equal(t, "continuation state is unavailable; please retry", gjson.Get(rec.Body.String(), "error.message").String())
+	require.NotContains(t, rec.Body.String(), "resp_owner_bind_failure_http")
+	require.Empty(t, httpFallback.lastBody, "owner persistence failure must not replay the submitted request over HTTP")
+}
+
+func TestOpenAIGatewayService_Forward_WSv2_TerminalOwnerRefreshFailureKeepsCompletedHTTPResponse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket failed: %v", err)
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		var request map[string]any
+		if err := conn.ReadJSON(&request); err != nil {
+			t.Errorf("read ws request failed: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type":     "response.created",
+			"response": map[string]any{"id": "resp_terminal_refresh_failure", "model": "gpt-5.1"},
+		}); err != nil {
+			t.Errorf("write response.created failed: %v", err)
+			return
+		}
+		if err := conn.WriteJSON(map[string]any{
+			"type":  "response.done",
+			"usage": map[string]any{"input_tokens": 4, "output_tokens": 3},
+			"response": map[string]any{
+				"id":    "resp_terminal_refresh_failure",
+				"model": "gpt-5.1",
+			},
+		}); err != nil {
+			t.Errorf("write response.done failed: %v", err)
+		}
+	}))
+	defer wsServer.Close()
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
+	groupID := int64(1003)
+	c.Set("api_key", &APIKey{ID: 7003, GroupID: &groupID})
+	setOpenAIEffectiveGroupID(c, &groupID)
+
+	cfg := &config.Config{}
+	cfg.Security.URLAllowlist.Enabled = false
+	cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+	cfg.Gateway.OpenAIWS.Enabled = true
+	cfg.Gateway.OpenAIWS.APIKeyEnabled = true
+	cfg.Gateway.OpenAIWS.ResponsesWebsocketsV2 = true
+	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
+	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 30
+	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 10
+	cfg.Gateway.OpenAIWS.StickyResponseIDTTLSeconds = 3600
+
+	httpFallback := &httpUpstreamRecorder{
+		resp: &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"id":"unexpected_http_fallback"}`)),
+		},
+	}
+	refreshErr := errors.New("response owner terminal refresh unavailable")
+	ownerCache := &openAIWSCountingOwnerCache{failOnCall: 2, bindErr: refreshErr}
+	svc := &OpenAIGatewayService{
+		cfg:                cfg,
+		httpUpstream:       httpFallback,
+		openaiWSResolver:   NewOpenAIWSProtocolResolver(cfg),
+		openaiWSStateStore: NewOpenAIWSStateStore(ownerCache),
+		toolCorrector:      NewCodexToolCorrector(),
+	}
+	account := &Account{
+		ID:          10,
+		Name:        "openai-ws-terminal-refresh",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 2,
+		Credentials: map[string]any{"api_key": "sk-test", "base_url": wsServer.URL},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
+	}
+
+	result, err := svc.Forward(
+		context.Background(),
+		c,
+		account,
+		[]byte(`{"model":"gpt-5.1","stream":false,"input":"hello"}`),
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result, "terminal usage must remain billable even when the owner refresh fails")
+	require.Equal(t, 4, result.Usage.InputTokens)
+	require.Equal(t, 3, result.Usage.OutputTokens)
+	require.Equal(t, 2, ownerCache.ImmutableBindCalls())
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Equal(t, "resp_terminal_refresh_failure", gjson.Get(rec.Body.String(), "id").String())
+	require.Empty(t, httpFallback.lastBody, "terminal owner refresh failure must not replay the request over HTTP")
 }
 
 func requestToJSONString(payload map[string]any) string {

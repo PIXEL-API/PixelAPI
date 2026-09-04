@@ -68,7 +68,8 @@ var openAIWSLogValueReplacer = strings.NewReplacer(
 
 var openAIWSIngressPreflightPingIdle = 20 * time.Second
 
-// openAIWSFallbackError 表示可安全回退到 HTTP 的 WS 错误（尚未写下游）。
+// openAIWSFallbackError carries a pre-downstream-write WS failure category to
+// the caller. It does not authorize replaying the request over HTTP.
 type openAIWSFallbackError struct {
 	Reason string
 	Err    error
@@ -247,7 +248,7 @@ type OpenAIWSIngressHooks struct {
 	// BeforeTurnPayload may return a turn-scoped context. Long-lived ingress
 	// sessions use it to bind request-time resources (for example paired
 	// account-share concurrency leases) to exactly one response.create turn.
-	BeforeTurnPayload func(turn int, payload []byte) (context.Context, error)
+	BeforeTurnPayload func(ctx context.Context, turn int, payload []byte) (context.Context, error)
 	AfterTurnPayload  func(turn int, payload []byte, result *OpenAIForwardResult, turnErr error) error
 }
 
@@ -330,7 +331,7 @@ func beginOpenAIWSIngressTurn(
 	if hooks.BeforeTurnPayload == nil {
 		return ctx, nil
 	}
-	turnCtx, err := hooks.BeforeTurnPayload(turn, payload)
+	turnCtx, err := hooks.BeforeTurnPayload(ctx, turn, payload)
 	if err != nil {
 		if hooks.AfterTurn != nil {
 			hooks.AfterTurn(turn, nil, err)
@@ -514,14 +515,20 @@ func parseOpenAIWSEventEnvelope(message []byte) (eventType string, responseID st
 	if len(message) == 0 {
 		return "", "", gjson.Result{}
 	}
-	values := gjson.GetManyBytes(message, "type", "response.id", "id", "response")
+	values := gjson.GetManyBytes(message, "type", "response.id", "data.response.id", "data.id", "response_id", "id", "response")
 	eventType = strings.TrimSpace(values[0].String())
-	if id := strings.TrimSpace(values[1].String()); id != "" {
-		responseID = id
-	} else {
-		responseID = strings.TrimSpace(values[2].String())
+	for _, value := range values[1:5] {
+		if id := strings.TrimSpace(value.String()); id != "" {
+			responseID = id
+			break
+		}
 	}
-	return eventType, responseID, values[3]
+	// A top-level id on non-terminal events is commonly an event id. Only a
+	// terminal response envelope may use it as a response-id fallback.
+	if responseID == "" && isOpenAIWSTerminalEvent(eventType) {
+		responseID = strings.TrimSpace(values[5].String())
+	}
+	return eventType, responseID, values[6]
 }
 
 func openAIWSMessageLikelyContainsToolCalls(message []byte) bool {
@@ -881,6 +888,57 @@ func logOpenAIWSBindSessionResponseWarn(groupID int64, sessionHash, responseID s
 		zap.String("response_id", truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen)),
 		zap.Error(err),
 	)
+}
+
+// bindOpenAIWSResponseOwnerBeforeDownstream durably records route and account
+// ownership before a client WebSocket can observe response.id. The legacy
+// group-scoped account record remains a best-effort compatibility index; the
+// API-key-scoped v2 owner is the authoritative continuation record.
+func (s *OpenAIGatewayService) bindOpenAIWSResponseOwnerBeforeDownstream(
+	ctx context.Context,
+	c *gin.Context,
+	groupID, accountID int64,
+	responseID string,
+) error {
+	id := strings.TrimSpace(responseID)
+	if id == "" {
+		return nil
+	}
+	apiKeyID := getAPIKeyIDFromContext(c)
+	if apiKeyID <= 0 {
+		// Internal compatibility callers may not carry authentication context.
+		// Production client-WebSocket ingress always does.
+		return nil
+	}
+	store := s.getOpenAIWSStateStore()
+	if store == nil {
+		return errors.New("openai websocket state store is unavailable")
+	}
+	ttl := s.openAIWSResponseStickyTTL()
+	if err := store.BindResponseOwner(ctx, apiKeyID, groupID, id, accountID, ttl); err != nil {
+		return err
+	}
+	store.PrimeResponseAccountLocal(groupID, id, accountID, ttl)
+	return nil
+}
+
+func (s *OpenAIGatewayService) refreshOpenAIWSResponseOwnerAtTerminal(
+	ctx context.Context,
+	c *gin.Context,
+	groupID, accountID int64,
+	responseID string,
+) error {
+	if err := s.bindOpenAIWSResponseOwnerBeforeDownstream(ctx, c, groupID, accountID, responseID); err != nil {
+		logger.L().Warn(
+			"openai.ws_response_owner_terminal_refresh_failed",
+			zap.Int64("group_id", groupID),
+			zap.Int64("account_id", accountID),
+			zap.String("response_id", truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen)),
+			zap.Error(err),
+		)
+		return err
+	}
+	return nil
 }
 
 func summarizeOpenAIWSReadCloseError(err error) (status string, reason string) {
@@ -2157,7 +2215,12 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	stateStore := s.getOpenAIWSStateStore()
-	groupID := getOpenAIGroupIDFromContext(c)
+	groupID := getOpenAIEffectiveGroupID(c)
+	if previousResponseID != "" {
+		if validateErr := s.ValidateOpenAIWSContinuationAccount(ctx, getAPIKeyIDFromContext(c), groupID, previousResponseID, account.ID); validateErr != nil {
+			return nil, wrapOpenAIWSFallback("continuation_account_unavailable", validateErr)
+		}
+	}
 	sessionHash := s.GenerateSessionHash(c, nil)
 	if sessionHash == "" {
 		var legacySessionHash string
@@ -2384,6 +2447,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	imageCounter := newOpenAIImageOutputCounter()
 	var firstTokenMs *int
 	responseID := ""
+	responseOwnerBound := false
 	var finalResponse []byte
 	wroteDownstream := false
 	needModelReplace := originalModel != mappedModel
@@ -2587,8 +2651,17 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 		lastEventType = eventType
 
+		responseOwnerBoundBeforeFrame := responseOwnerBound
 		if responseID == "" && eventResponseID != "" {
 			responseID = eventResponseID
+		}
+		if responseID != "" && !responseOwnerBound {
+			if bindErr := s.bindOpenAIWSResponseOwnerBeforeDownstream(ctx, c, groupID, account.ID, responseID); bindErr != nil {
+				lease.MarkBroken()
+				setOpsUpstreamError(c, http.StatusServiceUnavailable, "continuation state is unavailable; please retry", "")
+				return nil, wrapOpenAIWSFallback("continuation_state_unavailable", bindErr)
+			}
+			responseOwnerBound = true
 		}
 		imageCounter.AddSSEData(message)
 
@@ -2630,6 +2703,19 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		}
 		if openAIWSEventShouldParseUsage(eventType) {
 			terminalUsageParsed = parseOpenAIWSResponseUsageFromTerminalEvent(message, usage) || terminalUsageParsed
+		}
+		if isTerminalEvent && responseOwnerBoundBeforeFrame {
+			if refreshErr := s.refreshOpenAIWSResponseOwnerAtTerminal(ctx, c, groupID, account.ID, responseID); refreshErr != nil {
+				// response.id 在首个下行帧之前已经持久化绑定；此处只是在终止时延长 TTL。
+				// 不能因本地缓存续期失败丢弃已收到的真实上游 terminal，否则客户端
+				// 会把已完成请求误判为断流并重放。刷新失败已在 helper 内记录告警。
+				logOpenAIWSModeInfo(
+					"terminal_owner_refresh_degraded account_id=%d response_id=%s error=%s",
+					account.ID,
+					truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen),
+					normalizeOpenAIWSLogValue(refreshErr.Error()),
+				)
+			}
 		}
 
 		if eventType == "error" {
@@ -2780,6 +2866,14 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		if responseID == "" {
 			responseID = strings.TrimSpace(gjson.GetBytes(finalResponse, "id").String())
 		}
+		if responseID != "" && !responseOwnerBound {
+			if bindErr := s.bindOpenAIWSResponseOwnerBeforeDownstream(ctx, c, groupID, account.ID, responseID); bindErr != nil {
+				lease.MarkBroken()
+				setOpsUpstreamError(c, http.StatusServiceUnavailable, "continuation state is unavailable; please retry", "")
+				return nil, wrapOpenAIWSFallback("continuation_state_unavailable", bindErr)
+			}
+			responseOwnerBound = true
+		}
 
 		c.Data(http.StatusOK, "application/json", finalResponse)
 	} else {
@@ -2835,14 +2929,24 @@ func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Durati
 // This lets a lease-loss path finish its current client write before the
 // handler queues the retryable close frame.
 func newOpenAIWSDownstreamWriteContext(controlCtx context.Context, hooks *OpenAIWSIngressHooks, timeout time.Duration) (context.Context, context.CancelFunc) {
-	writeParent := controlCtx
-	if hooks != nil && hooks.ClientLifecycleContext != nil {
-		writeParent = hooks.ClientLifecycleContext
-	}
-	if writeParent == nil {
-		writeParent = context.Background()
-	}
+	writeParent := openAIWSIngressClientLifecycleContext(controlCtx, hooks)
 	return context.WithTimeout(writeParent, timeout)
+}
+
+// openAIWSIngressClientLifecycleContext excludes the independent per-turn
+// lease cancellation while retaining shutdown and client-disconnect signals.
+// State that must be committed before a frame is exposed uses this context for
+// the same reason as downstream writes: lease loss must not invalidate a frame
+// already read from upstream.
+func openAIWSIngressClientLifecycleContext(controlCtx context.Context, hooks *OpenAIWSIngressHooks) context.Context {
+	parent := controlCtx
+	if hooks != nil && hooks.ClientLifecycleContext != nil {
+		parent = hooks.ClientLifecycleContext
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	return parent
 }
 
 // ProxyResponsesWebSocketFromClient 处理客户端入站 WebSocket（OpenAI Responses WS Mode）并转发到上游。
@@ -3180,7 +3284,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			promptCacheKey = cleanRelayState.Mapping.PromptCacheKey
 			previousResponseID = openAIWSPayloadStringFromRaw(normalized, "previous_response_id")
 		}
-
 		return openAIWSClientPayload{
 			payloadRaw:         normalized,
 			rawForHash:         trimmed,
@@ -3199,7 +3302,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 	stateStore := s.getOpenAIWSStateStore()
-	groupID := getOpenAIGroupIDFromContext(c)
+	groupID := getOpenAIEffectiveGroupID(c)
 	sessionHash := s.GenerateSessionHash(c, firstPayload.rawForHash)
 	if turnState == "" && stateStore != nil && sessionHash != "" {
 		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
@@ -3453,8 +3556,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		if turnCtx == nil {
 			turnCtx = ctx
 		}
+		ownerBindCtx := openAIWSIngressClientLifecycleContext(turnCtx, hooks)
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
+		}
+		if previousResponseID := strings.TrimSpace(openAIWSPayloadStringFromRaw(payload, "previous_response_id")); previousResponseID != "" {
+			if validateErr := s.ValidateOpenAIWSContinuationAccount(turnCtx, getAPIKeyIDFromContext(c), groupID, previousResponseID, account.ID); validateErr != nil {
+				return nil, newOpenAIWSContinuationClientCloseError(validateErr)
+			}
 		}
 		turnStart := time.Now()
 		wroteDownstream := false
@@ -3476,6 +3585,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 
 		responseID := ""
+		responseOwnerBound := false
 		usage := OpenAIUsage{}
 		var billingUsageObservation openAIResponsesBillingUsageObservation
 		imageCounter := newOpenAIImageOutputCounter()
@@ -3549,8 +3659,20 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			responseModelObserver.ObserveOpenAI(upstreamMessage, eventType)
+			responseOwnerBoundBeforeFrame := responseOwnerBound
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
+			}
+			if responseID != "" && !responseOwnerBound {
+				if bindErr := s.bindOpenAIWSResponseOwnerBeforeDownstream(ownerBindCtx, c, groupID, account.ID, responseID); bindErr != nil {
+					lease.MarkBroken()
+					return buildTurnResult(), NewOpenAIWSClientCloseError(
+						coderws.StatusTryAgainLater,
+						"continuation state is unavailable; please retry",
+						bindErr,
+					)
+				}
+				responseOwnerBound = true
 			}
 			imageCounter.AddSSEData(upstreamMessage)
 			if eventType != "" {
@@ -3649,6 +3771,19 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			if openAIWSEventShouldParseUsage(eventType) {
 				parseOpenAIWSResponseUsageFromTerminalEvent(upstreamMessage, &usage)
+			}
+			if isTerminalEvent && responseOwnerBoundBeforeFrame {
+				if refreshErr := s.refreshOpenAIWSResponseOwnerAtTerminal(ownerBindCtx, c, groupID, account.ID, responseID); refreshErr != nil {
+					// response.id 在首帧下行前已持久化；terminal 处的第二次写入只是 TTL 续期。
+					// 本地续期失败不能改写“上游已完成”的事实，否则 ingress 客户端会误重连。
+					logOpenAIWSModeInfo(
+						"ingress_terminal_owner_refresh_degraded account_id=%d turn=%d response_id=%s error=%s",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(responseID, openAIWSIDValueMaxLen),
+						normalizeOpenAIWSLogValue(refreshErr.Error()),
+					)
+				}
 			}
 
 			var terminalResult *OpenAIForwardResult
@@ -4226,8 +4361,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				continue
 			}
 			finalErr := relayErr
-			if unwrapped := errors.Unwrap(relayErr); unwrapped != nil {
-				finalErr = unwrapped
+			var clientCloseErr *OpenAIWSClientCloseError
+			if !errors.As(relayErr, &clientCloseErr) {
+				if unwrapped := errors.Unwrap(relayErr); unwrapped != nil {
+					finalErr = unwrapped
+				}
 			}
 			if cause := context.Cause(turnCtx); cause != nil {
 				finalErr = cause
@@ -4673,8 +4811,371 @@ func getOpenAIGroupIDFromContext(c *gin.Context) int64 {
 	return *apiKey.GroupID
 }
 
+// ResolveOpenAIWSContinuationRouteGroup locates the route namespace that owns
+// a continuation before the handler applies route-level failover. Response
+// API-key-scoped v2 bindings are authoritative. Legacy group-scoped bindings
+// are diagnostic evidence only because older writers could use the auth group
+// instead of the effective route. Session state can locate a route only when
+// no explicit response continuation is present; it cannot prove which account
+// created a historical response because session stickiness is mutable.
+func (s *OpenAIGatewayService) ResolveOpenAIWSContinuationRouteGroup(
+	ctx context.Context,
+	apiKeyID int64,
+	previousResponseID string,
+	sessionHash string,
+	candidateGroupIDs []int64,
+) (int64, bool, error) {
+	if s == nil {
+		return 0, false, nil
+	}
+	store := s.getOpenAIWSStateStore()
+	if store == nil {
+		return 0, false, nil
+	}
+
+	responseID := strings.TrimSpace(previousResponseID)
+	normalizedSessionHash := strings.TrimSpace(sessionHash)
+	if responseID != "" && apiKeyID > 0 {
+		owner, found, err := store.GetResponseOwnerStrict(ctx, apiKeyID, responseID)
+		if err != nil {
+			return 0, false, fmt.Errorf("resolve OpenAI continuation response owner: %w", err)
+		}
+		if found {
+			// The scheduler still consumes the group-scoped compatibility index.
+			// Prime it on this node from the authoritative v2 owner so an early
+			// reconnect cannot select a different account.
+			store.PrimeResponseAccountLocal(owner.GroupID, responseID, owner.AccountID, s.openAIWSResponseStickyTTL())
+			return owner.GroupID, true, nil
+		}
+	}
+	if len(candidateGroupIDs) == 0 {
+		return 0, false, nil
+	}
+	seen := make(map[int64]struct{}, len(candidateGroupIDs))
+	groupIDs := make([]int64, 0, len(candidateGroupIDs))
+	for _, groupID := range candidateGroupIDs {
+		if groupID < 0 {
+			continue
+		}
+		if _, exists := seen[groupID]; exists {
+			continue
+		}
+		seen[groupID] = struct{}{}
+		groupIDs = append(groupIDs, groupID)
+	}
+
+	if responseID != "" {
+		matchedGroupID := int64(0)
+		matched := false
+		for _, groupID := range groupIDs {
+			accountID, err := store.GetResponseAccountStrict(ctx, groupID, responseID)
+			if err != nil {
+				return 0, false, fmt.Errorf("resolve OpenAI continuation response route group %d: %w", groupID, err)
+			}
+			if accountID > 0 {
+				if matched {
+					return 0, false, fmt.Errorf("%w: response account exists in multiple route groups (legacy)", errOpenAIWSContinuationAccountUnresolved)
+				}
+				matchedGroupID = groupID
+				matched = true
+			}
+		}
+		if matched {
+			return 0, false, fmt.Errorf(
+				"%w: response %s has only a legacy unscoped owner in group %d",
+				errOpenAIWSContinuationAccountUnresolved,
+				responseID,
+				matchedGroupID,
+			)
+		}
+
+		matchedGroupID = 0
+		matched = false
+		for _, groupID := range groupIDs {
+			ownerSession, err := store.GetResponseSessionStrict(ctx, groupID, responseID)
+			if err != nil {
+				return 0, false, fmt.Errorf("resolve OpenAI continuation response session route group %d: %w", groupID, err)
+			}
+			if strings.TrimSpace(ownerSession) == "" {
+				continue
+			}
+			if matched {
+				return 0, false, fmt.Errorf("%w: response session exists in multiple route groups (legacy)", errOpenAIWSContinuationAccountUnresolved)
+			}
+			matchedGroupID = groupID
+			matched = true
+		}
+		if matched {
+			return 0, false, fmt.Errorf(
+				"%w: response %s has legacy session state without an account owner",
+				errOpenAIWSContinuationAccountUnresolved,
+				responseID,
+			)
+		}
+		// A mutable session's latest response cannot prove ownership of an
+		// explicit historical response. With no owner evidence this remains an
+		// unknown external ID and must not be route-pinned here.
+		return 0, false, nil
+	}
+	if normalizedSessionHash != "" {
+		type sessionRouteHit struct {
+			groupID          int64
+			latestResponseID string
+		}
+		hits := make([]sessionRouteHit, 0, len(groupIDs))
+		for _, groupID := range groupIDs {
+			latestResponseID, err := store.GetSessionLatestResponseStrict(ctx, groupID, normalizedSessionHash)
+			if err != nil {
+				return 0, false, fmt.Errorf("resolve OpenAI continuation session route group %d: %w", groupID, err)
+			}
+			latestResponseID = strings.TrimSpace(latestResponseID)
+			if latestResponseID != "" {
+				hits = append(hits, sessionRouteHit{groupID: groupID, latestResponseID: latestResponseID})
+			}
+		}
+		if responseID != "" {
+			exactHits := hits[:0]
+			for _, hit := range hits {
+				if hit.latestResponseID == responseID {
+					exactHits = append(exactHits, hit)
+				}
+			}
+			hits = exactHits
+		}
+		if len(hits) == 1 {
+			return hits[0].groupID, true, nil
+		}
+		if len(hits) > 1 {
+			return 0, false, errors.New("resolve OpenAI continuation route: session state exists in multiple route groups")
+		}
+	}
+	return 0, false, nil
+}
+
+var (
+	errOpenAIWSContinuationAccountUnresolved = errors.New("openai websocket continuation account cannot be resolved")
+	errOpenAIWSContinuationOwnerMismatch     = errors.New("openai websocket continuation owner mismatch")
+	errOpenAIContinuationAccountUnavailable  = errors.New("openai continuation account is unavailable")
+)
+
+type openAIContinuationUnavailableDisposition uint8
+
+const (
+	openAIContinuationRetryLater openAIContinuationUnavailableDisposition = iota
+	openAIContinuationRestartRequired
+)
+
+// openAIContinuationUnavailableError preserves the legacy marker used by
+// schedulers while carrying a machine-readable reconnect disposition. Unknown
+// states deliberately default to retry-later; only authoritative, request-
+// invariant incompatibilities are allowed to stop automatic reconnects.
+type openAIContinuationUnavailableError struct {
+	marker      error
+	disposition openAIContinuationUnavailableDisposition
+	responseID  string
+	accountID   int64
+	reason      string
+}
+
+func (e *openAIContinuationUnavailableError) Error() string {
+	if e == nil {
+		return errOpenAIContinuationAccountUnavailable.Error()
+	}
+	marker := e.marker
+	if marker == nil {
+		marker = errOpenAIContinuationAccountUnavailable
+	}
+	if strings.TrimSpace(e.responseID) == "" {
+		return fmt.Sprintf(
+			"%s: account %d (%s)",
+			marker.Error(),
+			e.accountID,
+			strings.TrimSpace(e.reason),
+		)
+	}
+	return fmt.Sprintf(
+		"%s: response %s belongs to account %d (%s)",
+		marker.Error(),
+		strings.TrimSpace(e.responseID),
+		e.accountID,
+		strings.TrimSpace(e.reason),
+	)
+}
+
+func (e *openAIContinuationUnavailableError) Unwrap() error {
+	if e == nil || e.marker == nil {
+		return errOpenAIContinuationAccountUnavailable
+	}
+	return e.marker
+}
+
+// IsOpenAIWSContinuationPermanentError identifies a continuation whose local
+// ownership evidence is incomplete or contradictory. Retrying the same frame
+// cannot repair it; callers should ask the client to start a new conversation
+// instead of triggering an automatic reconnect loop.
+func IsOpenAIWSContinuationPermanentError(err error) bool {
+	if errors.Is(err, errOpenAIWSContinuationAccountUnresolved) ||
+		errors.Is(err, errOpenAIWSContinuationOwnerMismatch) ||
+		errors.Is(err, errOpenAIWSResponseOwnerInvalid) {
+		return true
+	}
+	var unavailable *openAIContinuationUnavailableError
+	return errors.As(err, &unavailable) && unavailable != nil && unavailable.disposition == openAIContinuationRestartRequired
+}
+
+func newOpenAIWSContinuationClientCloseError(err error) error {
+	status := coderws.StatusTryAgainLater
+	message := "continuation state is temporarily unavailable; please retry later"
+	if IsOpenAIWSContinuationPermanentError(err) {
+		status = coderws.StatusPolicyViolation
+		message = "continuation ownership is unavailable; please start a new conversation"
+	}
+	return NewOpenAIWSClientCloseError(status, message, err)
+}
+
+func newOpenAIContinuationAccountUnavailableError(responseID string, accountID int64, reason string) error {
+	return newOpenAIContinuationUnavailableError(
+		errOpenAIContinuationAccountUnavailable,
+		openAIContinuationRetryLater,
+		responseID,
+		accountID,
+		reason,
+	)
+}
+
+func newOpenAIContinuationRestartRequiredError(responseID string, accountID int64, reason string) error {
+	return newOpenAIContinuationUnavailableError(
+		errOpenAIContinuationAccountUnavailable,
+		openAIContinuationRestartRequired,
+		responseID,
+		accountID,
+		reason,
+	)
+}
+
+func newOpenAIContinuationUnavailableError(
+	marker error,
+	disposition openAIContinuationUnavailableDisposition,
+	responseID string,
+	accountID int64,
+	reason string,
+) error {
+	if marker == nil {
+		marker = errOpenAIContinuationAccountUnavailable
+	}
+	return &openAIContinuationUnavailableError{
+		marker:      marker,
+		disposition: disposition,
+		responseID:  strings.TrimSpace(responseID),
+		accountID:   accountID,
+		reason:      strings.TrimSpace(reason),
+	}
+}
+
+// ValidateOpenAIWSContinuationAccount guards the final outbound payload when a
+// local ownership binding exists. A missing binding is left to the established
+// clean-start/upstream recovery path; it must never be reconstructed from the
+// mutable session sticky account.
+func (s *OpenAIGatewayService) ValidateOpenAIWSContinuationAccount(
+	ctx context.Context,
+	apiKeyID int64,
+	groupID int64,
+	previousResponseID string,
+	selectedAccountID int64,
+) error {
+	return s.validateOpenAIWSContinuationAccount(ctx, apiKeyID, groupID, previousResponseID, selectedAccountID, false)
+}
+
+// RequireOpenAIWSContinuationAccount is used by account-share dispatch, where
+// an unknown binding cannot be delegated to an arbitrary room account.
+func (s *OpenAIGatewayService) RequireOpenAIWSContinuationAccount(
+	ctx context.Context,
+	apiKeyID int64,
+	groupID int64,
+	previousResponseID string,
+	selectedAccountID int64,
+) error {
+	return s.validateOpenAIWSContinuationAccount(ctx, apiKeyID, groupID, previousResponseID, selectedAccountID, true)
+}
+
+func (s *OpenAIGatewayService) validateOpenAIWSContinuationAccount(
+	ctx context.Context,
+	apiKeyID int64,
+	groupID int64,
+	previousResponseID string,
+	selectedAccountID int64,
+	requireBinding bool,
+) error {
+	responseID := strings.TrimSpace(previousResponseID)
+	if responseID == "" {
+		return nil
+	}
+	if s == nil || selectedAccountID <= 0 {
+		return errOpenAIWSContinuationAccountUnresolved
+	}
+	store := s.getOpenAIWSStateStore()
+	if store == nil {
+		return errOpenAIWSContinuationAccountUnresolved
+	}
+	if apiKeyID > 0 {
+		owner, found, ownerErr := store.GetResponseOwnerStrict(ctx, apiKeyID, responseID)
+		if ownerErr != nil {
+			return fmt.Errorf("validate OpenAI continuation owner binding: %w", ownerErr)
+		}
+		if found {
+			if owner.GroupID != groupID || owner.AccountID != selectedAccountID {
+				return fmt.Errorf(
+					"%w: response %s belongs to group %d account %d, selected group %d account %d",
+					errOpenAIWSContinuationOwnerMismatch,
+					responseID,
+					owner.GroupID,
+					owner.AccountID,
+					groupID,
+					selectedAccountID,
+				)
+			}
+			return nil
+		}
+	}
+	boundAccountID, err := store.GetResponseAccountStrict(ctx, groupID, responseID)
+	if err != nil {
+		return fmt.Errorf("validate OpenAI continuation account binding: %w", err)
+	}
+	if boundAccountID <= 0 {
+		if requireBinding {
+			return fmt.Errorf("%w: response %s has no account binding", errOpenAIWSContinuationAccountUnresolved, responseID)
+		}
+		ownerSession, sessionErr := store.GetResponseSessionStrict(ctx, groupID, responseID)
+		if sessionErr != nil {
+			return fmt.Errorf("validate OpenAI continuation response session: %w", sessionErr)
+		}
+		if strings.TrimSpace(ownerSession) != "" {
+			return fmt.Errorf("%w: response %s has session state but no account binding", errOpenAIWSContinuationAccountUnresolved, responseID)
+		}
+		return nil
+	}
+	if apiKeyID > 0 {
+		return fmt.Errorf(
+			"%w: response %s has only a legacy unscoped account binding",
+			errOpenAIWSContinuationAccountUnresolved,
+			responseID,
+		)
+	}
+	if boundAccountID != selectedAccountID {
+		return fmt.Errorf(
+			"%w: continuation account mismatch for response %s: belongs to account %d, selected account %d",
+			errOpenAIWSContinuationOwnerMismatch,
+			responseID,
+			boundAccountID,
+			selectedAccountID,
+		)
+	}
+	return nil
+}
+
 // SelectAccountByPreviousResponseID 按 previous_response_id 命中账号粘连。
-// 未命中或账号不可用时返回 (nil, nil)，由调用方继续走常规调度。
+// 未命中时返回 (nil, nil)。已命中的非 clean-relay 账号是续聊强约束：
+// 账号不可用时保留绑定并返回错误，禁止将旧 previous_response_id 切到其他账号。
 func (s *OpenAIGatewayService) SelectAccountByPreviousResponseID(
 	ctx context.Context,
 	groupID *int64,
@@ -4695,55 +5196,76 @@ func (s *OpenAIGatewayService) SelectAccountByPreviousResponseID(
 		return nil, nil
 	}
 
-	accountID, err := store.GetResponseAccount(ctx, derefGroupID(groupID), responseID)
-	if err != nil || accountID <= 0 {
+	accountID, err := store.GetResponseAccountStrict(ctx, derefGroupID(groupID), responseID)
+	if err != nil {
+		return nil, fmt.Errorf("lookup previous response account binding: %w", err)
+	}
+	if accountID <= 0 {
 		return nil, nil
 	}
-	if excludedIDs != nil {
-		if _, excluded := excludedIDs[accountID]; excluded {
-			return nil, nil
-		}
-	}
-
 	account, err := s.getSchedulableAccount(ctx, accountID)
-	if err != nil || account == nil {
-		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
+	if err != nil {
+		if errors.Is(err, ErrAccountNotFound) {
+			return nil, newOpenAIContinuationRestartRequiredError(responseID, accountID, "account was not found or is no longer authorized")
+		}
+		return nil, fmt.Errorf("lookup previous response account %d: %w", accountID, err)
+	}
+	if account == nil {
+		return nil, newOpenAIContinuationAccountUnavailableError(responseID, accountID, "account is not schedulable")
+	}
+	if !account.IsOpenAIApiKey() &&
+		s.getOpenAIWSProtocolResolver().Resolve(account).Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
+		// Legacy OAuth HTTP bindings cannot carry public Responses
+		// previous_response_id state. Ignore them so HTTP continuation routing
+		// can continue looking for an eligible API-key account.
 		return nil, nil
 	}
 	if s.isOpenAICleanRelayActive(ctx, account) {
 		return nil, nil
 	}
-	// 非 WSv2 场景（如 force_http/全局关闭）不应使用 previous_response_id 粘连，
-	// 以保持“回滚到 HTTP”后的历史行为一致性。
-	if s.getOpenAIWSProtocolResolver().Resolve(account).Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
-		return nil, nil
+	if excludedIDs != nil {
+		if _, excluded := excludedIDs[accountID]; excluded {
+			return nil, newOpenAIContinuationAccountUnavailableError(responseID, accountID, "account was excluded from this dispatch")
+		}
+	}
+	if reason := openAIContinuationRestartRequiredReason(account, requestedModel, requireCompact, true, time.Now()); reason != "" {
+		return nil, newOpenAIContinuationRestartRequiredError(responseID, accountID, reason)
 	}
 	if shouldClearStickySession(account, requestedModel) || !account.IsOpenAI() || !account.IsSchedulable() {
-		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
-		return nil, nil
+		return nil, newOpenAIContinuationAccountUnavailableError(responseID, accountID, "account is temporarily unavailable")
 	}
-	if requestedModel != "" && !account.IsModelSupported(requestedModel) {
-		return nil, nil
+	account, err = s.recheckSelectedOpenAIContinuationAccountFromDBWithError(
+		ctx,
+		groupID,
+		account,
+		responseID,
+		requestedModel,
+		requireCompact,
+		true,
+	)
+	if err != nil {
+		if errors.Is(err, errOpenAIContinuationAccountUnavailable) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("recheck previous response account %d: %w", accountID, err)
 	}
-	account = s.recheckSelectedOpenAIAccountFromDB(ctx, groupID, account, requestedModel, requireCompact)
 	if account == nil {
-		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
-		return nil, nil
+		return nil, newOpenAIContinuationAccountUnavailableError(responseID, accountID, "account failed runtime validation")
 	}
-	// 兜底：若上游 compact 能力刚被探测为不支持，但 sticky 还在，需要主动放弃。
-	if requireCompact && openAICompactSupportTier(account) == 0 {
-		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
-		return nil, nil
+	// 渠道模型限制：billing_model_source=upstream 时按账号上游模型过滤。
+	channelRestricted, channelErr := s.isOpenAIAccountChannelRestrictedStrict(ctx, groupID, account, requestedModel, requireCompact)
+	if channelErr != nil {
+		return nil, fmt.Errorf("check previous response account channel restriction: %w", channelErr)
 	}
-	// 渠道模型限制：billing_model_source=upstream 时按账号上游模型过滤，
-	// 受限账号视为 miss，回落负载均衡层（该层会再次过滤）。
-	if s.isOpenAIAccountChannelRestricted(ctx, groupID, account, requestedModel, requireCompact) {
-		_ = store.DeleteResponseAccount(ctx, derefGroupID(groupID), responseID)
-		return nil, nil
+	if channelRestricted {
+		return nil, newOpenAIContinuationRestartRequiredError(responseID, accountID, "channel model restriction")
 	}
 
 	result, acquireErr := s.tryAcquireAccountSlot(ctx, accountID, account.Concurrency)
-	if acquireErr == nil && result.Acquired {
+	if acquireErr != nil {
+		return nil, acquireErr
+	}
+	if result != nil && result.Acquired {
 		logOpenAIWSBindResponseAccountWarn(
 			derefGroupID(groupID),
 			accountID,

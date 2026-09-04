@@ -20,6 +20,7 @@ import (
 type accountShareModeRepoStub struct {
 	ensureNameErr        error
 	modeGroup            *bool
+	modeGroupErr         error
 	modeGroups           map[string]*Group
 	modeGroupGetCalls    []string
 	modeGroupEnsureCalls []string
@@ -832,6 +833,9 @@ func (r *accountShareModeRepoStub) GetModeGroup(_ context.Context, platform stri
 
 func (r *accountShareModeRepoStub) IsModeGroup(context.Context, int64) (bool, error) {
 	r.isModeCalls++
+	if r.modeGroupErr != nil {
+		return false, r.modeGroupErr
+	}
 	if r.modeGroup != nil {
 		return *r.modeGroup, nil
 	}

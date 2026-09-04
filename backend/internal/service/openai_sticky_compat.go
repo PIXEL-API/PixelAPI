@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 )
 
 type openAILegacySessionHashContextKey struct{}
@@ -149,6 +151,54 @@ func (s *OpenAIGatewayService) getStickySessionAccountID(ctx context.Context, gr
 		return legacyAccountID, nil
 	}
 	return accountID, err
+}
+
+// getStickySessionAccountIDStrict preserves the compatibility read fallback,
+// but only treats an explicit cache miss as a miss. Continuations use this
+// path so a transient cache failure cannot silently switch the upstream
+// account that owns previous_response_id.
+func (s *OpenAIGatewayService) getStickySessionAccountIDStrict(ctx context.Context, groupID *int64, sessionHash string) (int64, error) {
+	if s == nil || s.cache == nil {
+		return 0, nil
+	}
+
+	primaryKey := s.openAISessionCacheKey(sessionHash)
+	if primaryKey == "" {
+		return 0, nil
+	}
+	accountID, primaryErr := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), primaryKey)
+	if primaryErr == nil && accountID > 0 {
+		return accountID, nil
+	}
+
+	if !s.openAISessionHashReadOldFallbackEnabled() {
+		if primaryErr != nil && !errors.Is(primaryErr, redis.Nil) {
+			return 0, primaryErr
+		}
+		return 0, nil
+	}
+
+	legacyKey := s.openAILegacySessionCacheKey(ctx, sessionHash)
+	if legacyKey == "" {
+		if primaryErr != nil && !errors.Is(primaryErr, redis.Nil) {
+			return 0, primaryErr
+		}
+		return 0, nil
+	}
+
+	openAIStickyLegacyReadFallbackTotal.Add(1)
+	legacyAccountID, legacyErr := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), legacyKey)
+	if legacyErr == nil && legacyAccountID > 0 {
+		openAIStickyLegacyReadFallbackHit.Add(1)
+		return legacyAccountID, nil
+	}
+	if primaryErr != nil && !errors.Is(primaryErr, redis.Nil) {
+		return 0, primaryErr
+	}
+	if legacyErr != nil && !errors.Is(legacyErr, redis.Nil) {
+		return 0, legacyErr
+	}
+	return 0, nil
 }
 
 func (s *OpenAIGatewayService) setStickySessionAccountID(ctx context.Context, groupID *int64, sessionHash string, accountID int64, ttl time.Duration) error {

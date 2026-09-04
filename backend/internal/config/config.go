@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/spf13/viper"
 	"golang.org/x/net/http/httpguts"
 )
@@ -917,6 +918,11 @@ type GatewayConfig struct {
 	OpenAIHighEffortFirstOutputTimeoutSeconds int `mapstructure:"openai_high_effort_first_output_timeout_seconds"`
 	// 请求体最大字节数，用于网关请求体大小限制
 	MaxBodySize int64 `mapstructure:"max_body_size"`
+	// OpenAIResponsesBodyBudget limits the aggregate amount of request body
+	// memory admitted into the OpenAI Responses HTTP handler. It is independent
+	// from user/account concurrency so slow uploads cannot consume business
+	// scheduling slots.
+	OpenAIResponsesBodyBudget GatewayOpenAIResponsesBodyBudgetConfig `mapstructure:"openai_responses_body_budget"`
 	// 非流式上游响应体读取上限（字节），用于防止无界读取导致内存放大
 	UpstreamResponseReadMaxBytes int64 `mapstructure:"upstream_response_read_max_bytes"`
 	// 上游模型列表响应体读取上限（字节）
@@ -1025,6 +1031,19 @@ type GatewayConfig struct {
 	// UserMessageQueue: 用户消息串行队列配置
 	// 对 role:"user" 的真实用户消息实施账号级串行化 + RPM 自适应延迟
 	UserMessageQueue UserMessageQueueConfig `mapstructure:"user_message_queue"`
+}
+
+// GatewayOpenAIResponsesBodyBudgetConfig controls the process-local weighted
+// admission gate for OpenAI Responses request bodies.
+//
+// CapacityBytes is intentionally not given a production default. Enabling the
+// gate without an explicit, measured capacity is rejected during startup.
+type GatewayOpenAIResponsesBodyBudgetConfig struct {
+	Enabled            bool  `mapstructure:"enabled"`
+	CapacityBytes      int64 `mapstructure:"capacity_bytes"`
+	WaitTimeoutSeconds int   `mapstructure:"wait_timeout_seconds"`
+	ReadTimeoutSeconds int   `mapstructure:"read_timeout_seconds"`
+	RetryAfterSeconds  int   `mapstructure:"retry_after_seconds"`
 }
 
 // GatewayGrokConfig Grok 专用网关配置。
@@ -2370,6 +2389,11 @@ func setDefaults() {
 	viper.SetDefault("gateway.antigravity_fallback_cooldown_minutes", 1)
 	viper.SetDefault("gateway.antigravity_extra_retries", 10)
 	viper.SetDefault("gateway.max_body_size", int64(256*1024*1024))
+	viper.SetDefault("gateway.openai_responses_body_budget.enabled", false)
+	viper.SetDefault("gateway.openai_responses_body_budget.capacity_bytes", int64(0))
+	viper.SetDefault("gateway.openai_responses_body_budget.wait_timeout_seconds", 0)
+	viper.SetDefault("gateway.openai_responses_body_budget.read_timeout_seconds", 0)
+	viper.SetDefault("gateway.openai_responses_body_budget.retry_after_seconds", 0)
 	viper.SetDefault("gateway.upstream_response_read_max_bytes", DefaultUpstreamResponseReadMaxBytes)
 	viper.SetDefault("gateway.models_list_read_max_bytes", DefaultModelsListReadMaxBytes)
 	viper.SetDefault("gateway.proxy_probe_response_read_max_bytes", int64(1024*1024))
@@ -3125,6 +3149,30 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.MaxBodySize <= 0 {
 		return fmt.Errorf("gateway.max_body_size must be positive")
+	}
+	if bodyBudget := c.Gateway.OpenAIResponsesBodyBudget; bodyBudget.Enabled {
+		if bodyBudget.CapacityBytes <= 0 {
+			return fmt.Errorf("gateway.openai_responses_body_budget.capacity_bytes must be positive when enabled")
+		}
+		minimumCapacity := c.Gateway.MaxBodySize
+		if boundedReservation := pkghttputil.BoundedRequestBodyMemoryReservation(c.Gateway.MaxBodySize); boundedReservation > minimumCapacity {
+			minimumCapacity = boundedReservation
+		}
+		if pkghttputil.MaxZstdRequestBodyMemoryReservation > minimumCapacity {
+			minimumCapacity = pkghttputil.MaxZstdRequestBodyMemoryReservation
+		}
+		if bodyBudget.CapacityBytes < minimumCapacity {
+			return fmt.Errorf("gateway.openai_responses_body_budget.capacity_bytes must cover the maximum bounded or compressed request memory reservation when enabled")
+		}
+		if bodyBudget.WaitTimeoutSeconds <= 0 {
+			return fmt.Errorf("gateway.openai_responses_body_budget.wait_timeout_seconds must be positive when enabled")
+		}
+		if bodyBudget.ReadTimeoutSeconds <= 0 {
+			return fmt.Errorf("gateway.openai_responses_body_budget.read_timeout_seconds must be positive when enabled")
+		}
+		if bodyBudget.RetryAfterSeconds <= 0 {
+			return fmt.Errorf("gateway.openai_responses_body_budget.retry_after_seconds must be positive when enabled")
+		}
 	}
 	if c.Gateway.UpstreamResponseReadMaxBytes <= 0 {
 		return fmt.Errorf("gateway.upstream_response_read_max_bytes must be positive")

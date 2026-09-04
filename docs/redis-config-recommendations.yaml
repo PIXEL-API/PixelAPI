@@ -1,0 +1,119 @@
+# Redis 配置推荐方案
+# 适用于生产环境的 config.yaml 中 redis 配置段
+
+redis:
+  # 基础连接配置
+  host: "127.0.0.1"          # Redis 服务器地址，如果 Redis 在同一台机器使用 127.0.0.1
+  port: 6379                 # Redis 端口
+  password: ""               # Redis 密码，如果没有设置密码留空
+  db: 0                      # Redis 数据库编号
+  enable_tls: false          # 是否启用 TLS，本地连接通常不需要
+
+  # 连接池配置（关键性能参数）
+  pool_size: 128             # 最大连接数，默认 128
+                             # 推荐值：128-512（取决于并发量）
+                             # ⚠️ 不要超过 1000，会导致内存占用过高
+                             # 计算公式：预期 QPS / 100（例如 10000 QPS → 100-200）
+
+  min_idle_conns: 10         # 最小空闲连接数，默认 10
+                             # 推荐值：10-50
+                             # ⚠️ 不要超过 pool_size 的 50%
+                             # 作用：保持热连接，减少建连开销
+
+  # 超时配置（防止慢操作阻塞）
+  dial_timeout_seconds: 5    # 建立连接超时，默认 5 秒
+                             # 如果网络延迟高，可适当增加到 10 秒
+
+  read_timeout_seconds: 3    # 读取操作超时，默认 3 秒
+                             # 如果 Redis 响应慢，可适当增加到 5 秒
+
+  write_timeout_seconds: 3   # 写入操作超时，默认 3 秒
+                             # 通常不需要修改
+
+# ============================================
+# 不同场景的配置建议
+# ============================================
+
+# 场景 1：小型部署（< 1000 QPS）
+# redis:
+#   pool_size: 64
+#   min_idle_conns: 5
+#   dial_timeout_seconds: 5
+#   read_timeout_seconds: 3
+#   write_timeout_seconds: 3
+
+# 场景 2：中型部署（1000-10000 QPS）
+# redis:
+#   pool_size: 128
+#   min_idle_conns: 10
+#   dial_timeout_seconds: 5
+#   read_timeout_seconds: 3
+#   write_timeout_seconds: 3
+
+# 场景 3：大型部署（> 10000 QPS）
+# redis:
+#   pool_size: 256
+#   min_idle_conns: 20
+#   dial_timeout_seconds: 5
+#   read_timeout_seconds: 5
+#   write_timeout_seconds: 3
+
+# 场景 4：Redis 远程部署（高延迟网络）
+# redis:
+#   pool_size: 128
+#   min_idle_conns: 10
+#   dial_timeout_seconds: 10   # 增加建连超时
+#   read_timeout_seconds: 5    # 增加读取超时
+#   write_timeout_seconds: 5   # 增加写入超时
+
+# ============================================
+# 常见问题排查
+# ============================================
+
+# 问题 1：应用启动时连接 Redis 失败
+# 原因：host/port 配置错误，或 Redis 服务未启动
+# 解决：
+#   1. 检查 Redis 服务：systemctl status redis
+#   2. 测试连接：redis-cli -h 127.0.0.1 -p 6379 ping
+#   3. 检查防火墙规则
+
+# 问题 2：运行时频繁出现 "redis error: i/o timeout"
+# 原因：read_timeout_seconds 或 write_timeout_seconds 过短
+# 解决：增加超时时间到 5-10 秒
+
+# 问题 3：应用内存持续增长
+# 原因：pool_size 或 min_idle_conns 配置过大
+# 解决：
+#   1. 检查当前配置是否超过推荐值
+#   2. 降低 pool_size 到 128-256
+#   3. 降低 min_idle_conns 到 10-20
+#   4. 重启应用观察内存趋势
+
+# 问题 4：全站返回 429 错误
+# 原因：Redis 连接失败 + fail-close 模式
+# 解决：
+#   1. 确保 Redis 服务正常运行
+#   2. 检查应用日志中的 Redis 错误
+#   3. 清空限流键：redis-cli --scan --pattern "rate_limit:*" | xargs redis-cli DEL
+#   4. 重启应用
+
+# ============================================
+# Redis 服务器端配置建议（/etc/redis/redis.conf）
+# ============================================
+
+# 1. 设置内存上限（防止 OOM）
+# maxmemory 2gb
+
+# 2. 设置淘汰策略（防止内存满时阻塞）
+# maxmemory-policy allkeys-lru
+
+# 3. 持久化配置（根据需要）
+# save 900 1       # 15 分钟内至少 1 个 key 变化则保存
+# save 300 10      # 5 分钟内至少 10 个 key 变化则保存
+# save 60 10000    # 1 分钟内至少 10000 个 key 变化则保存
+
+# 4. 最大连接数（确保足够）
+# maxclients 10000
+
+# 应用配置后重启 Redis：
+# systemctl restart redis

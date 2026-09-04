@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 )
 
 // This is build_compaction_prompt(None, false) from grok-build. Grok does not
@@ -90,6 +91,22 @@ func normalizeGrokCompactInput(value any) ([]any, error) {
 // turns. The encrypted blob originated as Grok reasoning and must be replayed
 // under that type. The visible summary is added as conversation context.
 func convertOpenAICompactInputsForGrok(body []byte) ([]byte, error) {
+	inputView := parseRawJSONView(body).Get("input")
+	if !inputView.IsArray() {
+		return body, nil
+	}
+	containsCompaction := false
+	inputView.ForEach(func(_, item gjson.Result) bool {
+		if isOpenAICompactionType(item.Get("type").String()) {
+			containsCompaction = true
+			return false
+		}
+		return true
+	})
+	if !containsCompaction {
+		return body, nil
+	}
+
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return nil, err

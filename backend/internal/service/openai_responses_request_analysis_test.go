@@ -47,19 +47,34 @@ func TestAnalyzeOpenAIResponsesRequest_InvalidFieldTypes(t *testing.T) {
 	require.True(t, errors.Is(err, ErrOpenAIResponsesInvalidModelFieldType))
 }
 
-func TestAnalyzeOpenAIResponsesRequest_PreservesFirstDuplicateTopLevelField(t *testing.T) {
-	analysis, err := AnalyzeOpenAIResponsesRequest([]byte(`{
+func TestAnalyzeOpenAIResponsesRequest_RejectsDuplicateSemanticFields(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		path string
+	}{
+		{name: "top level", body: `{
 		"model":"first-model",
 		"model":"second-model",
 		"stream":false,
-		"stream":true,
-		"input":"first input",
-		"input":"second input"
-	}`))
-	require.NoError(t, err)
-	require.Equal(t, "first-model", analysis.Model)
-	require.False(t, analysis.Stream)
-	require.Equal(t, "first input", analysis.ContentModerationInputCopy().Text)
+		"input":"first input"
+	}`, path: "model"},
+		{name: "service tier", body: `{"model":"gpt-5","service_tier":"default","service_tier":"priority"}`, path: "service_tier"},
+		{name: "legacy reasoning effort", body: `{"model":"gpt-5","reasoning_effort":"low","reasoning_effort":"high"}`, path: "reasoning_effort"},
+		{name: "thinking", body: `{"model":"gpt-5","thinking":{"type":"enabled"},"thinking":{"type":"disabled"}}`, path: "thinking"},
+		{name: "nested reasoning effort", body: `{"model":"gpt-5","reasoning":{"effort":"low","effort":"high"}}`, path: "effort"},
+		{name: "nested text verbosity", body: `{"model":"gpt-5","text":{"verbosity":"low","verbosity":"high"}}`, path: "verbosity"},
+		{name: "nested image tool type", body: `{"model":"gpt-5","tools":[{"type":"function","type":"image_generation"}]}`, path: "type"},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := AnalyzeOpenAIResponsesRequest([]byte(testCase.body))
+			var duplicateErr *OpenAIResponsesDuplicateFieldError
+			require.ErrorAs(t, err, &duplicateErr)
+			require.Equal(t, testCase.path, duplicateErr.Field)
+		})
+	}
 }
 
 func TestAnalyzeOpenAIResponsesRequest_CyberAndStandardInputsKeepDistinctSemantics(t *testing.T) {

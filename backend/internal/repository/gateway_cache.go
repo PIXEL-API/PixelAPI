@@ -25,6 +25,18 @@ type gatewayCache struct {
 	rdb *redis.Client
 }
 
+var bindSessionStringImmutableScript = redis.NewScript(`
+local current = redis.call("GET", KEYS[1])
+if current then
+    if current == ARGV[1] then
+        redis.call("PEXPIRE", KEYS[1], ARGV[2])
+    end
+    return current
+end
+redis.call("PSETEX", KEYS[1], ARGV[2], ARGV[1])
+return ARGV[1]
+`)
+
 func NewGatewayCache(rdb *redis.Client) service.GatewayCache {
 	return &gatewayCache{rdb: rdb}
 }
@@ -331,6 +343,27 @@ func (c *gatewayCache) GetSessionString(ctx context.Context, groupID int64, sess
 func (c *gatewayCache) SetSessionString(ctx context.Context, groupID int64, sessionHash string, value string, ttl time.Duration) error {
 	key := buildSessionKey(groupID, sessionHash)
 	return c.rdb.Set(ctx, key, value, ttl).Err()
+}
+
+// BindSessionStringImmutable atomically creates an immutable string binding.
+// Repeating the same value is idempotent and refreshes its TTL; a conflicting
+// value is returned unchanged so the caller can fail closed.
+func (c *gatewayCache) BindSessionStringImmutable(
+	ctx context.Context,
+	groupID int64,
+	sessionHash, value string,
+	ttl time.Duration,
+) (string, error) {
+	key := buildSessionKey(groupID, sessionHash)
+	ttlMilliseconds := ttl.Milliseconds()
+	if ttlMilliseconds <= 0 {
+		return "", errors.New("immutable session string TTL must be positive")
+	}
+	stored, err := bindSessionStringImmutableScript.Run(ctx, c.rdb, []string{key}, value, ttlMilliseconds).Text()
+	if err != nil {
+		return "", err
+	}
+	return stored, nil
 }
 
 func (c *gatewayCache) DeleteSessionString(ctx context.Context, groupID int64, sessionHash string) error {

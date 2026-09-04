@@ -374,7 +374,7 @@ func (s *OpenAIGatewayService) bufferRawChatCompletions(
 
 	readCtx, cancelRead := s.detachedNonStreamingReadContext(ctx)
 	defer cancelRead()
-	respBody, err := ReadUpstreamResponseBodyWithContext(readCtx, resp.Body, s.cfg, c, openAITooLargeError)
+	respBody, err := ReadUpstreamResponseBodyWithIdleTimeout(readCtx, resp.Body, s.cfg, c, openAITooLargeError, s.nonStreamingReadIdleTimeout())
 	if err != nil {
 		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			writeChatCompletionsError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")

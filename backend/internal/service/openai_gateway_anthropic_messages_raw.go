@@ -286,7 +286,7 @@ func (s *OpenAIGatewayService) bufferRawAnthropicMessages(
 
 	readCtx, cancelRead := s.detachedNonStreamingReadContext(ctx)
 	defer cancelRead()
-	respBody, err := ReadUpstreamResponseBodyWithContext(readCtx, resp.Body, s.cfg, c, anthropicTooLargeError)
+	respBody, err := ReadUpstreamResponseBodyWithIdleTimeout(readCtx, resp.Body, s.cfg, c, anthropicTooLargeError, s.nonStreamingReadIdleTimeout())
 	if err != nil {
 		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
 			writeAnthropicError(c, http.StatusBadGateway, "api_error", "Failed to read upstream response")

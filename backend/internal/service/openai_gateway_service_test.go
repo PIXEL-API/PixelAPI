@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
+	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -26,9 +27,34 @@ import (
 var _ AccountRepository = (*stubOpenAIAccountRepo)(nil)
 var _ GatewayCache = (*stubGatewayCache)(nil)
 
+func TestOpenAIEffectiveGroupIDPreservesExplicitUngroupedRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	authGroupID := int64(1001)
+	c.Set("api_key", &APIKey{GroupID: &authGroupID})
+
+	effectiveGroupID := int64(0)
+	setOpenAIEffectiveGroupID(c, &effectiveGroupID)
+
+	require.Equal(t, int64(0), getOpenAIEffectiveGroupID(c))
+}
+
 type stubOpenAIAccountRepo struct {
 	AccountRepository
 	accounts []Account
+}
+
+type revalidateOpenAIAccountRepo struct {
+	AccountRepository
+	account *Account
+	err     error
+}
+
+func (r *revalidateOpenAIAccountRepo) GetByID(context.Context, int64) (*Account, error) {
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.account, nil
 }
 
 func openAITestAccountHasGroupMetadata(account Account) bool {
@@ -171,8 +197,37 @@ type stubConcurrencyCache struct {
 	loadBatchErr    error
 	loadMap         map[int64]*AccountLoadInfo
 	acquireResults  map[int64]bool
+	acquireErrors   map[int64]error
 	waitCounts      map[int64]int
 	skipDefaultLoad bool
+}
+
+type failingHydrationSchedulerCache struct {
+	SchedulerCache
+	account    *Account
+	getCalls   int
+	failOnCall int
+	err        error
+}
+
+func (c *failingHydrationSchedulerCache) GetSnapshot(ctx context.Context, bucket SchedulerBucket) ([]*Account, bool, error) {
+	if c.account == nil {
+		return nil, false, nil
+	}
+	cloned := *c.account
+	return []*Account{&cloned}, true, nil
+}
+
+func (c *failingHydrationSchedulerCache) GetAccount(ctx context.Context, accountID int64) (*Account, error) {
+	c.getCalls++
+	if c.failOnCall > 0 && c.getCalls >= c.failOnCall {
+		return nil, c.err
+	}
+	if c.account == nil || c.account.ID != accountID {
+		return nil, nil
+	}
+	cloned := *c.account
+	return &cloned, nil
 }
 
 type cancelReadCloser struct{}
@@ -206,6 +261,11 @@ func (w *failingGinWriter) WriteString(s string) (int, error) {
 }
 
 func (c stubConcurrencyCache) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
+	if c.acquireErrors != nil {
+		if err, ok := c.acquireErrors[accountID]; ok {
+			return false, err
+		}
+	}
 	if c.acquireResults != nil {
 		if result, ok := c.acquireResults[accountID]; ok {
 			return result, nil
@@ -507,20 +567,28 @@ type stubGatewayCache struct {
 	sessionBindings map[string]int64
 	deletedSessions map[string]int
 	stringBindings  map[string]string
+	isolateByGroup  bool
+}
+
+func (c *stubGatewayCache) bindingKey(groupID int64, sessionHash string) string {
+	if c != nil && c.isolateByGroup {
+		return fmt.Sprintf("%d:%s", groupID, sessionHash)
+	}
+	return sessionHash
 }
 
 func (c *stubGatewayCache) GetSessionAccountID(ctx context.Context, groupID int64, sessionHash string) (int64, error) {
-	if id, ok := c.sessionBindings[sessionHash]; ok {
+	if id, ok := c.sessionBindings[c.bindingKey(groupID, sessionHash)]; ok {
 		return id, nil
 	}
-	return 0, errors.New("not found")
+	return 0, redis.Nil
 }
 
 func (c *stubGatewayCache) SetSessionAccountID(ctx context.Context, groupID int64, sessionHash string, accountID int64, ttl time.Duration) error {
 	if c.sessionBindings == nil {
 		c.sessionBindings = make(map[string]int64)
 	}
-	c.sessionBindings[sessionHash] = accountID
+	c.sessionBindings[c.bindingKey(groupID, sessionHash)] = accountID
 	return nil
 }
 
@@ -535,14 +603,15 @@ func (c *stubGatewayCache) DeleteSessionAccountID(ctx context.Context, groupID i
 	if c.deletedSessions == nil {
 		c.deletedSessions = make(map[string]int)
 	}
-	c.deletedSessions[sessionHash]++
-	delete(c.sessionBindings, sessionHash)
+	key := c.bindingKey(groupID, sessionHash)
+	c.deletedSessions[key]++
+	delete(c.sessionBindings, key)
 	return nil
 }
 
 func (c *stubGatewayCache) GetSessionString(ctx context.Context, groupID int64, sessionHash string) (string, error) {
 	if c.stringBindings != nil {
-		if value, ok := c.stringBindings[sessionHash]; ok {
+		if value, ok := c.stringBindings[c.bindingKey(groupID, sessionHash)]; ok {
 			return value, nil
 		}
 	}
@@ -553,13 +622,25 @@ func (c *stubGatewayCache) SetSessionString(ctx context.Context, groupID int64, 
 	if c.stringBindings == nil {
 		c.stringBindings = make(map[string]string)
 	}
-	c.stringBindings[sessionHash] = value
+	c.stringBindings[c.bindingKey(groupID, sessionHash)] = value
 	return nil
+}
+
+func (c *stubGatewayCache) BindSessionStringImmutable(ctx context.Context, groupID int64, sessionHash, value string, ttl time.Duration) (string, error) {
+	if c.stringBindings == nil {
+		c.stringBindings = make(map[string]string)
+	}
+	key := c.bindingKey(groupID, sessionHash)
+	if stored, ok := c.stringBindings[key]; ok {
+		return stored, nil
+	}
+	c.stringBindings[key] = value
+	return value, nil
 }
 
 func (c *stubGatewayCache) DeleteSessionString(ctx context.Context, groupID int64, sessionHash string) error {
 	if c.stringBindings != nil {
-		delete(c.stringBindings, sessionHash)
+		delete(c.stringBindings, c.bindingKey(groupID, sessionHash))
 	}
 	return nil
 }
@@ -1061,13 +1142,88 @@ func TestOpenAIGatewayServiceRevalidateSelectedAccountForDispatchUsesLatestPubli
 	repo.accounts[0].ShareStatus = AccountShareStatusPending
 	latest, err = svc.RevalidateSelectedOpenAIAccountForDispatch(ctx, &groupID, &account, requirements)
 	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.True(t, IsOpenAIDispatchAccountUnavailable(err))
+	require.True(t, IsOpenAIWSContinuationPermanentError(err))
 	require.Nil(t, latest)
 
 	repo.accounts[0].ShareStatus = AccountShareStatusApproved
 	repo.accounts[0].GroupIDs = nil
 	latest, err = svc.RevalidateSelectedOpenAIAccountForDispatch(ctx, &groupID, &account, requirements)
 	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.True(t, IsOpenAIDispatchAccountUnavailable(err))
+	require.True(t, IsOpenAIWSContinuationPermanentError(err))
 	require.Nil(t, latest)
+}
+
+func TestOpenAIGatewayServiceRevalidateSelectedAccountForDispatchClassifiesTemporaryAndRestartRequired(t *testing.T) {
+	groupID := int64(7124)
+	rateLimitedUntil := time.Now().Add(30 * time.Minute)
+	account := Account{
+		ID:               552,
+		Platform:         PlatformOpenAI,
+		Type:             AccountTypeAPIKey,
+		Status:           StatusActive,
+		Schedulable:      true,
+		Concurrency:      1,
+		RateLimitResetAt: &rateLimitedUntil,
+		GroupIDs:         []int64{groupID},
+		Credentials:      map[string]any{"model_mapping": map[string]any{"gpt-5": "gpt-5"}},
+	}
+	repo := &stubOpenAIAccountRepo{accounts: []Account{account}}
+	svc := &OpenAIGatewayService{accountRepo: repo}
+	requirements := OpenAIAccountDispatchRequirements{RequestedModel: "gpt-5", RequiredTransport: OpenAIUpstreamTransportAny}
+
+	latest, err := svc.RevalidateSelectedOpenAIAccountForDispatch(context.Background(), &groupID, &account, requirements)
+	require.Nil(t, latest)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.True(t, IsOpenAIDispatchAccountUnavailable(err))
+	require.False(t, IsOpenAIWSContinuationPermanentError(err), "rate limiting must remain retryable")
+	require.NotContains(t, err.Error(), "response  ")
+	require.Contains(t, err.Error(), "account 552")
+
+	requirements.RequiredTransport = OpenAIUpstreamTransportResponsesWebsocketV2
+	latest, err = svc.RevalidateSelectedOpenAIAccountForDispatch(context.Background(), &groupID, &account, requirements)
+	require.Nil(t, latest)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.True(t, IsOpenAIDispatchAccountUnavailable(err))
+	require.True(t, IsOpenAIWSContinuationPermanentError(err), "a transport capability mismatch cannot recover by reconnecting the same continuation")
+}
+
+func TestOpenAIGatewayServiceRevalidateSelectedAccountForDispatchPreservesInfrastructureErrors(t *testing.T) {
+	groupID := int64(7125)
+	account := &Account{ID: 553, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, GroupIDs: []int64{groupID}}
+	infrastructureErr := errors.New("account repository unavailable")
+
+	svc := &OpenAIGatewayService{accountRepo: &revalidateOpenAIAccountRepo{err: infrastructureErr}}
+	latest, err := svc.RevalidateSelectedOpenAIAccountForDispatch(context.Background(), &groupID, account, OpenAIAccountDispatchRequirements{})
+	require.Nil(t, latest)
+	require.ErrorIs(t, err, infrastructureErr)
+	require.False(t, IsOpenAIDispatchAccountUnavailable(err))
+	require.False(t, IsOpenAIWSContinuationPermanentError(err))
+	require.NotErrorIs(t, err, ErrNoAvailableAccounts)
+
+	svc.accountRepo = &revalidateOpenAIAccountRepo{err: ErrAccountNotFound}
+	latest, err = svc.RevalidateSelectedOpenAIAccountForDispatch(context.Background(), &groupID, account, OpenAIAccountDispatchRequirements{})
+	require.Nil(t, latest)
+	require.ErrorIs(t, err, ErrAccountNotFound)
+	require.ErrorIs(t, err, ErrNoAvailableAccounts)
+	require.True(t, IsOpenAIDispatchAccountUnavailable(err))
+	require.True(t, IsOpenAIWSContinuationPermanentError(err))
+
+	svc.accountRepo = &revalidateOpenAIAccountRepo{}
+	latest, err = svc.RevalidateSelectedOpenAIAccountForDispatch(context.Background(), &groupID, account, OpenAIAccountDispatchRequirements{})
+	require.Nil(t, latest)
+	require.Error(t, err)
+	require.False(t, IsOpenAIDispatchAccountUnavailable(err))
+	require.NotErrorIs(t, err, ErrNoAvailableAccounts)
+}
+
+func TestIsOpenAIAccountSelectionExhaustedIsNarrow(t *testing.T) {
+	require.True(t, IsOpenAIAccountSelectionExhausted(noAvailableOpenAISelectionError("gpt-5", false)))
+	require.True(t, IsOpenAIAccountSelectionExhausted(ErrNoAvailableCompactAccounts))
+	require.False(t, IsOpenAIAccountSelectionExhausted(ErrNoAvailableAccounts))
+	require.False(t, IsOpenAIAccountSelectionExhausted(wrapAccountShareModeSelectionError(ErrNoAvailableCompactAccounts)))
+	require.False(t, IsOpenAIAccountSelectionExhausted(errors.New("redis unavailable")))
 }
 
 func TestOpenAIGatewayServiceRevalidateSelectedAccountForDispatchUsesModeMembership(t *testing.T) {
@@ -1089,9 +1245,17 @@ func TestOpenAIGatewayServiceRevalidateSelectedAccountForDispatchUsesModeMembers
 		AccountLevel: AccountLevelTeam,
 		Credentials:  map[string]any{"model_mapping": map[string]any{"gpt-5": "gpt-5"}},
 	}
+	listing := &AccountShareListing{
+		ID:            2,
+		AccountID:     account.ID,
+		OwnerUserID:   ownerUserID,
+		Status:        AccountShareListingStatusActive,
+		Platform:      PlatformOpenAI,
+		AllowedModels: []string{"gpt-5"},
+	}
 	shareRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 1, AccountID: account.ID, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
-		listing:    &AccountShareListing{ID: 2, AccountID: account.ID, OwnerUserID: ownerUserID, Status: AccountShareListingStatusActive},
+		listing:    listing,
 	}
 	svc := &OpenAIGatewayService{
 		accountRepo:             stubOpenAIAccountRepo{accounts: []Account{account}},
@@ -1105,6 +1269,14 @@ func TestOpenAIGatewayServiceRevalidateSelectedAccountForDispatchUsesModeMembers
 	require.NotNil(t, latest)
 	require.Equal(t, account.ID, latest.ID)
 
+	listing.AllowedModels = []string{"gpt-4o"}
+	ctx = WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
+	latest, err = svc.RevalidateSelectedOpenAIAccountForDispatch(ctx, &modeGroupID, &account, requirements)
+	require.Nil(t, latest)
+	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
+	require.False(t, IsOpenAIDispatchAccountUnavailable(err))
+	listing.AllowedModels = []string{"gpt-5"}
+
 	wrongRepo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 3, AccountID: account.ID + 1, ConsumerUserID: consumerUserID, APIKeyID: apiKeyID},
 		listing:    &AccountShareListing{ID: 4, AccountID: account.ID + 1, OwnerUserID: ownerUserID, Status: AccountShareListingStatusActive},
@@ -1113,7 +1285,17 @@ func TestOpenAIGatewayServiceRevalidateSelectedAccountForDispatchUsesModeMembers
 	ctx = WithAccountShareModeRequest(context.Background(), consumerUserID, apiKeyID)
 	latest, err = svc.RevalidateSelectedOpenAIAccountForDispatch(ctx, &modeGroupID, &account, requirements)
 	require.ErrorIs(t, err, ErrAccountShareModeGroupUnbound)
+	require.False(t, IsOpenAIDispatchAccountUnavailable(err))
 	require.Nil(t, latest)
+
+	modeLookupErr := errors.New("mode group lookup unavailable")
+	svc.accountShareModeService = &AccountShareModeService{repo: &accountShareModeRepoStub{modeGroupErr: modeLookupErr}}
+	latest, err = svc.RevalidateSelectedOpenAIAccountForDispatch(ctx, &modeGroupID, &account, requirements)
+	require.Nil(t, latest)
+	require.ErrorIs(t, err, modeLookupErr)
+	require.False(t, IsOpenAIDispatchAccountUnavailable(err))
+	require.False(t, IsOpenAIWSContinuationPermanentError(err))
+	require.NotErrorIs(t, err, ErrNoAvailableAccounts)
 }
 
 func TestOpenAISelectAccountWithLoadAwareness_FiltersUnschedulableWhenNoConcurrencyService(t *testing.T) {
@@ -1261,7 +1443,7 @@ func TestOpenAISelectAccountForModelWithExclusions_NoModelSupport(t *testing.T) 
 	}
 }
 
-func TestOpenAISelectAccountWithLoadAwareness_LoadBatchErrorFallback(t *testing.T) {
+func TestOpenAISelectAccountWithLoadAwareness_LoadBatchErrorIsInfrastructure(t *testing.T) {
 	groupID := int64(1)
 	repo := stubOpenAIAccountRepo{
 		accounts: []Account{
@@ -1270,9 +1452,8 @@ func TestOpenAISelectAccountWithLoadAwareness_LoadBatchErrorFallback(t *testing.
 		},
 	}
 	cache := &stubGatewayCache{}
-	concurrencyCache := stubConcurrencyCache{
-		loadBatchErr: errors.New("load batch failed"),
-	}
+	loadBatchErr := errors.New("load batch failed")
+	concurrencyCache := stubConcurrencyCache{loadBatchErr: loadBatchErr}
 
 	svc := &OpenAIGatewayService{
 		accountRepo:        repo,
@@ -1281,21 +1462,10 @@ func TestOpenAISelectAccountWithLoadAwareness_LoadBatchErrorFallback(t *testing.
 	}
 
 	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "fallback", "gpt-4", nil)
-	if err != nil {
-		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
-	}
-	if selection == nil || selection.Account == nil {
-		t.Fatalf("expected selection")
-	}
-	if selection.Account.ID != 2 {
-		t.Fatalf("expected account 2, got %d", selection.Account.ID)
-	}
-	if cache.sessionBindings["openai:fallback"] != 2 {
-		t.Fatalf("expected sticky session updated")
-	}
-	if selection.ReleaseFunc != nil {
-		selection.ReleaseFunc()
-	}
+	require.Nil(t, selection)
+	require.ErrorIs(t, err, loadBatchErr)
+	require.False(t, IsOpenAIAccountSelectionExhausted(err))
+	require.Zero(t, cache.sessionBindings["openai:fallback"])
 }
 
 func TestOpenAISelectAccountWithLoadAwareness_NoSlotFallbackWait(t *testing.T) {
@@ -1535,8 +1705,9 @@ func TestOpenAISelectAccountWithLoadAwareness_AllFullWaitPlan(t *testing.T) {
 	cache := &stubGatewayCache{}
 	concurrencyCache := stubConcurrencyCache{
 		loadMap: map[int64]*AccountLoadInfo{
-			1: {AccountID: 1, LoadRate: 100},
+			1: {AccountID: 1, CurrentConcurrency: 1, LoadRate: 100},
 		},
+		acquireResults: map[int64]bool{1: false},
 	}
 
 	svc := &OpenAIGatewayService{
@@ -1554,7 +1725,191 @@ func TestOpenAISelectAccountWithLoadAwareness_AllFullWaitPlan(t *testing.T) {
 	}
 }
 
-func TestOpenAISelectAccountWithLoadAwareness_LoadBatchErrorNoAcquire(t *testing.T) {
+func TestOpenAISelectAccountWithLoadAwareness_LoadRateAtCapacityStillProbesRawFreeSlot(t *testing.T) {
+	groupID := int64(1)
+	repo := stubOpenAIAccountRepo{
+		accounts: []Account{
+			{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Concurrency: 2, Priority: 1},
+		},
+	}
+	concurrencyCache := stubConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, CurrentConcurrency: 1, WaitingCount: 1, LoadRate: 100},
+		},
+		acquireResults: map[int64]bool{1: true},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              &stubGatewayCache{},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "gpt-4", nil)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(1), selection.Account.ID)
+	require.True(t, selection.Acquired)
+	require.Nil(t, selection.WaitPlan)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_AcquireErrorFallsThroughToAvailableAccount(t *testing.T) {
+	groupID := int64(1)
+	acquireErr := errors.New("account slot cache failed")
+	repo := stubOpenAIAccountRepo{
+		accounts: []Account{
+			{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 1},
+			{ID: 2, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 2},
+		},
+	}
+	concurrencyCache := stubConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, CurrentConcurrency: 0, LoadRate: 0},
+			2: {AccountID: 2, CurrentConcurrency: 0, LoadRate: 0},
+		},
+		acquireErrors:  map[int64]error{1: acquireErr},
+		acquireResults: map[int64]bool{2: true},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              &stubGatewayCache{},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "gpt-4", nil)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(2), selection.Account.ID)
+	require.True(t, selection.Acquired)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_AcquireErrorDoesNotSuppressValidWaitPlan(t *testing.T) {
+	groupID := int64(1)
+	acquireErr := errors.New("account slot cache failed")
+	repo := stubOpenAIAccountRepo{
+		accounts: []Account{
+			{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 1},
+			{ID: 2, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 2},
+		},
+	}
+	concurrencyCache := stubConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, CurrentConcurrency: 0, LoadRate: 0},
+			2: {AccountID: 2, CurrentConcurrency: 1, LoadRate: 100},
+		},
+		acquireErrors:  map[int64]error{1: acquireErr},
+		acquireResults: map[int64]bool{2: false},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              &stubGatewayCache{},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "gpt-4", nil)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(2), selection.Account.ID)
+	require.False(t, selection.Acquired)
+	require.NotNil(t, selection.WaitPlan)
+	require.Equal(t, int64(2), selection.WaitPlan.AccountID)
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_AcquireErrorIsNotConvertedToWaitPlan(t *testing.T) {
+	groupID := int64(1)
+	acquireErr := errors.New("account slot cache failed")
+	svc := &OpenAIGatewayService{
+		accountRepo: stubOpenAIAccountRepo{accounts: []Account{
+			{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 1},
+		}},
+		cache: &stubGatewayCache{},
+		concurrencyService: NewConcurrencyService(stubConcurrencyCache{
+			acquireErrors: map[int64]error{1: acquireErr},
+		}),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "gpt-4", nil)
+	require.Nil(t, selection)
+	require.ErrorIs(t, err, acquireErr)
+	require.False(t, IsOpenAIAccountSelectionExhausted(err))
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_ContextAcquireErrorStopsFallback(t *testing.T) {
+	groupID := int64(1)
+	repo := stubOpenAIAccountRepo{
+		accounts: []Account{
+			{ID: 1, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 1},
+			{ID: 2, Platform: PlatformOpenAI, Status: StatusActive, Schedulable: true, Concurrency: 1, Priority: 2},
+		},
+	}
+	concurrencyCache := stubConcurrencyCache{
+		loadMap: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, CurrentConcurrency: 0, LoadRate: 0},
+			2: {AccountID: 2, CurrentConcurrency: 0, LoadRate: 0},
+		},
+		acquireErrors:  map[int64]error{1: context.Canceled},
+		acquireResults: map[int64]bool{2: true},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        repo,
+		cache:              &stubGatewayCache{},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "gpt-4", nil)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, selection)
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_HydrationErrorDoesNotPersistStickyBinding(t *testing.T) {
+	groupID := int64(2)
+	account := openAITestAccountWithGroupIfUnset(Account{
+		ID:          11,
+		Platform:    PlatformOpenAI,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Priority:    1,
+	}, groupID)
+	hydrationErr := errors.New("hydrate selected account failed")
+	snapshotCache := &failingHydrationSchedulerCache{
+		account:    &account,
+		failOnCall: 2,
+		err:        hydrationErr,
+	}
+	gatewayCache := &stubGatewayCache{}
+	concurrencyCache := &cleanRelayConcurrencyCacheSpy{
+		schedulerTestConcurrencyCache: schedulerTestConcurrencyCache{
+			acquireResults: map[int64]bool{account.ID: true},
+		},
+	}
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = false
+	svc := &OpenAIGatewayService{
+		accountRepo:        stubOpenAIAccountRepo{accounts: []Account{account}},
+		cache:              gatewayCache,
+		cfg:                cfg,
+		schedulerSnapshot:  &SchedulerSnapshotService{cache: snapshotCache},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "hydrate-error-session", "gpt-4", nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "not found during hydration")
+	require.Nil(t, selection)
+	require.Zero(t, gatewayCache.sessionBindings["openai:hydrate-error-session"])
+	require.Equal(t, []int64{account.ID}, concurrencyCache.releaseCalls)
+}
+
+func TestOpenAISelectAccountWithLoadAwareness_LoadBatchErrorDoesNotBecomeWaitPlan(t *testing.T) {
 	groupID := int64(1)
 	repo := stubOpenAIAccountRepo{
 		accounts: []Account{
@@ -1562,8 +1917,9 @@ func TestOpenAISelectAccountWithLoadAwareness_LoadBatchErrorNoAcquire(t *testing
 		},
 	}
 	cache := &stubGatewayCache{}
+	loadBatchErr := errors.New("load batch failed")
 	concurrencyCache := stubConcurrencyCache{
-		loadBatchErr:   errors.New("load batch failed"),
+		loadBatchErr:   loadBatchErr,
 		acquireResults: map[int64]bool{1: false},
 	}
 
@@ -1574,12 +1930,9 @@ func TestOpenAISelectAccountWithLoadAwareness_LoadBatchErrorNoAcquire(t *testing
 	}
 
 	selection, err := svc.SelectAccountWithLoadAwareness(context.Background(), &groupID, "", "gpt-4", nil)
-	if err != nil {
-		t.Fatalf("SelectAccountWithLoadAwareness error: %v", err)
-	}
-	if selection == nil || selection.WaitPlan == nil {
-		t.Fatalf("expected wait plan")
-	}
+	require.Nil(t, selection)
+	require.ErrorIs(t, err, loadBatchErr)
+	require.False(t, IsOpenAIAccountSelectionExhausted(err))
 }
 
 func TestOpenAISelectAccountWithLoadAwareness_MissingLoadInfo(t *testing.T) {

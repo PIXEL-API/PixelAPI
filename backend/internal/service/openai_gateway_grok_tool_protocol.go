@@ -16,6 +16,9 @@ import (
 const grokResponsesClientToolMappingContextKey = "grok_responses_client_tool_mapping"
 
 func adaptGrokResponsesClientTools(body []byte) ([]byte, apicompat.ResponsesClientToolMapping, error) {
+	if !grokResponsesClientToolAdaptationRequired(body) {
+		return body, apicompat.ResponsesClientToolMapping{}, nil
+	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
 	var requestBody map[string]any
@@ -35,6 +38,58 @@ func adaptGrokResponsesClientTools(body []byte) ([]byte, apicompat.ResponsesClie
 		return body, apicompat.ResponsesClientToolMapping{}, fmt.Errorf("encode Grok Responses client tools: %w", err)
 	}
 	return rebuilt, mapping, nil
+}
+
+// grokResponsesClientToolAdaptationRequired mirrors the conditions under
+// which apicompat.AdaptResponsesClientTools can mutate a request. Ordinary
+// function-tool requests remain raw and avoid building a complete map tree.
+func grokResponsesClientToolAdaptationRequired(body []byte) bool {
+	root := parseRawJSONView(body)
+	tools := root.Get("tools")
+	if !tools.IsArray() {
+		return false
+	}
+	hasTools := false
+	required := false
+	tools.ForEach(func(_, tool gjson.Result) bool {
+		hasTools = true
+		switch strings.TrimSpace(tool.Get("type").String()) {
+		case "custom", "tool_search", "namespace":
+			required = true
+			return false
+		default:
+			return true
+		}
+	})
+	if required || !hasTools {
+		return required
+	}
+	// The compatibility adapter normalizes custom_tool_call_output whenever
+	// any tools array is present, even if all declarations are functions.
+	return grokResponsesJSONValueContainsType(root.Get("input"), "custom_tool_call_output")
+}
+
+func grokResponsesJSONValueContainsType(value gjson.Result, target string) bool {
+	if !value.Exists() {
+		return false
+	}
+	if value.IsObject() {
+		if strings.TrimSpace(value.Get("type").String()) == target {
+			return true
+		}
+	}
+	if !value.IsArray() && !value.IsObject() {
+		return false
+	}
+	found := false
+	value.ForEach(func(_, child gjson.Result) bool {
+		if grokResponsesJSONValueContainsType(child, target) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
 }
 
 func hasGrokResponsesClientToolMapping(mapping apicompat.ResponsesClientToolMapping) bool {

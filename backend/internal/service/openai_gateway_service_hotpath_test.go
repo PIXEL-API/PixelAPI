@@ -3,12 +3,14 @@ package service
 import (
 	"encoding/json"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestExtractOpenAIRequestMetaFromBody(t *testing.T) {
@@ -237,4 +239,27 @@ func TestSanitizeEmptyBase64InputImagesInOpenAIBody(t *testing.T) {
 			]}
 		]
 	}`, string(body))
+}
+
+func TestSanitizeEmptyBase64InputImagesInOpenAIBodyKeepsLargeNonEmptyImageRaw(t *testing.T) {
+	imageData := strings.Repeat("A", 4<<20)
+	body := []byte(`{"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,` + imageData + `"}]}],"future_extension":1e1000}`)
+
+	got, changed, err := sanitizeEmptyBase64InputImagesInOpenAIBody(body)
+
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.Len(t, got, len(body))
+	require.Equal(t, &body[0], &got[0], "unchanged payload must retain the original backing array")
+	require.Equal(t, "1e1000", gjson.GetBytes(got, "future_extension").Raw)
+}
+
+func TestSanitizeEmptyBase64InputImagesInOpenAIBodyHandlesEscapedImageFields(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":[{"role":"user","content":[{"\u0074ype":"input_\u0069mage","\u0069mage_url":"data:image/png;base64,"},{"type":"input_text","text":"keep"}]}]}`)
+
+	got, changed, err := sanitizeEmptyBase64InputImagesInOpenAIBody(body)
+
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.JSONEq(t, `{"model":"gpt-5.4","input":[{"role":"user","content":[{"type":"input_text","text":"keep"}]}]}`, string(got))
 }

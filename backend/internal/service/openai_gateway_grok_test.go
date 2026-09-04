@@ -824,6 +824,17 @@ func TestPatchGrokResponsesBodyRestoresCompactInput(t *testing.T) {
 	require.Equal(t, "continue", gjson.GetBytes(patched, "input.2.content.0.text").String())
 }
 
+func TestConvertOpenAICompactInputsForGrokSkipsFullDecodeWithoutCompaction(t *testing.T) {
+	body := []byte(`{"model":"grok-4.5","input":[{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,QUJD"}]}],"future_extension":1e1000}`)
+
+	converted, err := convertOpenAICompactInputsForGrok(body)
+
+	require.NoError(t, err)
+	require.Len(t, converted, len(body))
+	require.Equal(t, &body[0], &converted[0], "ordinary input must retain the raw backing array")
+	require.Equal(t, "1e1000", gjson.GetBytes(converted, "future_extension").Raw)
+}
+
 func TestSanitizeGrokResponsesToolsDropsOrphanedToolChoice(t *testing.T) {
 	tests := []struct {
 		name           string

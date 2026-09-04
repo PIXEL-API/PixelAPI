@@ -34,6 +34,26 @@ const (
 )
 
 var (
+	// canRegisterSessionScript 只做容量预检，不新增或刷新会话成员。
+	// 允许清理已过期成员，但不会为尚未获得并发槽的请求留下新成员。
+	canRegisterSessionScript = redis.NewScript(`
+		local key = KEYS[1]
+		local maxSessions = tonumber(ARGV[1])
+		local idleTimeout = tonumber(ARGV[2])
+		local sessionUUID = ARGV[3]
+		local now = tonumber(ARGV[4])
+		local expireBefore = now - idleTimeout
+
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+		if redis.call('ZSCORE', key, sessionUUID) ~= false then
+			return 1
+		end
+		if redis.call('ZCARD', key) < maxSessions then
+			return 1
+		end
+		return 0
+	`)
+
 	// registerSessionScript 注册会话活动
 	// 当前时间由 Go 侧通过 Redis TIME 获取后传入，避免 Lua 中非确定性命令后写入失败。
 	// KEYS[1] = session_limit:account:{accountID}
@@ -154,6 +174,7 @@ func NewSessionLimitCache(rdb *redis.Client, defaultIdleTimeoutMinutes int) serv
 	// 预加载 Lua 脚本到 Redis，避免 Pipeline 中出现 NOSCRIPT 错误
 	ctx := context.Background()
 	scripts := []*redis.Script{
+		canRegisterSessionScript,
 		registerSessionScript,
 		refreshSessionScript,
 		getActiveSessionCountScript,
@@ -169,6 +190,29 @@ func NewSessionLimitCache(rdb *redis.Client, defaultIdleTimeoutMinutes int) serv
 		rdb:                rdb,
 		defaultIdleTimeout: time.Duration(defaultIdleTimeoutMinutes) * time.Minute,
 	}
+}
+
+// CanRegisterSession 在不创建或刷新会话成员的前提下检查容量。
+// 最终决策仍必须通过 RegisterSession 原子提交，以收口预检与获槽之间的竞态。
+func (c *sessionLimitCache) CanRegisterSession(ctx context.Context, accountID int64, sessionUUID string, maxSessions int, idleTimeout time.Duration) (bool, error) {
+	if sessionUUID == "" || maxSessions <= 0 {
+		return true, nil
+	}
+
+	key := sessionLimitKey(accountID)
+	idleTimeoutSeconds := int(idleTimeout.Seconds())
+	if idleTimeoutSeconds <= 0 {
+		idleTimeoutSeconds = int(c.defaultIdleTimeout.Seconds())
+	}
+	now, err := c.redisUnixTime(ctx)
+	if err != nil {
+		return false, err
+	}
+	result, err := canRegisterSessionScript.Run(ctx, c.rdb, []string{key}, maxSessions, idleTimeoutSeconds, sessionUUID, now).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
 }
 
 // sessionLimitKey 生成会话限制的 Redis 键
@@ -203,12 +247,12 @@ func (c *sessionLimitCache) RegisterSession(ctx context.Context, accountID int64
 
 	now, err := c.redisUnixTime(ctx)
 	if err != nil {
-		return true, err
+		return false, err
 	}
 
 	result, err := registerSessionScript.Run(ctx, c.rdb, []string{key}, maxSessions, idleTimeoutSeconds, sessionUUID, now).Int()
 	if err != nil {
-		return true, err // 失败开放：缓存错误时允许请求通过
+		return false, err
 	}
 	return result == 1, nil
 }

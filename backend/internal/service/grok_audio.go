@@ -110,6 +110,9 @@ func (s *OpenAIGatewayService) ForwardGrokVoice(
 	if err != nil {
 		return nil, err
 	}
+	// Billing needs only character/byte counts after the request is sent; do not
+	// retain a potentially large STT body throughout the upstream response read.
+	requestUsage := snapshotGrokVoiceAudioUsageRequest(baseEndpoint, body)
 	token, _, err := s.GetRequestCredential(ctx, c, account)
 	if err != nil {
 		return nil, err
@@ -157,6 +160,7 @@ func (s *OpenAIGatewayService) ForwardGrokVoice(
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
+	resp.Request = nil
 	defer func() { _ = resp.Body.Close() }()
 	requestID := firstNonEmpty(resp.Header.Get("x-request-id"), resp.Header.Get("xai-request-id"))
 	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
@@ -179,7 +183,7 @@ func (s *OpenAIGatewayService) ForwardGrokVoice(
 		Model:         baseEndpoint,
 		UpstreamModel: baseEndpoint,
 		Duration:      elapsed,
-		AudioUsage:    estimateGrokVoiceAudioUsage(baseEndpoint, body, data, elapsed),
+		AudioUsage:    estimateGrokVoiceAudioUsageFromSnapshot(baseEndpoint, requestUsage, data, elapsed),
 	}, nil
 }
 
@@ -392,19 +396,44 @@ func estimateGrokVoiceAudioUsage(
 	requestBody, responseBody []byte,
 	elapsed time.Duration,
 ) *AudioUsage {
+	return estimateGrokVoiceAudioUsageFromSnapshot(
+		endpoint,
+		snapshotGrokVoiceAudioUsageRequest(endpoint, requestBody),
+		responseBody,
+		elapsed,
+	)
+}
+
+type grokVoiceAudioUsageRequestSnapshot struct {
+	ttsCharacters int
+	requestBytes  int
+}
+
+func snapshotGrokVoiceAudioUsageRequest(endpoint string, requestBody []byte) grokVoiceAudioUsageRequestSnapshot {
+	snapshot := grokVoiceAudioUsageRequestSnapshot{requestBytes: len(requestBody)}
+	if strings.TrimSpace(endpoint) != "tts" || !gjson.ValidBytes(requestBody) {
+		return snapshot
+	}
+	for _, key := range []string{"input", "text", "prompt"} {
+		if text := strings.TrimSpace(gjson.GetBytes(requestBody, key).String()); text != "" {
+			snapshot.ttsCharacters = len([]rune(text))
+			break
+		}
+	}
+	return snapshot
+}
+
+func estimateGrokVoiceAudioUsageFromSnapshot(
+	endpoint string,
+	requestUsage grokVoiceAudioUsageRequestSnapshot,
+	responseBody []byte,
+	elapsed time.Duration,
+) *AudioUsage {
 	switch strings.TrimSpace(endpoint) {
 	case "tts":
-		characters := 0
-		if gjson.ValidBytes(requestBody) {
-			for _, key := range []string{"input", "text", "prompt"} {
-				if text := strings.TrimSpace(gjson.GetBytes(requestBody, key).String()); text != "" {
-					characters = len([]rune(text))
-					break
-				}
-			}
-		}
+		characters := requestUsage.ttsCharacters
 		if characters <= 0 {
-			characters = len(requestBody)
+			characters = requestUsage.requestBytes
 		}
 		if characters <= 0 {
 			return nil
@@ -424,10 +453,10 @@ func estimateGrokVoiceAudioUsage(
 		if seconds <= 0 && elapsed > 0 {
 			seconds = elapsed.Seconds()
 		}
-		if seconds <= 0 && len(requestBody) > 0 {
+		if seconds <= 0 && requestUsage.requestBytes > 0 {
 			// Conservative compressed-speech approximation used only when xAI
 			// supplies no authoritative duration.
-			seconds = float64(len(requestBody)) / 16_000
+			seconds = float64(requestUsage.requestBytes) / 16_000
 		}
 		if seconds <= 0 {
 			return nil

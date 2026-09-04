@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"errors"
+	"math"
 	"net/http"
 	"strings"
 	"testing"
@@ -63,6 +64,74 @@ func TestReadRequestBodyWithPrealloc_PassesThroughIdentity(t *testing.T) {
 	}
 	if string(got) != samplePayload {
 		t.Fatalf("body mismatch: got %q", got)
+	}
+}
+
+func TestReadRequestBodyWithLimitUsesExactKnownLengthAllocation(t *testing.T) {
+	payload := bytes.Repeat([]byte("x"), requestBodyReadMaxInitCap+123)
+	req := newRequestWithBody(t, payload, "")
+
+	got, err := ReadRequestBodyWithLimit(req, int64(len(payload)))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatal("body mismatch")
+	}
+	if cap(got) != len(payload) {
+		t.Fatalf("body capacity = %d, want exact %d", cap(got), len(payload))
+	}
+}
+
+func TestReadRequestBodyWithLimitBoundsUnknownLengthGrowth(t *testing.T) {
+	const limit = int64((2 << 20) + 17)
+	payload := bytes.Repeat([]byte("x"), int(limit))
+	req := newRequestWithBody(t, payload, "")
+	req.ContentLength = -1
+
+	got, err := ReadRequestBodyWithLimit(req, limit)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != int(limit) || cap(got) > int(limit) {
+		t.Fatalf("body len/cap = %d/%d, want len %d and cap <= limit", len(got), cap(got), limit)
+	}
+
+	oversized := newRequestWithBody(t, append(payload, 'x'), "")
+	oversized.ContentLength = -1
+	_, err = ReadRequestBodyWithLimit(oversized, limit)
+	var maxErr *http.MaxBytesError
+	if !errors.As(err, &maxErr) || maxErr.Limit != limit {
+		t.Fatalf("error = %v, want MaxBytesError(%d)", err, limit)
+	}
+}
+
+func TestBoundedRequestBodyMemoryReservation(t *testing.T) {
+	if got, want := BoundedRequestBodyMemoryReservation(256<<20), int64(384<<20); got != want {
+		t.Fatalf("reservation = %d, want %d", got, want)
+	}
+	if got := BoundedRequestBodyMemoryReservation(math.MaxInt64); got != math.MaxInt64 {
+		t.Fatalf("overflow reservation = %d, want MaxInt64", got)
+	}
+}
+
+func TestBoundedRequestBodyGrowthKeepsPreviousAllocationWithinHalfLimit(t *testing.T) {
+	for _, limit := range []int64{513, (1 << 20) + 1, (129 << 20) + 7, 256 << 20} {
+		halfLimit := limit/2 + limit%2
+		current := int64(requestBodyReadInitCap)
+		if current > halfLimit {
+			current = halfLimit
+		}
+		for current < limit {
+			previous := current
+			current = nextBoundedRequestBodyCapacity(current, limit)
+			if current <= previous || current > limit {
+				t.Fatalf("limit=%d invalid growth %d -> %d", limit, previous, current)
+			}
+			if current == limit && previous > halfLimit {
+				t.Fatalf("limit=%d final allocation retains %d bytes, greater than half limit %d", limit, previous, halfLimit)
+			}
+		}
 	}
 }
 
@@ -143,6 +212,23 @@ func TestReadRequestBodyWithPrealloc_RejectsCorruptZstd(t *testing.T) {
 	_, err := ReadRequestBodyWithPrealloc(req)
 	if err == nil {
 		t.Fatal("expected error for corrupt zstd body, got nil")
+	}
+}
+
+func TestReadRequestBodyWithPrealloc_RejectsZstdWindowAboveLimit(t *testing.T) {
+	header := zstd.Header{WindowSize: maxZstdDecoderWindowSize * 2}
+	frame, err := header.AppendTo(nil)
+	if err != nil {
+		t.Fatalf("build zstd frame header: %v", err)
+	}
+	// Last raw block with an empty payload. The decoder must reject the frame
+	// header before allocating history for the advertised window.
+	frame = append(frame, 0x01, 0x00, 0x00)
+
+	req := newRequestWithBody(t, frame, "zstd")
+	_, err = ReadRequestBodyWithPrealloc(req)
+	if !errors.Is(err, zstd.ErrWindowSizeExceeded) {
+		t.Fatalf("error = %v, want ErrWindowSizeExceeded", err)
 	}
 }
 

@@ -2,7 +2,6 @@
 Description=Remove expired Pixel release and upload artifacts
 After=local-fs.target pixel.service
 ConditionPathIsDirectory=/opt/sub2api/releases
-ConditionPathIsDirectory=/home/pixel/sub2api_release_uploads
 
 [Service]
 Type=oneshot
@@ -13,6 +12,6 @@ Nice=10
 IOSchedulingClass=idle
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
-ProtectHome=read-only
-ReadWritePaths=/opt/sub2api/releases /home/pixel/sub2api_release_uploads /run
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/sub2api/releases /opt/sub2api/release-maintenance /run

@@ -133,6 +133,87 @@ func TestPatchGrokResponsesBodyWithClientToolsRejectsTrailingJSONDocument(t *tes
 	require.Empty(t, mapping.CustomTools)
 }
 
+func TestGrokResponsesClientToolAdaptationRequired(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "no tools", body: `{"input":"hello"}`, want: false},
+		{name: "empty tools", body: `{"input":"hello","tools":[]}`, want: false},
+		{name: "function only", body: `{"input":"hello","tools":[{"type":"function","name":"lookup"}]}`, want: false},
+		{name: "custom", body: `{"input":"hello","tools":[{"type":"custom","name":"patch"}]}`, want: true},
+		{name: "tool search", body: `{"input":"hello","tools":[{"type":"tool_search"}]}`, want: true},
+		{name: "namespace", body: `{"input":"hello","tools":[{"type":"namespace","name":"collaboration"}]}`, want: true},
+		{name: "history output", body: `{"tools":[{"type":"function","name":"lookup"}],"input":[{"content":[{"type":"custom_tool_call_output","output":"ok"}]}]}`, want: true},
+		{name: "unicode escaped type", body: `{"input":"hello","tools":[{"\u0074ype":"\u0063ustom","name":"patch"}]}`, want: true},
+	}
+
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
+			require.Equal(t, testCase.want, grokResponsesClientToolAdaptationRequired([]byte(testCase.body)))
+		})
+	}
+}
+
+func TestPatchGrokResponsesBodyOrdinaryLargeImageAvoidsFullMapDecode(t *testing.T) {
+	imageData := strings.Repeat("A", 4<<20)
+	body := []byte(`{"model":"grok","input":[{"role":"user","content":[{"type":"input_image","image_url":"data:image/png;base64,` + imageData + `"}]}],"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"future_extension":1e1000}`)
+
+	patched, mapping, err := patchGrokResponsesBodyWithClientTools(body, "grok-4.5")
+
+	require.NoError(t, err)
+	require.False(t, hasGrokResponsesClientToolMapping(mapping))
+	require.Equal(t, "data:image/png;base64,"+imageData, gjson.GetBytes(patched, "input.0.content.0.image_url").String())
+	require.Equal(t, "1e1000", gjson.GetBytes(patched, "future_extension").Raw)
+}
+
+func TestPatchGrokResponsesBodyNoopAllocationsDoNotScaleWithUnknownPayload(t *testing.T) {
+	const requestPrefix = `{"model":"grok-4.5","input":"hello","tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],"future_extension":[`
+	const requestSuffix = `]}`
+	smallBody := []byte(requestPrefix + `{"value":1}` + requestSuffix)
+
+	var largeExtension strings.Builder
+	for index := 0; index < 256; index++ {
+		if index > 0 {
+			largeExtension.WriteByte(',')
+		}
+		fmt.Fprintf(&largeExtension, `{"index":%d,"nested":{"enabled":true,"label":"unknown"}}`, index)
+	}
+	largeBody := []byte(requestPrefix + largeExtension.String() + requestSuffix)
+
+	measureAllocs := func(body []byte) float64 {
+		t.Helper()
+		patched, mapping, err := patchGrokResponsesBodyWithClientTools(body, "grok-4.5")
+		require.NoError(t, err)
+		require.False(t, hasGrokResponsesClientToolMapping(mapping))
+		require.Equal(t, len(gjson.GetBytes(body, "future_extension").Array()), len(gjson.GetBytes(patched, "future_extension").Array()))
+
+		var measuredBody []byte
+		var measuredErr error
+		return testing.AllocsPerRun(20, func() {
+			measuredBody, _, measuredErr = patchGrokResponsesBodyWithClientTools(body, "grok-4.5")
+			if measuredErr != nil || len(measuredBody) == 0 {
+				panic("unexpected Grok no-op patch failure during allocation measurement")
+			}
+		})
+	}
+
+	smallAllocs := measureAllocs(smallBody)
+	largeAllocs := measureAllocs(largeBody)
+	require.LessOrEqual(
+		t,
+		largeAllocs,
+		smallAllocs+16,
+		"allocations must not grow with semantically irrelevant JSON objects: small=%.0f large=%.0f",
+		smallAllocs,
+		largeAllocs,
+	)
+}
+
 func TestClearGrokResponsesClientToolMappingRemovesStaleContextState(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)

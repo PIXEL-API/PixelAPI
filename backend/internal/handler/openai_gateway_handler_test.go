@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -660,7 +662,7 @@ func TestOpenAIResponses_RejectsMessageIDAsPreviousResponseID(t *testing.T) {
 	require.Contains(t, w.Body.String(), "previous_response_id must be a response.id")
 }
 
-func TestOpenAIResponses_RejectsHTTPContinuationPreviousResponseID(t *testing.T) {
+func TestOpenAIResponses_RejectsUnownedHTTPContinuationPreviousResponseID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	w := httptest.NewRecorder()
@@ -674,6 +676,7 @@ func TestOpenAIResponses_RejectsHTTPContinuationPreviousResponseID(t *testing.T)
 	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 		ID:      101,
 		GroupID: &groupID,
+		Group:   routeTestGroup(groupID),
 		User:    &service.User{ID: 1},
 	})
 	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
@@ -681,12 +684,18 @@ func TestOpenAIResponses_RejectsHTTPContinuationPreviousResponseID(t *testing.T)
 		Concurrency: 1,
 	})
 
+	ownerCache := &openAIWSHandlerOwnerCache{}
+	gatewayService := service.NewOpenAIGatewayService(
+		nil, nil, nil, nil, nil, nil, nil,
+		ownerCache,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
 	h := newOpenAIHandlerForPreviousResponseIDValidation(t, nil)
+	h.gatewayService = gatewayService
 	h.Responses(c)
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.Contains(t, w.Body.String(), "Responses WebSocket v2")
-	require.Contains(t, w.Body.String(), "previous_response_id")
+	require.Contains(t, w.Body.String(), "previous_response_id is not available for this user")
 }
 
 func TestOpenAIResponses_RejectsExplicitImageIntentWhenGroupDisallowsImages(t *testing.T) {
@@ -713,7 +722,7 @@ func TestOpenAIResponses_RejectsExplicitImageIntentWhenGroupDisallowsImages(t *t
 	require.Contains(t, w.Body.String(), service.ImageGenerationPermissionMessage())
 }
 
-func TestOpenAIResponses_FunctionCallOutputHTTPGuidanceDoesNotSuggestPreviousResponseReuse(t *testing.T) {
+func TestOpenAIResponses_FunctionCallOutputHTTPRequiresCallID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	w := httptest.NewRecorder()
@@ -738,8 +747,77 @@ func TestOpenAIResponses_FunctionCallOutputHTTPGuidanceDoesNotSuggestPreviousRes
 	h.Responses(c)
 
 	require.Equal(t, http.StatusBadRequest, w.Code)
-	require.Contains(t, w.Body.String(), "Responses WebSocket v2")
-	require.NotContains(t, w.Body.String(), "reuse previous_response_id")
+	require.Contains(t, w.Body.String(), "function_call_output requires call_id on HTTP requests")
+	require.NotContains(t, w.Body.String(), "only supported on Responses WebSocket v2")
+}
+
+func TestOpenAIResponses_FunctionCallOutputWithPreviousResponseStillRequiresCallID(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", strings.NewReader(
+		`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_prev_123","input":[{"type":"function_call_output","output":"{}"}]}`,
+	))
+	c.Request.Header.Set("Content-Type", "application/json")
+
+	groupID := int64(2)
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		ID:      101,
+		GroupID: &groupID,
+		User:    &service.User{ID: 1},
+	})
+	c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
+		UserID:      1,
+		Concurrency: 1,
+	})
+
+	newOpenAIHandlerForPreviousResponseIDValidation(t, nil).Responses(c)
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Contains(t, w.Body.String(), "function_call_output requires call_id on HTTP requests")
+}
+
+func TestReleaseMismatchedOpenAIHTTPContinuationSelection(t *testing.T) {
+	ownerRoute := service.OpenAIHTTPContinuationRoute{GroupID: 2, AccountID: 701}
+
+	t.Run("mismatch cancels routing and releases selection", func(t *testing.T) {
+		releaseCalls := 0
+		selection := &service.AccountSelectionResult{
+			Account: &service.Account{ID: 702},
+			ReleaseFunc: func() {
+				releaseCalls++
+			},
+		}
+		routingCtx, cancelRouting := context.WithCancel(context.Background())
+
+		rejected := releaseMismatchedOpenAIHTTPContinuationSelection(ownerRoute, selection, cancelRouting)
+
+		require.True(t, rejected)
+		require.ErrorIs(t, routingCtx.Err(), context.Canceled)
+		require.Equal(t, 1, releaseCalls)
+		require.Nil(t, selection.ReleaseFunc)
+	})
+
+	t.Run("matching owner keeps selection active", func(t *testing.T) {
+		releaseCalls := 0
+		cancelCalls := 0
+		selection := &service.AccountSelectionResult{
+			Account: &service.Account{ID: ownerRoute.AccountID},
+			ReleaseFunc: func() {
+				releaseCalls++
+			},
+		}
+
+		rejected := releaseMismatchedOpenAIHTTPContinuationSelection(ownerRoute, selection, func() {
+			cancelCalls++
+		})
+
+		require.False(t, rejected)
+		require.Zero(t, cancelCalls)
+		require.Zero(t, releaseCalls)
+		require.NotNil(t, selection.ReleaseFunc)
+	})
 }
 
 func TestOpenAIResponsesWebSocket_SetsClientTransportWSWhenUpgradeValid(t *testing.T) {
@@ -804,6 +882,247 @@ func TestOpenAIResponsesWebSocket_RejectsMessageIDAsPreviousResponseID(t *testin
 	require.Contains(t, strings.ToLower(closeErr.Reason), "previous_response_id")
 }
 
+type openAIWSHandlerOwnerCache struct {
+	mu             sync.Mutex
+	stringBindings map[string]string
+}
+
+type openAIWSHandlerAccountRepo struct {
+	service.AccountRepository
+	account *service.Account
+	err     error
+}
+
+func (r *openAIWSHandlerAccountRepo) GetByID(_ context.Context, id int64) (*service.Account, error) {
+	if r != nil && r.err != nil {
+		return nil, r.err
+	}
+	if r == nil || r.account == nil || r.account.ID != id {
+		return nil, service.ErrAccountNotFound
+	}
+	copyAccount := *r.account
+	return &copyAccount, nil
+}
+
+func (c *openAIWSHandlerOwnerCache) GetSessionAccountID(context.Context, int64, string) (int64, error) {
+	return 0, service.ErrGatewaySessionStringNotFound
+}
+
+func (c *openAIWSHandlerOwnerCache) SetSessionAccountID(context.Context, int64, string, int64, time.Duration) error {
+	return nil
+}
+
+func (c *openAIWSHandlerOwnerCache) RefreshSessionTTL(context.Context, int64, string, time.Duration) error {
+	return nil
+}
+
+func (c *openAIWSHandlerOwnerCache) DeleteSessionAccountID(context.Context, int64, string) error {
+	return nil
+}
+
+func (c *openAIWSHandlerOwnerCache) GetSessionString(_ context.Context, _ int64, key string) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	value, ok := c.stringBindings[key]
+	if !ok {
+		return "", service.ErrGatewaySessionStringNotFound
+	}
+	return value, nil
+}
+
+func (c *openAIWSHandlerOwnerCache) SetSessionString(_ context.Context, _ int64, key, value string, _ time.Duration) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stringBindings == nil {
+		c.stringBindings = make(map[string]string)
+	}
+	c.stringBindings[key] = value
+	return nil
+}
+
+func (c *openAIWSHandlerOwnerCache) BindSessionStringImmutable(_ context.Context, _ int64, key, value string, _ time.Duration) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stringBindings == nil {
+		c.stringBindings = make(map[string]string)
+	}
+	if stored, ok := c.stringBindings[key]; ok {
+		return stored, nil
+	}
+	c.stringBindings[key] = value
+	return value, nil
+}
+
+func (c *openAIWSHandlerOwnerCache) DeleteSessionString(_ context.Context, _ int64, key string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.stringBindings, key)
+	return nil
+}
+
+func TestOpenAIResponsesWebSocket_V2OwnerOnUnavailableRouteClosesPolicyViolation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	tests := []struct {
+		name   string
+		routes []service.APIKeyGroupRoute
+	}{
+		{name: "owner route removed"},
+		{
+			name: "owner route disabled",
+			routes: []service.APIKeyGroupRoute{{
+				GroupID: 99,
+				Enabled: false,
+				Group:   routeTestGroup(99),
+			}},
+		},
+		{
+			name: "owner group disabled",
+			routes: []service.APIKeyGroupRoute{{
+				GroupID: 99,
+				Enabled: true,
+				Group: &service.Group{
+					ID:       99,
+					Status:   service.StatusDisabled,
+					Platform: service.PlatformOpenAI,
+					Hydrated: true,
+				},
+			}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cache := &openAIWSHandlerOwnerCache{}
+			stateStore := service.NewOpenAIWSStateStore(cache)
+			responseID := "resp_unavailable_owner_route"
+			require.NoError(t, stateStore.BindResponseOwner(context.Background(), 101, 99, responseID, 7001, time.Hour))
+
+			gatewayService := service.NewOpenAIGatewayService(
+				nil, nil, nil, nil, nil, nil, nil,
+				cache,
+				nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+			)
+			h := newOpenAIHandlerForPreviousResponseIDValidation(t, nil)
+			h.gatewayService = gatewayService
+
+			primaryGroupID := int64(2)
+			apiKey := &service.APIKey{
+				ID:          101,
+				GroupID:     &primaryGroupID,
+				Group:       routeTestGroup(primaryGroupID),
+				GroupRoutes: test.routes,
+				User:        &service.User{ID: 1},
+			}
+			router := gin.New()
+			router.Use(func(c *gin.Context) {
+				c.Set(string(middleware.ContextKeyAPIKey), apiKey)
+				c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 1, Concurrency: 1})
+				c.Next()
+			})
+			router.GET("/openai/v1/responses", h.ResponsesWebSocket)
+			wsServer := httptest.NewServer(router)
+			defer wsServer.Close()
+
+			dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+			clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http")+"/openai/v1/responses", nil)
+			cancelDial()
+			require.NoError(t, err)
+			defer func() { _ = clientConn.CloseNow() }()
+
+			writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+			err = clientConn.Write(writeCtx, coderws.MessageText, []byte(
+				`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"`+responseID+`"}`,
+			))
+			cancelWrite()
+			require.NoError(t, err)
+
+			readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+			_, _, err = clientConn.Read(readCtx)
+			cancelRead()
+			require.Error(t, err)
+			var closeErr coderws.CloseError
+			require.ErrorAs(t, err, &closeErr)
+			require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
+			require.Contains(t, strings.ToLower(closeErr.Reason), "start a new conversation")
+		})
+	}
+}
+
+func TestOpenAIResponsesWebSocket_DisabledContinuationOwnerClosesPolicyViolation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(99)
+	apiKeyID := int64(101)
+	accountID := int64(7002)
+	responseID := "resp_disabled_owner"
+	cache := &openAIWSHandlerOwnerCache{}
+	stateStore := service.NewOpenAIWSStateStore(cache)
+	require.NoError(t, stateStore.BindResponseOwner(context.Background(), apiKeyID, groupID, responseID, accountID, time.Hour))
+
+	account := &service.Account{
+		ID:          accountID,
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Status:      service.StatusDisabled,
+		Schedulable: true,
+		Concurrency: 1,
+		GroupIDs:    []int64{groupID},
+	}
+	gatewayService := service.NewOpenAIGatewayService(
+		&openAIWSHandlerAccountRepo{account: account},
+		nil, nil, nil, nil, nil, nil,
+		cache,
+		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	h := newOpenAIHandlerForPreviousResponseIDValidation(t, nil)
+	h.gatewayService = gatewayService
+	billingService := service.NewBillingCacheService(
+		nil, nil, nil, nil, nil, nil,
+		&config.Config{RunMode: config.RunModeSimple},
+	)
+	t.Cleanup(billingService.Stop)
+	h.billingCacheService = billingService
+
+	apiKey := &service.APIKey{
+		ID:      apiKeyID,
+		GroupID: &groupID,
+		Group:   routeTestGroup(groupID),
+		User:    &service.User{ID: 1},
+	}
+	router := gin.New()
+	router.Use(func(c *gin.Context) {
+		c.Set(string(middleware.ContextKeyAPIKey), apiKey)
+		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{UserID: 1, Concurrency: 1})
+		c.Next()
+	})
+	router.GET("/openai/v1/responses", h.ResponsesWebSocket)
+	wsServer := httptest.NewServer(router)
+	defer wsServer.Close()
+
+	dialCtx, cancelDial := context.WithTimeout(context.Background(), 3*time.Second)
+	clientConn, _, err := coderws.Dial(dialCtx, "ws"+strings.TrimPrefix(wsServer.URL, "http")+"/openai/v1/responses", nil)
+	cancelDial()
+	require.NoError(t, err)
+	defer func() { _ = clientConn.CloseNow() }()
+
+	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(
+		`{"type":"response.create","model":"gpt-5.1","stream":false,"previous_response_id":"`+responseID+`"}`,
+	))
+	cancelWrite()
+	require.NoError(t, err)
+
+	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
+	_, _, err = clientConn.Read(readCtx)
+	cancelRead()
+	require.Error(t, err)
+	var closeErr coderws.CloseError
+	require.ErrorAs(t, err, &closeErr)
+	require.Equal(t, coderws.StatusPolicyViolation, closeErr.Code)
+	require.Contains(t, strings.ToLower(closeErr.Reason), "start a new conversation")
+}
+
 func TestOpenAIResponsesWebSocket_PreviousResponseIDKindLoggedBeforeAcquireFailure(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -839,6 +1158,263 @@ func TestOpenAIResponsesWebSocket_PreviousResponseIDKindLoggedBeforeAcquireFailu
 	require.ErrorAs(t, err, &closeErr)
 	require.Equal(t, coderws.StatusInternalError, closeErr.Code)
 	require.Contains(t, strings.ToLower(closeErr.Reason), "failed to acquire user concurrency slot")
+}
+
+func TestCanSwitchOpenAIWSRouteBeforeDispatch(t *testing.T) {
+	newCursor := func(candidateCount int) *apiKeyGroupRouteCursor {
+		candidates := make([]apiKeyGroupRouteCandidate, candidateCount)
+		for i := range candidates {
+			candidates[i].APIKey = &service.APIKey{ID: int64(i + 1)}
+		}
+		return newAPIKeyGroupRouteCursorFromCandidates(candidates, candidateCount > 0)
+	}
+
+	require.True(t, canSwitchOpenAIWSRouteBeforeDispatch(newCursor(2), ""))
+	require.False(t, canSwitchOpenAIWSRouteBeforeDispatch(newCursor(2), "resp_previous"))
+	require.False(t, canSwitchOpenAIWSRouteBeforeDispatch(newCursor(2), "  resp_previous  "))
+	require.False(t, canSwitchOpenAIWSRouteBeforeDispatch(newCursor(1), ""))
+	require.False(t, canSwitchOpenAIWSRouteBeforeDispatch(nil, ""))
+}
+
+func TestSkipOpenAIResponsesRouteForUnsupportedCompact(t *testing.T) {
+	newCursor := func(candidateCount int) *apiKeyGroupRouteCursor {
+		candidates := make([]apiKeyGroupRouteCandidate, candidateCount)
+		for i := range candidates {
+			candidates[i].APIKey = &service.APIKey{ID: int64(i + 1)}
+		}
+		return newAPIKeyGroupRouteCursorFromCandidates(candidates, candidateCount > 0)
+	}
+
+	t.Run("compact capability miss advances without terminating", func(t *testing.T) {
+		cursor := newCursor(2)
+		require.True(t, skipOpenAIResponsesRouteForUnsupportedCompact(cursor, service.ErrNoAvailableCompactAccounts, nil))
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(2), current.APIKey.ID)
+	})
+
+	t.Run("last route preserves compact terminal error", func(t *testing.T) {
+		cursor := newCursor(1)
+		require.False(t, skipOpenAIResponsesRouteForUnsupportedCompact(cursor, service.ErrNoAvailableCompactAccounts, nil))
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(1), current.APIKey.ID)
+	})
+
+	t.Run("other selection errors retain circuit-breaker path", func(t *testing.T) {
+		cursor := newCursor(2)
+		require.False(t, skipOpenAIResponsesRouteForUnsupportedCompact(cursor, service.ErrNoAvailableAccounts, nil))
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(1), current.APIKey.ID)
+	})
+}
+
+func TestSkipOpenAIWSRouteForUnavailableCapacity(t *testing.T) {
+	newCursor := func() *apiKeyGroupRouteCursor {
+		return newAPIKeyGroupRouteCursorFromCandidates([]apiKeyGroupRouteCandidate{
+			{APIKey: &service.APIKey{ID: 1}},
+			{APIKey: &service.APIKey{ID: 2}},
+		}, true)
+	}
+
+	t.Run("fresh request advances to the next route", func(t *testing.T) {
+		cursor := newCursor()
+		selection := &service.AccountSelectionResult{
+			Account:  &service.Account{ID: 101},
+			WaitPlan: &service.AccountWaitPlan{AccountID: 101, MaxConcurrency: 1},
+		}
+
+		require.True(t, skipOpenAIWSRouteForUnavailableCapacity(cursor, "", selection, nil))
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(2), current.APIKey.ID)
+	})
+
+	t.Run("continuation remains pinned", func(t *testing.T) {
+		cursor := newCursor()
+		selection := &service.AccountSelectionResult{
+			Account:  &service.Account{ID: 101},
+			WaitPlan: &service.AccountWaitPlan{AccountID: 101, MaxConcurrency: 1},
+		}
+
+		require.False(t, skipOpenAIWSRouteForUnavailableCapacity(cursor, "resp_previous", selection, nil))
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(1), current.APIKey.ID)
+	})
+
+	t.Run("account-share selection remains pinned", func(t *testing.T) {
+		cursor := newCursor()
+		selection := &service.AccountSelectionResult{
+			Account:          &service.Account{ID: 101},
+			WaitPlan:         &service.AccountWaitPlan{AccountID: 101, MaxConcurrency: 1},
+			AccountShareMode: true,
+		}
+
+		require.False(t, skipOpenAIWSRouteForUnavailableCapacity(cursor, "", selection, nil))
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(1), current.APIKey.ID)
+	})
+
+	t.Run("unacquired selection without wait plan is not treated as capacity", func(t *testing.T) {
+		cursor := newCursor()
+		selection := &service.AccountSelectionResult{Account: &service.Account{ID: 101}}
+
+		require.False(t, skipOpenAIWSRouteForUnavailableCapacity(cursor, "", selection, nil))
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(1), current.APIKey.ID)
+	})
+
+	t.Run("already acquired selection is retained", func(t *testing.T) {
+		cursor := newCursor()
+		released := false
+		selection := &service.AccountSelectionResult{
+			Account:     &service.Account{ID: 101},
+			Acquired:    true,
+			ReleaseFunc: func() { released = true },
+		}
+
+		require.False(t, skipOpenAIWSRouteForUnavailableCapacity(cursor, "", selection, nil))
+		require.False(t, released)
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(1), current.APIKey.ID)
+	})
+}
+
+func TestAcquireResponsesAccountSlotUsesNarrowRetryDisposition(t *testing.T) {
+	newCursor := func() *apiKeyGroupRouteCursor {
+		return newAPIKeyGroupRouteCursorFromCandidates([]apiKeyGroupRouteCandidate{
+			{APIKey: &service.APIKey{ID: 1}},
+			{APIKey: &service.APIKey{ID: 2}},
+		}, true)
+	}
+	newGatewayService := func(repo service.AccountRepository) *service.OpenAIGatewayService {
+		return service.NewOpenAIGatewayService(
+			repo,
+			nil, nil, nil, nil, nil, nil,
+			nil,
+			nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		)
+	}
+	newContext := func() (*gin.Context, *httptest.ResponseRecorder) {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+		return c, recorder
+	}
+
+	t.Run("dispatch-local invalidation releases once and retries same route", func(t *testing.T) {
+		groupID := int64(11)
+		selected := &service.Account{ID: 501, Platform: service.PlatformOpenAI, Status: service.StatusActive, Schedulable: true, GroupIDs: []int64{groupID}}
+		latest := *selected
+		latest.Status = service.StatusDisabled
+		releaseCalls := 0
+		selection := &service.AccountSelectionResult{
+			Account:     selected,
+			Acquired:    true,
+			ReleaseFunc: func() { releaseCalls++ },
+		}
+		cursor := newCursor()
+		c, recorder := newContext()
+		h := &OpenAIGatewayHandler{gatewayService: newGatewayService(&openAIWSHandlerAccountRepo{account: &latest})}
+		streamStarted := false
+
+		account, release, acquired, disposition := h.acquireResponsesAccountSlot(
+			c, c.Request.Context(), &groupID, "", service.OpenAIAccountDispatchRequirements{}, selection, false, &streamStarted, cursor, zap.NewNop(),
+		)
+		require.Nil(t, account)
+		require.Nil(t, release)
+		require.False(t, acquired)
+		require.Equal(t, openAIAccountSlotRetrySameRoute, disposition)
+		require.Equal(t, 1, releaseCalls)
+		require.Empty(t, recorder.Body.String())
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(1), current.APIKey.ID)
+	})
+
+	t.Run("repository error is terminal and does not advance route", func(t *testing.T) {
+		groupID := int64(11)
+		selected := &service.Account{ID: 502, Platform: service.PlatformOpenAI, Status: service.StatusActive, Schedulable: true, GroupIDs: []int64{groupID}}
+		infrastructureErr := errors.New("account repository unavailable")
+		releaseCalls := 0
+		selection := &service.AccountSelectionResult{
+			Account:     selected,
+			Acquired:    true,
+			ReleaseFunc: func() { releaseCalls++ },
+		}
+		cursor := newCursor()
+		c, recorder := newContext()
+		h := &OpenAIGatewayHandler{gatewayService: newGatewayService(&openAIWSHandlerAccountRepo{err: infrastructureErr})}
+		streamStarted := false
+
+		_, _, acquired, disposition := h.acquireResponsesAccountSlot(
+			c, c.Request.Context(), &groupID, "", service.OpenAIAccountDispatchRequirements{}, selection, false, &streamStarted, cursor, zap.NewNop(),
+		)
+		require.False(t, acquired)
+		require.Equal(t, openAIAccountSlotTerminal, disposition)
+		require.Equal(t, 1, releaseCalls)
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(1), current.APIKey.ID)
+	})
+
+	t.Run("explicitly full slot advances to next route", func(t *testing.T) {
+		cache := &concurrencyCacheMock{
+			acquireAccountSlotFn: func(context.Context, int64, int, string) (bool, error) {
+				return false, nil
+			},
+		}
+		cursor := newCursor()
+		c, recorder := newContext()
+		h := &OpenAIGatewayHandler{concurrencyHelper: NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, time.Second)}
+		streamStarted := false
+		selection := &service.AccountSelectionResult{
+			Account:  &service.Account{ID: 503},
+			WaitPlan: &service.AccountWaitPlan{AccountID: 503, MaxConcurrency: 1, Timeout: time.Second, MaxWaiting: 1},
+		}
+
+		_, _, acquired, disposition := h.acquireResponsesAccountSlot(
+			c, c.Request.Context(), nil, "", service.OpenAIAccountDispatchRequirements{}, selection, false, &streamStarted, cursor, zap.NewNop(),
+		)
+		require.False(t, acquired)
+		require.Equal(t, openAIAccountSlotRetryNextRoute, disposition)
+		require.Empty(t, recorder.Body.String())
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(2), current.APIKey.ID)
+	})
+
+	t.Run("slot cache error is terminal and does not advance route", func(t *testing.T) {
+		cache := &concurrencyCacheMock{
+			acquireAccountSlotFn: func(context.Context, int64, int, string) (bool, error) {
+				return false, errors.New("redis unavailable")
+			},
+		}
+		cursor := newCursor()
+		c, recorder := newContext()
+		h := &OpenAIGatewayHandler{concurrencyHelper: NewConcurrencyHelper(service.NewConcurrencyService(cache), SSEPingFormatNone, time.Second)}
+		streamStarted := false
+		selection := &service.AccountSelectionResult{
+			Account:  &service.Account{ID: 504},
+			WaitPlan: &service.AccountWaitPlan{AccountID: 504, MaxConcurrency: 1, Timeout: time.Second, MaxWaiting: 1},
+		}
+
+		_, _, acquired, disposition := h.acquireResponsesAccountSlot(
+			c, c.Request.Context(), nil, "", service.OpenAIAccountDispatchRequirements{}, selection, false, &streamStarted, cursor, zap.NewNop(),
+		)
+		require.False(t, acquired)
+		require.Equal(t, openAIAccountSlotTerminal, disposition)
+		require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+		current, ok := cursor.current()
+		require.True(t, ok)
+		require.Equal(t, int64(1), current.APIKey.ID)
+	})
 }
 
 func TestSetOpenAIClientTransportHTTP(t *testing.T) {

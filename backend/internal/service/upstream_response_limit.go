@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
@@ -87,6 +89,100 @@ func ReadUpstreamResponseBodyWithContext(ctx context.Context, reader io.Reader, 
 		return nil, ctx.Err()
 	}
 	return body, err
+}
+
+type upstreamResponseActivityReader struct {
+	source       io.Reader
+	started      time.Time
+	lastActivity atomic.Int64
+}
+
+func (r *upstreamResponseActivityReader) Read(p []byte) (int, error) {
+	n, err := r.source.Read(p)
+	if n > 0 {
+		r.lastActivity.Store(time.Since(r.started).Nanoseconds())
+	}
+	return n, err
+}
+
+// ReadUpstreamResponseBodyWithIdleTimeout bounds the gap between upstream
+// reads, not the total response duration. ctx independently controls client
+// disconnect draining and account-share lease cancellation.
+func ReadUpstreamResponseBodyWithIdleTimeout(ctx context.Context, reader io.ReadCloser, cfg *config.Config, c *gin.Context, onTooLarge TooLargeWriter, idleTimeout time.Duration) ([]byte, error) {
+	if reader == nil {
+		return nil, errors.New("response body is nil")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		_ = reader.Close()
+		return nil, err
+	}
+	if ctx.Done() == nil && idleTimeout <= 0 {
+		return ReadUpstreamResponseBody(reader, cfg, c, onTooLarge)
+	}
+
+	activity := &upstreamResponseActivityReader{source: reader, started: time.Now()}
+	done := make(chan struct{})
+	watcherDone := make(chan struct{})
+	failure := make(chan error, 1)
+	const (
+		readRunning uint32 = iota
+		readCompleted
+		readInterrupted
+	)
+	var readState atomic.Uint32
+	go func() {
+		defer close(watcherDone)
+		var timer *time.Timer
+		var idle <-chan time.Time
+		if idleTimeout > 0 {
+			timer = time.NewTimer(idleTimeout)
+			idle = timer.C
+			defer timer.Stop()
+		}
+		for {
+			var cause error
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				cause = context.Cause(ctx)
+			case <-idle:
+				remaining := idleTimeout - (time.Since(activity.started) - time.Duration(activity.lastActivity.Load()))
+				if remaining > 0 {
+					timer.Reset(remaining)
+					continue
+				}
+				cause = fmt.Errorf("upstream response idle timeout after %s: %w", idleTimeout, context.DeadlineExceeded)
+			}
+			// Completed reads win over a cancellation/timer that becomes ready
+			// before the watcher observes done. An interrupted EOF must still fail.
+			if !readState.CompareAndSwap(readRunning, readInterrupted) {
+				return
+			}
+			failure <- cause
+			_ = reader.Close()
+			return
+		}
+	}()
+
+	body, err := func() ([]byte, error) {
+		defer func() {
+			readState.CompareAndSwap(readRunning, readCompleted)
+			close(done)
+		}()
+		return ReadUpstreamResponseBody(activity, cfg, c, onTooLarge)
+	}()
+	<-watcherDone
+	select {
+	case cause := <-failure:
+		setOpsUpstreamError(c, http.StatusBadGateway, cause.Error(), "")
+		return nil, cause
+	default:
+		return body, err
+	}
 }
 
 // anthropicTooLargeError 以 Anthropic Messages API 格式写入超限错误。

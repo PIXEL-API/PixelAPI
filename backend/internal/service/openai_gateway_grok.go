@@ -65,7 +65,12 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 	// Resolve against the body xAI will receive so promoted Codex Lite tools
 	// participate in the stable cache prefix.
 	cacheIdentity := resolveGrokCacheIdentity(c, patchedBody, "", upstreamModel)
-	mixedCacheIntentBody := append([]byte(nil), patchedBody...)
+	var mixedCacheIntentBody []byte
+	if cacheIdentity != "" && isKnownGrokFreeAccount(account) {
+		// The transform helpers return new slices rather than mutating their
+		// input, so retaining this read-only view does not require a full clone.
+		mixedCacheIntentBody = patchedBody
+	}
 	patchedBody, err = s.restoreGrokReasoningItems(ctx, account, patchedBody)
 	if err != nil {
 		writeGrokReasoningCompatibilityError(c, err)
@@ -116,6 +121,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}
+		resp.Request = nil
 		if attempt > 0 || resp.StatusCode != http.StatusBadRequest {
 			break
 		}
@@ -182,6 +188,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		return s.handleErrorResponse(ctx, resp, c, account, patchedBody, upstreamModel)
 	}
 
+	reasoningEffort := extractOpenAIReasoningEffortFromBody(patchedBody, upstreamModel, originalModel)
 	s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
 
 	var usage *OpenAIUsage
@@ -224,7 +231,7 @@ func (s *OpenAIGatewayService) forwardGrokResponses(
 		Usage:           *usage,
 		Model:           originalModel,
 		UpstreamModel:   upstreamModel,
-		ReasoningEffort: extractOpenAIReasoningEffortFromBody(patchedBody, upstreamModel, originalModel),
+		ReasoningEffort: reasoningEffort,
 		Stream:          reqStream,
 		OpenAIWSMode:    false,
 		ResponseHeaders: resp.Header.Clone(),
@@ -372,7 +379,10 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletions(
 		return nil, err
 	}
 	cacheIdentity := resolveGrokCacheIdentity(c, patchedBody, "", upstreamModel)
-	mixedCacheIntentBody := append([]byte(nil), patchedBody...)
+	var mixedCacheIntentBody []byte
+	if cacheIdentity != "" && isKnownGrokFreeAccount(account) {
+		mixedCacheIntentBody = patchedBody
+	}
 	patchedBody, err = applyGrokResponsesCacheIdentity(patchedBody, body, cacheIdentity, account.IsGrokOAuth())
 	if err != nil {
 		return nil, fmt.Errorf("apply grok prompt cache identity: %w", err)
@@ -387,6 +397,8 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletions(
 	if err != nil {
 		return nil, fmt.Errorf("apply grok Free function-tool cache route: %w", err)
 	}
+	serviceTier := extractOpenAIServiceTierFromBody(patchedBody)
+	reasoningEffort := extractOpenAIReasoningEffortFromBody(patchedBody, originalModel)
 	setOpsUpstreamRequestBody(c, patchedBody)
 
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -413,6 +425,7 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletions(
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
+	resp.Request = nil
 	defer func() { _ = resp.Body.Close() }()
 
 	if !isOpenAIUpstreamSuccessStatus(resp.StatusCode) {
@@ -481,8 +494,8 @@ func (s *OpenAIGatewayService) forwardGrokChatCompletions(
 	}
 	if handleErr == nil && result != nil {
 		result.UpstreamEndpoint = grokChatResponsesEndpoint
-		result.ServiceTier = extractOpenAIServiceTierFromBody(patchedBody)
-		result.ReasoningEffort = extractOpenAIReasoningEffortFromBody(patchedBody, originalModel)
+		result.ServiceTier = serviceTier
+		result.ReasoningEffort = reasoningEffort
 		result.SearchCount = searchCounter.Count()
 	}
 	return result, handleErr

@@ -120,7 +120,20 @@ func (h *GatewayHandler) ChatCompletions(c *gin.Context) {
 	sessionHash := h.gatewayService.GenerateSessionHash(parsedReq)
 
 	// 3. Account selection + failover loop
-	routeCursor := newAPIKeyGroupRouteCursor(apiKey)
+	routeCursor, _, routeErr := newAPIKeyGroupRouteCursorWithModeIsolation(
+		c.Request.Context(),
+		apiKey,
+		h.gatewayService.IsAccountShareModeGroup,
+		true,
+	)
+	if routeErr != nil {
+		if failoverClientGone(c) {
+			return
+		}
+		reqLog.Error("api_key_group_route.mode_classification_failed", zap.Error(routeErr))
+		h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Account routing service is temporarily unavailable")
+		return
+	}
 	if _, ok := routeCursor.current(); !ok {
 		h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available API key group routes")
 		return
@@ -179,14 +192,42 @@ routeLoop:
 			return
 		}
 		fs := NewFailoverState(h.maxAccountSwitches, false)
+		sessionRejectedAccountIDs := make(map[int64]struct{})
 
 		for {
 			selectionCtx := openAIAccountShareModeRequestContext(c, currentAPIKey)
-			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(selectionCtx, currentAPIKey.GroupID, sessionHash, reqModel, fs.FailedAccountIDs, "", int64(0))
+			selection, err := h.gatewayService.SelectAccountWithLoadAwareness(
+				selectionCtx,
+				currentAPIKey.GroupID,
+				sessionHash,
+				reqModel,
+				mergeAccountExclusionIDs(fs.FailedAccountIDs, sessionRejectedAccountIDs),
+				"",
+				int64(0),
+			)
 			if err != nil {
+				if failoverClientGone(c) {
+					return
+				}
 				if details, handled := classifyAccountShareModeHTTPError(err); handled {
 					applyAccountShareModeRetryAfter(c, details)
 					h.chatCompletionsErrorResponse(c, details.status, details.openAIType, details.message)
+					return
+				}
+				if !errors.Is(err, service.ErrNoAvailableAccounts) {
+					reqLog.Warn("gateway.cc.account_selection_infrastructure_failed", zap.Error(err))
+					h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Account selection is temporarily unavailable")
+					return
+				}
+				if len(sessionRejectedAccountIDs) > 0 {
+					if !streamStarted && routeCursor.skipToNext(
+						"account_session_limit_exhausted",
+						reqLog,
+						zap.Int("rejected_account_count", len(sessionRejectedAccountIDs)),
+					) {
+						continue routeLoop
+					}
+					h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No account session capacity is currently available")
 					return
 				}
 				if len(fs.FailedAccountIDs) == 0 {
@@ -246,12 +287,11 @@ routeLoop:
 					return false
 				}
 				if selection.WaitPlan == nil {
-					if capacityUnavailable("account_slot_no_wait_plan", func() {
-						h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "No available accounts")
-					}) {
-						continue routeLoop
-					}
+					h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Account selection did not provide a concurrency wait plan")
 					return
+				}
+				if !streamStarted && routeCursor.skipToNext("account_slot_unavailable", reqLog, zap.Int64("account_id", account.ID)) {
+					continue routeLoop
 				}
 				accountReleaseFunc, err = h.concurrencyHelper.AcquireAccountSlotWithWaitTimeout(
 					c,
@@ -263,12 +303,43 @@ routeLoop:
 				)
 				if err != nil {
 					reqLog.Warn("gateway.cc.account_slot_acquire_failed", zap.Int64("account_id", account.ID), zap.Error(err))
-					if capacityUnavailable("account_slot_acquire_timeout", func() {
-						h.handleConcurrencyError(c, err, "account", streamStarted)
-					}) {
-						continue routeLoop
+					if failoverClientGone(c) {
+						return
 					}
+					if isAccountSlotCapacityError(err) {
+						if capacityUnavailable("account_slot_acquire_timeout", func() {
+							h.handleConcurrencyError(c, err, "account", streamStarted)
+						}) {
+							continue routeLoop
+						}
+						return
+					}
+					if errors.Is(err, service.ErrOpenAIFirstOutputRoutingBudgetExceeded) {
+						h.handleConcurrencyError(c, err, "account", streamStarted)
+						return
+					}
+					h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Account concurrency service is temporarily unavailable")
 					return
+				}
+				if sessionErr := h.gatewayService.RegisterAccountSessionAfterWait(c.Request.Context(), account, sessionHash); sessionErr != nil {
+					if accountReleaseFunc != nil {
+						accountReleaseFunc()
+						accountReleaseFunc = nil
+					}
+					if failoverClientGone(c) {
+						return
+					}
+					if errors.Is(sessionErr, service.ErrAccountSessionLimitExceeded) {
+						sessionRejectedAccountIDs[account.ID] = struct{}{}
+						reqLog.Info("gateway.cc.account_session_limit_rejected_after_wait", zap.Int64("account_id", account.ID))
+						continue
+					}
+					reqLog.Warn("gateway.cc.account_session_register_after_wait_failed", zap.Int64("account_id", account.ID), zap.Error(sessionErr))
+					h.chatCompletionsErrorResponse(c, http.StatusServiceUnavailable, "api_error", "Account session service is temporarily unavailable")
+					return
+				}
+				if err := h.gatewayService.BindStickySession(c.Request.Context(), currentAPIKey.GroupID, sessionHash, account.ID); err != nil {
+					reqLog.Warn("gateway.cc.bind_sticky_session_after_wait_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}
 			}
 			accountReleaseFunc = wrapAccountSelectionReleaseOnDone(c.Request.Context(), selection, accountReleaseFunc)
