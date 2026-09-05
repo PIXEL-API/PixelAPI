@@ -153,8 +153,13 @@ func main() {
 		log.Fatalf("Invalid command options: %v", err)
 	}
 
+	hasEmbeddedFrontend := web.HasEmbeddedFrontend()
+	if BuildType == "release" && !hasEmbeddedFrontend {
+		log.Fatal("Invalid release build: frontend is missing; build the frontend and rebuild the server with -tags embed")
+	}
+
 	if *showVersion {
-		log.Printf("Sub2API %s (commit: %s, built: %s)\n", Version, Commit, Date)
+		log.Printf("Sub2API %s (commit: %s, built: %s, build type: %s, frontend embedded: %t)\n", Version, Commit, Date, BuildType, hasEmbeddedFrontend)
 		return
 	}
 
