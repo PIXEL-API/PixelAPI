@@ -11,7 +11,7 @@ FRONTEND_CRITICAL_VITEST := \
 	src/components/account/__tests__/EditAccountModal.spec.ts
 
 # 一键编译前后端
-build: build-backend build-frontend
+build: build-frontend build-backend
 
 # 编译后端（复用 backend/Makefile）
 build-backend:
