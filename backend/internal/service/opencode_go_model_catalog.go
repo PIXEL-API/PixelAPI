@@ -16,6 +16,10 @@ type OpencodeGoModelSpec struct {
 	ID         string
 	Protocol   OpencodeGoProtocol
 	Deprecated bool
+	// NoTopP 标记上游模型不支持 top_p 采样参数（如 gpt-5.6-luna）。
+	// 通用 OpenAI 兼容客户端常默认携带 top_p=1，网关需在转发时移除，
+	// 否则上游报 "Unsupported parameter: 'top_p'"。
+	NoTopP bool
 }
 
 // opencodeGoModelCatalog 是 2026-09-07 审核的 OpenCode Go 模型快照：
@@ -55,7 +59,7 @@ var opencodeGoModelCatalog = [...]OpencodeGoModelSpec{
 	{ID: "hy4-preview", Protocol: OpencodeGoProtocolChat},
 	{ID: "hy3", Protocol: OpencodeGoProtocolChat},
 	{ID: "hy3-preview", Protocol: OpencodeGoProtocolChat},
-	{ID: "gpt-5.6-luna", Protocol: OpencodeGoProtocolResponses},
+	{ID: "gpt-5.6-luna", Protocol: OpencodeGoProtocolResponses, NoTopP: true},
 	{ID: "grok-4.5", Protocol: OpencodeGoProtocolResponses, Deprecated: true},
 	{ID: "grok-4.6", Protocol: OpencodeGoProtocolResponses},
 	{ID: "muse-spark-1.2-contributor", Protocol: OpencodeGoProtocolResponses},

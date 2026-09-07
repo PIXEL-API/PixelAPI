@@ -180,6 +180,11 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			return nil, fmt.Errorf("convert chat completions to responses: %w", err)
 		}
 		responsesReq.Model = upstreamModel
+		if opencodeResolved != nil && opencodeResolved.Spec.NoTopP {
+			// 上游模型不支持 top_p（如 gpt-5.6-luna），通用 OpenAI 兼容客户端
+			// 常默认携带 top_p=1，移除避免上游报 "Unsupported parameter: 'top_p'"。
+			responsesReq.TopP = nil
+		}
 		normalizeResponsesRequestServiceTier(responsesReq)
 		responsesBody, err = json.Marshal(responsesReq)
 		if err != nil {

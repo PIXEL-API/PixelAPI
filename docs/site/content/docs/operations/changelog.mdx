@@ -3,6 +3,11 @@ title: 更新日志
 description: 按版本记录 Pixel API 的主要功能更新。
 ---
 
+## v1.2.66
+
+- 修复 gpt-5.6-luna 报 `Unsupported parameter: 'top_p'` 的问题：该模型不支持 top_p 采样参数，网关现在在转发时自动移除该参数。
+- 数据库无新增迁移。
+
 ## v1.2.65
 
 - 修复 OpenCode 分组对通用客户端（Cherry Studio 等）仍报 `missing x-opencode-session` 的问题：网关现在在客户端未携带该头时自动生成会话标识，而不仅是透传。
