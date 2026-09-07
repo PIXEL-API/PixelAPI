@@ -3,6 +3,11 @@ title: 更新日志
 description: 按版本记录 Pixel API 的主要功能更新。
 ---
 
+## v1.2.65
+
+- 修复 OpenCode 分组对通用客户端（Cherry Studio 等）仍报 `missing x-opencode-session` 的问题：网关现在在客户端未携带该头时自动生成会话标识，而不仅是透传。
+- 数据库无新增迁移。
+
 ## v1.2.64
 
 - 补完 OpenCode Go 会话标识 `x-opencode-session` 的透传：Chat Completions 的 Anthropic 桥接路径此前仍会丢弃该请求头导致上游 400，现覆盖全部转发路径。
