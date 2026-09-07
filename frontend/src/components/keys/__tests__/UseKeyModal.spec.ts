@@ -448,8 +448,10 @@ describe('UseKeyModal', () => {
       'gpt-5.6-luna',
       'grok-4.5',
       'grok-4.6',
-      'muse-spark-1.2-contributor'
+      'muse-spark-1.2-contributor',
+      'muse-spark-1.3-contributor'
     ]
+    const omenAlphaModels = ['omen-alpha']
 
     for (const modelId of deepSeekChatModels) {
       expect(provider.models[modelId]).toEqual({
@@ -466,11 +468,17 @@ describe('UseKeyModal', () => {
         provider: { npm: '@ai-sdk/openai' }
       })
     }
+    for (const modelId of omenAlphaModels) {
+      expect(provider.models[modelId]).toEqual({
+        provider: { npm: '@ai-sdk/openai-compatible' }
+      })
+    }
 
     expect(Object.keys(provider.models)).toEqual([
       ...deepSeekChatModels,
       ...messagesModels,
-      ...responsesModels
+      ...responsesModels,
+      ...omenAlphaModels
     ])
     expect(Object.keys(provider.models).every((modelId) => !modelId.startsWith('opencode-go/'))).toBe(true)
     expect(provider.models['deepseek-v4-flash'].provider.npm).not.toBe('@ai-sdk/anthropic')
@@ -535,7 +543,7 @@ describe('UseKeyModal', () => {
     const grokConfig = wrapper.findAll('pre code')
       .map((code) => code.text())
       .find((content) => content.includes('[model."grok"]'))
-    expect(grokConfig).toContain('model = "grok-4.5"')
+    expect(grokConfig).toContain('model = "grok-4.6"')
     expect(grokConfig).toContain('base_url = "https://example.com/v1"')
     expect(grokConfig).toContain('api_key = "sk-grok-test"')
 
@@ -550,6 +558,7 @@ describe('UseKeyModal', () => {
     expect(parsed.provider.grok.name).toBe('Grok')
     expect(parsed.provider.grok.npm).toBe('@ai-sdk/openai')
     expect(parsed.provider.grok.models['grok-4.5']).toBeDefined()
+    expect(parsed.provider.grok.models['grok-4.6']).toBeDefined()
     expect(parsed.provider.grok.models['grok-build-0.1']).toBeDefined()
     expect(parsed.provider.grok.models['gpt-5.6']).toBeUndefined()
   })

@@ -163,7 +163,7 @@ func TestGrokQuotaServiceProbeUsageStoresHeaders(t *testing.T) {
 	require.EqualValues(t, 7, *result.Snapshot.Requests.Remaining)
 	require.Equal(t, "https://cli-chat-proxy.grok.com/v1/responses", probeReq.URL.String())
 	require.Equal(t, "Bearer access-token", probeReq.Header.Get("Authorization"))
-	require.JSONEq(t, `{"model":"grok-4.5","input":"hi","stream":true}`, string(probeBody))
+	require.JSONEq(t, `{"model":"grok-4.6","input":"hi","stream":true}`, string(probeBody))
 	require.Equal(t, "application/json, text/event-stream", probeReq.Header.Get("Accept"))
 	require.NotNil(t, repo.extraValue(42, grokQuotaSnapshotExtraKey))
 }

@@ -54,7 +54,7 @@ type TestEvent struct {
 const (
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
-	defaultGrokTestModel         = "grok-4.5"
+	defaultGrokTestModel         = xai.DefaultTextModel
 	defaultOpencodeTestModel     = "deepseek-v4-flash"
 )
 

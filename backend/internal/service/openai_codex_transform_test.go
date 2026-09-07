@@ -1319,3 +1319,80 @@ func TestFilterCodexInput_PreservesReasoningButStripsID(t *testing.T) {
 		})
 	}
 }
+
+func TestFilterCodexInput_StripsSyntheticOptionalToolCallItemIDs(t *testing.T) {
+	input := []any{
+		map[string]any{
+			"type":    "function_call",
+			"id":      "item_fcf95d6d0e6dbe275f82e448",
+			"call_id": "call_fcf95d6d0e6dbe275f82e448",
+			"name":    "shell",
+		},
+		map[string]any{"type": "custom_tool_call", "id": "item_custom", "call_id": "call_custom", "name": "apply_patch"},
+		map[string]any{"type": "tool_search_call", "id": "item_search", "call_id": "call_search"},
+	}
+
+	filtered := filterCodexInput(input, true)
+	require.Len(t, filtered, 3)
+
+	call, ok := filtered[0].(map[string]any)
+	require.True(t, ok)
+	_, hasCallID := call["id"]
+	require.False(t, hasCallID)
+	require.Equal(t, "fc_fcf95d6d0e6dbe275f82e448", call["call_id"])
+
+	for _, raw := range filtered[1:] {
+		item, ok := raw.(map[string]any)
+		require.True(t, ok)
+		_, hasID := item["id"]
+		require.False(t, hasID)
+	}
+}
+
+func TestFilterCodexInput_DoesNotDeriveCallIDFromSyntheticItemID(t *testing.T) {
+	input := []any{
+		map[string]any{"type": "custom_tool_call", "id": "item_custom", "name": "apply_patch"},
+	}
+
+	filtered := filterCodexInput(input, true)
+	item, ok := filtered[0].(map[string]any)
+	require.True(t, ok)
+	_, hasID := item["id"]
+	_, hasCallID := item["call_id"]
+	require.False(t, hasID)
+	require.False(t, hasCallID)
+}
+
+func TestFilterCodexInput_DropsReferenceToSyntheticToolCallID(t *testing.T) {
+	input := []any{
+		map[string]any{"type": "function_call", "id": "item_fc_1", "call_id": "call_1", "name": "shell"},
+		map[string]any{"type": "item_reference", "id": "item_fc_1"},
+	}
+
+	filtered := filterCodexInput(input, true)
+	require.Len(t, filtered, 1)
+	call, ok := filtered[0].(map[string]any)
+	require.True(t, ok)
+	_, hasID := call["id"]
+	require.False(t, hasID)
+}
+
+func TestFilterCodexInput_PreservesRequiredAndOutputItemIDs(t *testing.T) {
+	input := []any{
+		map[string]any{"type": "local_shell_call", "id": "item_shell"},
+		map[string]any{"type": "mcp_tool_call", "id": "item_mcp", "call_id": "call_mcp"},
+		map[string]any{"type": "function_call_output", "id": "item_output", "call_id": "call_output", "output": "ok"},
+	}
+
+	filtered := filterCodexInput(input, true)
+	require.Len(t, filtered, len(input))
+	for index, raw := range filtered {
+		item, ok := raw.(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, input[index].(map[string]any)["id"], item["id"])
+	}
+	localShell, ok := filtered[0].(map[string]any)
+	require.True(t, ok)
+	_, hasCallID := localShell["call_id"]
+	require.False(t, hasCallID, "local_shell_call has no Responses call_id field")
+}

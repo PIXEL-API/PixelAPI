@@ -445,25 +445,6 @@ func TestOpencodeGoMessagesToChatCapabilityChecks(t *testing.T) {
 			wantDetail: "server-side web search tools",
 		},
 		{
-			name: "thinking configuration",
-			body: []byte(`{
-				"model":"deepseek-v4-flash",
-				"max_tokens":64,
-				"thinking":{"type":"enabled","budget_tokens":1024},
-				"messages":[{"role":"user","content":"hello"}]
-			}`),
-			wantDetail: "thinking configuration",
-		},
-		{
-			name: "nested cache control",
-			body: []byte(`{
-				"model":"deepseek-v4-flash",
-				"max_tokens":64,
-				"messages":[{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]}]
-			}`),
-			wantDetail: "cache_control",
-		},
-		{
 			name: "document content block",
 			body: []byte(`{
 				"model":"deepseek-v4-flash",
@@ -471,25 +452,6 @@ func TestOpencodeGoMessagesToChatCapabilityChecks(t *testing.T) {
 				"messages":[{"role":"user","content":[{"type":"document","source":{"type":"base64","media_type":"application/pdf","data":"AA=="}}]}]
 			}`),
 			wantDetail: `content block type "document"`,
-		},
-		{
-			name: "stop sequences",
-			body: []byte(`{
-				"model":"deepseek-v4-flash",
-				"max_tokens":64,
-				"stop_sequences":["END"],
-				"messages":[{"role":"user","content":"hello"}]
-			}`),
-			wantDetail: "stop_sequences",
-		},
-		{
-			name: "historical thinking block",
-			body: []byte(`{
-				"model":"deepseek-v4-flash",
-				"max_tokens":64,
-				"messages":[{"role":"assistant","content":[{"type":"thinking","thinking":"private"}]},{"role":"user","content":"continue"}]
-			}`),
-			wantDetail: `content block type "thinking"`,
 		},
 	}
 
@@ -522,6 +484,27 @@ func TestOpencodeGoMessagesToChatCapabilityChecks(t *testing.T) {
 		"tools":[{"name":"lookup","description":"look up a value","input_schema":{"type":"object","properties":{"id":{"type":"string"},"cache_control":{"type":"string"}}}}]
 	}`)
 	require.NoError(t, validateOpencodeMessagesToChatBridge(standardFunctionBody, resolved), "standard Anthropic function tools and business schema fields named cache_control must remain bridgeable")
+
+	compatibilityBody := []byte(`{
+		"model":"deepseek-v4-flash",
+		"max_tokens":128,
+		"metadata":{"user_id":"claude-code-user"},
+		"thinking":{"type":"enabled","budget_tokens":4096},
+		"stop_sequences":["END"],
+		"system":[{"type":"text","text":"You are helpful.","cache_control":{"type":"ephemeral"}}],
+		"messages":[
+			{"role":"assistant","content":[{"type":"thinking","thinking":"private"},{"type":"text","text":"previous answer"}]},
+			{"role":"user","content":[{"type":"text","text":"continue","cache_control":{"type":"ephemeral"}}]}
+		],
+		"tools":[{"name":"lookup","description":"look up a value","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral"}}]
+	}`)
+	require.NoError(t, validateOpencodeMessagesToChatBridge(compatibilityBody, resolved), "Claude Code compatibility fields must be accepted by the Chat bridge")
+	var req apicompat.AnthropicRequest
+	require.NoError(t, json.Unmarshal(compatibilityBody, &req))
+	converted, err := AnthropicToChatCompletionsRequest(&req)
+	require.NoError(t, err)
+	require.Equal(t, "medium", converted.ReasoningEffort)
+	require.JSONEq(t, `["END"]`, string(converted.Stop))
 }
 
 func TestOpencodeGoChatToResponsesCapabilityChecks(t *testing.T) {
@@ -866,6 +849,7 @@ func TestOpencodeGoNativeResponsesUsesFixedEndpointBearerAndFinalMappedSlug(t *t
 		"metadata":{"trace":"preserve-me"}
 	}`)
 	c, recorder := newOpencodeGoGatewayContext(http.MethodPost, "/v1/responses", body)
+	c.Request.Header.Set("x-opencode-session", "responses-session-1")
 
 	result, err := service.Forward(context.Background(), c, account, body)
 
@@ -883,6 +867,7 @@ func TestOpencodeGoNativeResponsesUsesFixedEndpointBearerAndFinalMappedSlug(t *t
 	require.Equal(t, "Bearer opencode-go-test-key", upstream.req.Header.Get("Authorization"))
 	require.Empty(t, upstream.req.Header.Get("x-api-key"))
 	require.Equal(t, "application/json", upstream.req.Header.Get("Content-Type"))
+	require.Equal(t, "responses-session-1", upstream.req.Header.Get("x-opencode-session"))
 	require.JSONEq(t, `{
 		"model":"grok-4.6",
 		"input":[{
@@ -1066,6 +1051,7 @@ func TestOpencodeGoNativeChatUsesResolvedAliasBearerAndFixedEndpoint(t *testing.
 		"stream":false
 	}`)
 	c, recorder := newOpencodeGoGatewayContext(http.MethodPost, "/v1/chat/completions", body)
+	c.Request.Header.Set("x-opencode-session", "chat-session-1")
 
 	result, err := service.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
 
@@ -1084,6 +1070,7 @@ func TestOpencodeGoNativeChatUsesResolvedAliasBearerAndFixedEndpoint(t *testing.
 	require.Empty(t, upstream.req.Header.Get("x-api-key"))
 	require.Empty(t, upstream.req.Header.Get("anthropic-version"))
 	require.Equal(t, "application/json", upstream.req.Header.Get("Content-Type"))
+	require.Equal(t, "chat-session-1", upstream.req.Header.Get("x-opencode-session"))
 	require.Equal(t, "deepseek-v4-flash", gjson.GetBytes(upstream.body, "model").String())
 	require.Equal(t, "client-chat-alias", result.Model)
 	require.Equal(t, "opencode-go/deepseek-v4-flash[1m]", result.BillingModel)
@@ -1115,6 +1102,7 @@ func TestOpencodeGoNativeMessagesUsesResolvedAliasAPIKeyAndFixedEndpoint(t *test
 		"stream":false
 	}`)
 	c, recorder := newOpencodeGoGatewayContext(http.MethodPost, "/v1/messages", body)
+	c.Request.Header.Set("x-opencode-session", "messages-session-1")
 
 	result, err := service.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
 
@@ -1133,6 +1121,7 @@ func TestOpencodeGoNativeMessagesUsesResolvedAliasAPIKeyAndFixedEndpoint(t *test
 	require.Equal(t, "opencode-go-test-key", upstream.req.Header.Get("x-api-key"))
 	require.Equal(t, "2023-06-01", upstream.req.Header.Get("anthropic-version"))
 	require.Equal(t, "application/json", upstream.req.Header.Get("Content-Type"))
+	require.Equal(t, "messages-session-1", upstream.req.Header.Get("x-opencode-session"))
 	require.Equal(t, "qwen3.8-flash", gjson.GetBytes(upstream.body, "model").String())
 	require.Equal(t, "client-messages-alias", result.Model)
 	require.Equal(t, "opencode-go/qwen3.8-flash[1m]", result.BillingModel)
@@ -1405,11 +1394,6 @@ func TestOpencodeGoMessagesBridgeStrictCapabilityValidators(t *testing.T) {
 		body       string
 		wantDetail string
 	}{
-		{
-			name:       "non empty metadata",
-			body:       `{"model":"bridge-model","max_tokens":64,"metadata":{"user_id":"user-1"},"messages":[{"role":"user","content":"hello"}]}`,
-			wantDetail: `field "metadata"`,
-		},
 		{
 			name:       "non empty top k",
 			body:       `{"model":"bridge-model","max_tokens":64,"top_k":40,"messages":[{"role":"user","content":"hello"}]}`,

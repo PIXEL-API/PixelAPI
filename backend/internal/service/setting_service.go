@@ -1971,7 +1971,7 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	// Grok runtime model mapping
 	updates[SettingKeyGrokDefaultTextModel] = strings.TrimSpace(settings.GrokDefaultTextModel)
 	if updates[SettingKeyGrokDefaultTextModel] == "" {
-		updates[SettingKeyGrokDefaultTextModel] = "grok-4.5"
+		updates[SettingKeyGrokDefaultTextModel] = "grok-4.6"
 	}
 	updates[SettingKeyGrokCrossClientModelMapEnabled] = strconv.FormatBool(settings.GrokCrossClientModelMapEnabled)
 
@@ -3044,7 +3044,7 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIAccountLevels:    mustMarshalOpenAIAccountLevelConfigs(DefaultOpenAIAccountLevelConfigs()),
 
 		// Grok runtime model mapping defaults
-		SettingKeyGrokDefaultTextModel:           "grok-4.5",
+		SettingKeyGrokDefaultTextModel:           "grok-4.6",
 		SettingKeyGrokCrossClientModelMapEnabled: "true",
 
 		// Affiliate (邀请返利) feature (default disabled; opt-in)
@@ -3475,7 +3475,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	// Grok runtime model mapping
 	result.GrokDefaultTextModel = strings.TrimSpace(settings[SettingKeyGrokDefaultTextModel])
 	if result.GrokDefaultTextModel == "" {
-		result.GrokDefaultTextModel = "grok-4.5"
+		result.GrokDefaultTextModel = "grok-4.6"
 	}
 	result.GrokCrossClientModelMapEnabled = !isFalseSettingValue(settings[SettingKeyGrokCrossClientModelMapEnabled])
 

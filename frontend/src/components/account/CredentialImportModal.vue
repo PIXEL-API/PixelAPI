@@ -190,6 +190,15 @@
           <div class="text-sm font-medium text-red-600 dark:text-red-400">
             {{ t('userAccounts.importErrors') }}
           </div>
+          <div class="mt-2 flex flex-wrap gap-2 text-xs text-gray-600 dark:text-dark-300">
+            <span
+              v-for="item in errorSummary"
+              :key="item.message"
+              class="rounded-full bg-red-50 px-2 py-1 dark:bg-red-950/30"
+            >
+              {{ item.message }} <span class="font-semibold">×{{ item.count }}</span>
+            </span>
+          </div>
           <div class="mt-2 max-h-48 overflow-auto rounded-lg bg-gray-50 p-3 font-mono text-xs dark:bg-dark-800">
             <div
               v-for="(item, idx) in result.errors"
@@ -215,7 +224,7 @@
           :disabled="importing || submitDisabled"
         >
           <Icon v-if="!importing" name="upload" size="sm" class="mr-2" />
-          {{ importing ? t('userAccounts.importing') : t('userAccounts.importButton') }}
+          {{ importing ? importingStatusText : t('userAccounts.importButton') }}
         </button>
       </div>
     </template>
@@ -223,7 +232,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
@@ -296,6 +305,8 @@ const openAIOAuthJSONExample = `{
 }`
 
 const importing = ref(false)
+const importingElapsedSeconds = ref(0)
+let importingTimer: ReturnType<typeof setInterval> | undefined
 const importMode = ref<'text' | 'file'>('text')
 const textContent = ref('')
 const files = ref<File[]>([])
@@ -307,6 +318,19 @@ const selectedFilesText = computed(() => {
   if (files.value.length === 0) return ''
   if (files.value.length === 1) return files.value[0]?.name || ''
   return t('userAccounts.importSelectedFiles', { count: files.value.length })
+})
+
+const importingStatusText = computed(() => {
+  return `${t('userAccounts.importing')} (${importingElapsedSeconds.value}s)`
+})
+
+const errorSummary = computed(() => {
+  const counts = new Map<string, number>()
+  for (const item of result.value?.errors ?? []) {
+    const key = item.message.trim() || t('userAccounts.importFailed')
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return Array.from(counts, ([message, count]) => ({ message, count }))
 })
 
 watch(
@@ -338,6 +362,21 @@ function openDirectoryPicker(): void {
 function handleClose(): void {
   if (importing.value) return
   emit('close')
+}
+
+function startImportTimer(): void {
+  importingElapsedSeconds.value = 0
+  if (importingTimer) clearInterval(importingTimer)
+  importingTimer = setInterval(() => {
+    importingElapsedSeconds.value += 1
+  }, 1000)
+}
+
+function stopImportTimer(): void {
+  if (importingTimer) {
+    clearInterval(importingTimer)
+    importingTimer = undefined
+  }
 }
 
 function handleFileChange(event: Event): void {
@@ -377,6 +416,7 @@ async function readFileAsText(sourceFile: File): Promise<string> {
 
 async function handleImport(): Promise<void> {
   importing.value = true
+  startImportTimer()
   const nextResult: CredentialImportResult = {
     created: 0,
     updated: 0,
@@ -424,6 +464,7 @@ async function handleImport(): Promise<void> {
 
     nextResult.created += response.created
     nextResult.updated += response.updated ?? 0
+    nextResult.skipped += response.skipped ?? 0
     nextResult.failed += response.failed
     nextResult.errors.push(
       ...(response.errors ?? []).map((item) => ({
@@ -456,7 +497,10 @@ async function handleImport(): Promise<void> {
   } catch (error: any) {
     appStore.showError(error?.response?.data?.message || error?.response?.data?.detail || error?.message || t('userAccounts.importFailed'))
   } finally {
+    stopImportTimer()
     importing.value = false
   }
 }
+
+onBeforeUnmount(stopImportTimer)
 </script>

@@ -82,6 +82,12 @@ func AnthropicToChatCompletionsRequest(req *apicompat.AnthropicRequest) (*apicom
 		out.MaxCompletionTokens = &v
 	}
 
+	// Anthropic stop_sequences has the same semantics as Chat Completions stop.
+	// Keep the array form because Chat accepts either one string or an array.
+	if len(req.StopSeqs) > 0 {
+		out.Stop, _ = json.Marshal(req.StopSeqs)
+	}
+
 	// Tools: Anthropic input_schema is a JSON Schema, directly usable as Chat
 	// function parameters. Server tools (web_search_*) have no Chat Completions
 	// equivalent and are dropped (mirrors responsesToolsToChatTools).
@@ -106,6 +112,8 @@ func AnthropicToChatCompletionsRequest(req *apicompat.AnthropicRequest) (*apicom
 	// Omitting the field preserves the selected Chat model's own default.
 	if req.OutputConfig != nil && req.OutputConfig.Effort != "" {
 		out.ReasoningEffort = mapAnthropicEffortToResponses(req.OutputConfig.Effort)
+	} else if req.Thinking != nil {
+		out.ReasoningEffort = mapAnthropicThinkingToChatEffort(req.Thinking)
 	}
 
 	return out, nil
@@ -973,6 +981,20 @@ func mapAnthropicEffortToResponses(effort string) string {
 		return "xhigh"
 	}
 	return effort
+}
+
+func mapAnthropicThinkingToChatEffort(thinking *apicompat.AnthropicThinking) string {
+	if thinking == nil || thinking.Type == "disabled" {
+		return ""
+	}
+	switch {
+	case thinking.BudgetTokens > 0 && thinking.BudgetTokens <= 2048:
+		return "low"
+	case thinking.BudgetTokens > 0 && thinking.BudgetTokens <= 8192:
+		return "medium"
+	default:
+		return "high"
+	}
 }
 
 func isReasoningModel(model string) bool {

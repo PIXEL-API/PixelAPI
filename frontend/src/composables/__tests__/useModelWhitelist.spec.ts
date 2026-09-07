@@ -48,9 +48,9 @@ describe('useModelWhitelist', () => {
     const mappings = getPresetMappingsByPlatform('grok')
 
     expect(mappings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ from: 'grok-latest', to: 'grok-4.5' }),
+      expect.objectContaining({ from: 'grok-latest', to: 'grok-4.6' }),
       expect.objectContaining({ from: 'grok-4.5-latest', to: 'grok-4.5' }),
-      expect.objectContaining({ from: 'grok-build-latest', to: 'grok-4.5' })
+      expect.objectContaining({ from: 'grok-build-latest', to: 'grok-build-0.1' })
     ]))
   })
 
@@ -81,7 +81,7 @@ describe('useModelWhitelist', () => {
     expect(getPresetMappingsByPlatform('xai')).toEqual(getPresetMappingsByPlatform('grok'))
   })
 
-  it('opencode 模型列表与后端受审核的 33 项目录精确一致', () => {
+  it('opencode 模型列表与后端受审核的 35 项目录精确一致', () => {
     expect(getModelsByPlatform('opencode')).toEqual([
       'minimax-m3', 'minimax-m2.7', 'minimax-m2.5',
       'kimi-k3', 'kimi-k2.7-code', 'kimi-k2.6', 'longcat-2.0', 'kimi-k2.5',
@@ -90,7 +90,8 @@ describe('useModelWhitelist', () => {
       'qwen3.7-max', 'qwen3.8-max', 'qwen3.8-flash', 'qwen3.7-plus', 'qwen3.6-plus', 'qwen3.5-plus',
       'mimo-v2-pro', 'mimo-v2-omni', 'mimo-v2.5-pro', 'mimo-v2.5',
       'hy4-preview', 'hy3', 'hy3-preview',
-      'gpt-5.6-luna', 'grok-4.5', 'grok-4.6', 'muse-spark-1.2-contributor'
+      'gpt-5.6-luna', 'grok-4.5', 'grok-4.6', 'muse-spark-1.2-contributor',
+      'muse-spark-1.3-contributor', 'omen-alpha'
     ])
   })
 

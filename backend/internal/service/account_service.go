@@ -4404,18 +4404,27 @@ func (s *AccountService) resolveOwnedPublicShareGroup(ctx context.Context, accou
 				"account_level": accountLevel,
 			})
 		}
+		var genericGroup *Group
 		for i := range groups {
 			group := groups[i]
-			if NormalizeRequiredAccountLevel(group.RequiredAccountLevel) != accountLevel {
+			requiredLevel := NormalizeRequiredAccountLevel(group.RequiredAccountLevel)
+			if requiredLevel != "" && requiredLevel != accountLevel {
 				continue
 			}
 			eligible, err := s.isOwnedPublicSharePoolGroup(ctx, &group, platform)
 			if err != nil {
 				return nil, err
 			}
-			if eligible {
+			if eligible && requiredLevel == accountLevel {
 				return &group, nil
 			}
+			if eligible && genericGroup == nil {
+				candidate := group
+				genericGroup = &candidate
+			}
+		}
+		if genericGroup != nil {
+			return genericGroup, nil
 		}
 		return nil, ErrOwnedAccountPublicPoolUnavailable.WithMetadata(map[string]string{
 			"platform":      platform,

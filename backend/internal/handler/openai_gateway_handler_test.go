@@ -850,6 +850,25 @@ func TestOpenAIResponsesWebSocket_InvalidUpgradeDoesNotSetTransport(t *testing.T
 	require.Equal(t, service.OpenAIClientTransportUnknown, service.GetOpenAIClientTransport(c))
 }
 
+func TestOpenAIResponsesWebSocket_RejectsGrokBeforeUpgrade(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/openai/v1/responses", nil)
+	c.Request.Header.Set("Upgrade", "websocket")
+	c.Request.Header.Set("Connection", "Upgrade")
+	c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{Platform: service.PlatformGrok},
+	})
+
+	h := &OpenAIGatewayHandler{}
+	h.ResponsesWebSocket(c)
+
+	require.Equal(t, http.StatusNotImplemented, w.Code)
+	require.Contains(t, w.Body.String(), "Grok Responses WebSocket")
+}
+
 func TestOpenAIResponsesWebSocket_RejectsMessageIDAsPreviousResponseID(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

@@ -21,7 +21,7 @@ import (
 const (
 	grokUpstreamUserAgent        = "sub2api-grok/1.0"
 	grokCLIVersion               = xai.CLIClientVersion
-	grokDefaultResponsesModel    = "grok-4.5"
+	grokDefaultResponsesModel    = xai.DefaultTextModel
 	grok45DefaultReasoningEffort = "high"
 )
 
@@ -547,8 +547,19 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
-	for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier"} {
+	for _, unsupportedField := range []string{"prompt_cache_retention", "safety_identifier", "metadata"} {
 		if gjson.GetBytes(out, unsupportedField).Exists() {
+			out, err = sjson.DeleteBytes(out, unsupportedField)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if grokModelRejectsLogprobs(upstreamModel) {
+		for _, unsupportedField := range []string{"logprobs", "top_logprobs"} {
+			if !gjson.GetBytes(out, unsupportedField).Exists() {
+				continue
+			}
 			out, err = sjson.DeleteBytes(out, unsupportedField)
 			if err != nil {
 				return nil, err
@@ -567,6 +578,10 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+	out, err = sanitizeGrokResponsesModelInput(out)
+	if err != nil {
+		return nil, err
+	}
 	out, err = sanitizeGrokReasoningNullContent(out)
 	if err != nil {
 		return nil, err
@@ -576,6 +591,12 @@ func patchGrokResponsesBodyBase(body []byte, upstreamModel string) ([]byte, erro
 		return nil, err
 	}
 	return out, nil
+}
+
+// Grok 4.20 models reject OpenAI's logprobs fields. Remove them before
+// upstream forwarding so compatible clients can still send optional fields.
+func grokModelRejectsLogprobs(model string) bool {
+	return strings.HasPrefix(normalizeGrokModelID(model), "grok-4.20")
 }
 
 func sanitizeGrokResponsesModelCapabilities(body []byte, upstreamModel string) ([]byte, error) {
@@ -661,6 +682,17 @@ func isGrok45Model(model string) bool {
 }
 
 func isGrok46Model(model string) bool {
+	switch normalizeGrokModelID(model) {
+	case "grok-4.6", "grok-4.6-latest":
+		return true
+	default:
+		return false
+	}
+}
+
+// GrokSupportsXHighReasoningEffort reports whether xhigh is a valid native
+// reasoning effort for the model advertised by the Grok model list.
+func GrokSupportsXHighReasoningEffort(model string) bool {
 	switch normalizeGrokModelID(model) {
 	case "grok-4.6", "grok-4.6-latest":
 		return true

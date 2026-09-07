@@ -1,11 +1,13 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -16,6 +18,9 @@ const (
 	DefaultUserAccountCredentialImportLimit = 100
 	MinUserAccountCredentialImportLimit     = 1
 	MaxUserAccountCredentialImportLimit     = MaxAccountCredentialImportItems
+	// AccountCredentialImportParallel bounds validation and persistence work
+	// performed by a single large import request.
+	accountCredentialImportParallel = 6
 )
 
 const codexManagerOpenAIIssuer = "https://auth.openai.com"
@@ -41,7 +46,7 @@ const (
 	AccountCredentialImportKindClaudeSessionKey          AccountCredentialImportKind = "claude_session_key"
 	AccountCredentialImportKindOpenAIAgentIdentity       AccountCredentialImportKind = "openai_agent_identity"
 	AccountCredentialImportKindOpenAIPersonalAccessToken AccountCredentialImportKind = "openai_personal_access_token"
-	AccountCredentialImportKindOpencodeAPIKey           AccountCredentialImportKind = "opencode_api_key"
+	AccountCredentialImportKindOpencodeAPIKey            AccountCredentialImportKind = "opencode_api_key"
 )
 
 type AccountCredentialImportSource struct {
@@ -68,6 +73,114 @@ type AccountCredentialImportResult struct {
 	Updated int                            `json:"updated"`
 	Failed  int                            `json:"failed"`
 	Errors  []AccountCredentialImportError `json:"errors"`
+}
+
+// AccountCredentialImportProcessor executes one parsed source. The sequence
+// argument is stable (one-based) and must be used for deterministic generated
+// names and error reporting.
+type AccountCredentialImportProcessor func(ctx context.Context, source AccountCredentialImportSource, sequence int) (created, updated bool, err error)
+
+// ProcessAccountCredentialImport runs source processing with bounded
+// concurrency while preserving source order in the aggregated result. Parse
+// errors are included in the result before item errors, matching the legacy
+// synchronous response contract. Cancellation stops scheduling new work;
+// already running processors are allowed to observe the same context and their
+// completed outcomes are retained.
+func ProcessAccountCredentialImport(
+	ctx context.Context,
+	sources []AccountCredentialImportSource,
+	parseErrors []AccountCredentialImportError,
+	processor AccountCredentialImportProcessor,
+) AccountCredentialImportResult {
+	result := AccountCredentialImportResult{
+		Total:  len(sources) + len(parseErrors),
+		Errors: make([]AccountCredentialImportError, 0, len(parseErrors)),
+	}
+	result.Errors = append(result.Errors, parseErrors...)
+	if len(sources) == 0 {
+		result.Failed = len(parseErrors)
+		return result
+	}
+	if processor == nil {
+		result.Failed = result.Total
+		for idx, source := range sources {
+			result.Errors = append(result.Errors, AccountCredentialImportError{
+				Index:   len(parseErrors) + idx + 1,
+				Kind:    string(source.Kind),
+				Name:    source.Name,
+				Message: "credential import processor is unavailable",
+			})
+		}
+		return result
+	}
+
+	type itemResult struct {
+		created bool
+		updated bool
+		err     error
+		done    bool
+	}
+	items := make([]itemResult, len(sources))
+	parallel := accountCredentialImportParallel
+	if parallel > len(sources) {
+		parallel = len(sources)
+	}
+	jobs := make(chan int)
+	var wg sync.WaitGroup
+	for worker := 0; worker < parallel; worker++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range jobs {
+				created, updated, err := processor(ctx, sources[idx], idx+1)
+				items[idx] = itemResult{created: created, updated: updated, err: err, done: true}
+			}
+		}()
+	}
+
+	// Scheduling remains serial and checks cancellation before each new item.
+	// This avoids starting another upstream exchange after the request has been
+	// canceled while allowing in-flight work to finish and report its outcome.
+schedule:
+	for idx := range sources {
+		if err := ctx.Err(); err != nil {
+			break schedule
+		}
+		select {
+		case jobs <- idx:
+		case <-ctx.Done():
+			break schedule // workers retain completed outcomes
+		}
+	}
+	close(jobs)
+	wg.Wait()
+
+	result.Failed = len(parseErrors)
+	for idx, source := range sources {
+		item := items[idx]
+		if !item.done {
+			item.err = ctx.Err()
+			if item.err == nil {
+				item.err = context.Canceled
+			}
+		}
+		if item.err != nil {
+			result.Failed++
+			result.Errors = append(result.Errors, AccountCredentialImportError{
+				Index:   len(parseErrors) + idx + 1,
+				Kind:    string(source.Kind),
+				Name:    source.Name,
+				Message: item.err.Error(),
+			})
+			continue
+		}
+		if item.updated {
+			result.Updated++
+		} else if item.created {
+			result.Created++
+		}
+	}
+	return result
 }
 
 func ParseAccountCredentialImportContents(contents []string) ([]AccountCredentialImportSource, []AccountCredentialImportError) {

@@ -28,6 +28,23 @@ import type {
 } from '@/types'
 
 const USER_ACCOUNT_BULK_OPERATION_TIMEOUT_MS = 120000
+// Credential validation may perform several upstream requests per item. Keep the
+// request alive long enough for controlled-concurrency imports while still
+// bounding an accidentally huge payload.
+// A single content entry can itself contain an accounts array, so the caller
+// cannot reliably estimate item count from `contents.length`. Keep a five
+// minute floor for that case; the upper bound still prevents an unbounded wait.
+const CREDENTIAL_IMPORT_TIMEOUT_BASE_MS = 300000
+const CREDENTIAL_IMPORT_TIMEOUT_PER_ITEM_MS = 5000
+const CREDENTIAL_IMPORT_TIMEOUT_MAX_MS = 900000
+
+export function credentialImportTimeoutMs(itemCount: number): number {
+  const count = Number.isFinite(itemCount) ? Math.max(1, Math.floor(itemCount)) : 1
+  return Math.min(
+    CREDENTIAL_IMPORT_TIMEOUT_MAX_MS,
+    Math.max(CREDENTIAL_IMPORT_TIMEOUT_BASE_MS, count * CREDENTIAL_IMPORT_TIMEOUT_PER_ITEM_MS)
+  )
+}
 const GOOGLE_OAUTH_EXCHANGE_TIMEOUT_MS = 120000
 
 export type UserContentModerationMode = 'observe' | 'pre_block'
@@ -189,6 +206,7 @@ export interface ImportCredentialContentsResponse {
   total: number
   created: number
   updated?: number
+  skipped?: number
   failed: number
   errors: ImportCredentialError[]
 }
@@ -198,7 +216,8 @@ export async function importCredentialContents(
 ): Promise<ImportCredentialContentsResponse> {
   const { data } = await apiClient.post<ImportCredentialContentsResponse>(
     '/accounts/import-credentials',
-    request
+    request,
+    { timeout: credentialImportTimeoutMs(request.contents.length) }
   )
   return data
 }

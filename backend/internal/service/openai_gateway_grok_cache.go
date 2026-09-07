@@ -114,11 +114,11 @@ func explicitGrokCacheSeed(c *gin.Context, body []byte, explicitKey string) stri
 	if seed == "" {
 		seed = explicitOpenAIHeaderSessionID(c)
 	}
-	if seed == "" && c != nil {
-		seed = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
-	}
 	if seed == "" && len(body) > 0 {
 		seed = strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String())
+	}
+	if seed == "" && c != nil {
+		seed = strings.TrimSpace(c.GetHeader(grokConversationIDHeader))
 	}
 	if seed == "" {
 		seed = strings.TrimSpace(explicitKey)

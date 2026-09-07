@@ -13,6 +13,7 @@ import (
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	coderws "github.com/coder/websocket"
@@ -248,7 +249,7 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 	}
 	model := strings.TrimSpace(c.Query("model"))
 	if model == "" {
-		model = "grok-voice-latest"
+		model = xai.DefaultVoiceModel
 	}
 	maxSwitches := h.maxAccountSwitches
 	if maxSwitches <= 0 {
@@ -260,7 +261,7 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 				requestCtx,
 				apiKey.GroupID,
 				"",
-				"grok-4.5",
+				model,
 				failedAccountIDs,
 				"",
 			)
@@ -273,7 +274,7 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 				apiKey.GroupID,
 				"",
 				service.OpenAIAccountDispatchRequirements{
-					RequestedModel:             "grok-4.5",
+					RequestedModel:             model,
 					RequiredTransport:          service.OpenAIUpstreamTransportHTTPSSE,
 					RequiredEndpointCapability: "",
 					RequiredPlatform:           service.PlatformGrok,
@@ -325,7 +326,11 @@ func (h *OpenAIGatewayHandler) GrokRealtime(c *gin.Context) {
 	defer func() { _ = client.CloseNow() }()
 
 	started := time.Now()
-	audioObserved, proxyErr := h.gatewayService.ProxyGrokRealtime(requestCtx, client, account, token, model)
+	upstreamModel := account.GetMappedModel(model)
+	if strings.TrimSpace(upstreamModel) == "" {
+		upstreamModel = model
+	}
+	audioObserved, proxyErr := h.gatewayService.ProxyGrokRealtime(requestCtx, client, account, token, upstreamModel)
 	elapsed := time.Since(started)
 	if proxyErr != nil {
 		reqLog.Info("grok_realtime.proxy_failed", zap.Error(proxyErr))

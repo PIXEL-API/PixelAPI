@@ -80,6 +80,7 @@ var openaiAllowedHeaders = map[string]bool{
 	"x-codex-turn-state":      true,
 	"x-codex-turn-metadata":   true,
 	"x-codex-window-id":       true,
+	"x-opencode-session":      true,
 	responsesLiteHeaderKey:    true,
 }
 
@@ -102,6 +103,7 @@ var openaiPassthroughAllowedHeaders = map[string]bool{
 	"x-codex-turn-state":      true,
 	"x-codex-turn-metadata":   true,
 	"x-codex-window-id":       true,
+	"x-opencode-session":      true,
 	responsesLiteHeaderKey:    true,
 }
 
@@ -5935,6 +5937,35 @@ func (s *OpenAIGatewayService) handleStreamingResponsePassthroughWithReasoning(
 	// 与 lastUpstreamReadAt（上游是否活跃）不同：preamble 事件被首输出暂存区缓冲，
 	// 上游虽持续吐数据但下游长时间无字节，仍需发心跳保活。
 	lastDownstreamWriteAt := time.Now()
+	passthroughErrorEventSent := false
+	sendPassthroughErrorEvent := func(code, message string) {
+		if passthroughErrorEventSent || clientDisconnected || !clientOutputStarted {
+			return
+		}
+		passthroughErrorEventSent = true
+		code = strings.TrimSpace(code)
+		if code == "" {
+			code = "stream_error"
+		}
+		message = strings.TrimSpace(message)
+		if message == "" {
+			message = code
+		}
+		message = truncateString(message, 512)
+		payload := `{"type":"error","code":` + strconv.Quote(code) + `,"message":` + strconv.Quote(message) + `,"param":null,"sequence_number":0}`
+		if _, err := fmt.Fprintln(w, "data: "+payload); err != nil {
+			clientDisconnected = true
+			startDisconnectedDrain()
+			return
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			clientDisconnected = true
+			startDisconnectedDrain()
+			return
+		}
+		flusher.Flush()
+		lastDownstreamWriteAt = time.Now()
+	}
 	var lastUpstreamReadAt atomic.Int64
 	lastUpstreamReadAt.Store(time.Now().UnixNano())
 	type passthroughScanEvent struct {
@@ -6046,14 +6077,7 @@ streamLoop:
 			if s.rateLimitService != nil {
 				s.rateLimitService.HandleStreamTimeout(ctx, account, originalModel)
 			}
-			payload := `{"type":"error","sequence_number":0,"error":{"type":"upstream_error","message":"stream_timeout","code":"stream_timeout"}}`
-			if _, err := fmt.Fprintln(w, "data: "+payload); err == nil {
-				_, _ = fmt.Fprintln(w)
-				flusher.Flush()
-			} else {
-				clientDisconnected = true
-				startDisconnectedDrain()
-			}
+			sendPassthroughErrorEvent("stream_timeout", fmt.Sprintf("upstream stream idle for %s", streamInterval))
 			return resultWithUsage(), errors.New("stream data interval timeout")
 		case <-keepaliveCh:
 			if clientDisconnected {
@@ -6261,6 +6285,9 @@ streamLoop:
 			return resultWithUsage(), fmt.Errorf("upstream response failed: %s", failedMessage)
 		}
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if clientOutputStarted {
+				sendPassthroughErrorEvent("stream_read_error", err.Error())
+			}
 			return resultWithUsage(), fmt.Errorf("stream usage incomplete: %w", err)
 		}
 		if errors.Is(err, errOpenAIFirstOutputScannerLimit) && firstTokenMs == nil {
@@ -6287,6 +6314,7 @@ streamLoop:
 			upstreamRequestID,
 			err,
 		)
+		sendPassthroughErrorEvent("stream_read_error", err.Error())
 		return resultWithUsage(), fmt.Errorf("stream read error: %w", err)
 	}
 	if sawFailedEvent {
@@ -6302,6 +6330,7 @@ streamLoop:
 			return resultWithUsage(),
 				s.newOpenAIStreamFailoverError(c, account, true, upstreamRequestID, nil, "OpenAI stream ended before a terminal event")
 		}
+		sendPassthroughErrorEvent("stream_incomplete", "upstream stream ended before a terminal event")
 		return resultWithUsage(), errors.New("stream usage incomplete: missing terminal event")
 	}
 	if clientDisconnected {
@@ -8470,7 +8499,7 @@ func extractCodexFinalResponse(body string) ([]byte, bool) {
 			data = normalized
 		}
 		eventType := gjson.GetBytes(data, "type").String()
-		if eventType == "response.done" || eventType == "response.completed" {
+		if eventType == "response.done" || eventType == "response.completed" || eventType == "response.incomplete" {
 			if response := gjson.GetBytes(data, "response"); response.Exists() && response.Type == gjson.JSON && response.Raw != "" {
 				finalResponse = []byte(response.Raw)
 			}

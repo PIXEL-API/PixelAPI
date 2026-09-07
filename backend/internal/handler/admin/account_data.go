@@ -164,30 +164,18 @@ func (h *AccountHandler) importCredentials(
 	sources []service.AccountCredentialImportSource,
 	parseErrors []service.AccountCredentialImportError,
 ) service.AccountCredentialImportResult {
-	result := service.AccountCredentialImportResult{
-		Total:  len(sources) + len(parseErrors),
-		Errors: []service.AccountCredentialImportError{},
-	}
-	result.Errors = append(result.Errors, parseErrors...)
-
-	for idx, source := range sources {
-		account, err := h.createAccountFromCredentialImportSource(ctx, source, req, idx+1)
-		if err != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, service.AccountCredentialImportError{
-				Index:   len(parseErrors) + idx + 1,
-				Kind:    string(source.Kind),
-				Name:    source.Name,
-				Message: err.Error(),
-			})
-			continue
-		}
-		if account != nil {
-			result.Created++
-		}
-	}
-	result.Failed += len(parseErrors)
-	return result
+	return service.ProcessAccountCredentialImport(
+		ctx,
+		sources,
+		parseErrors,
+		func(itemCtx context.Context, source service.AccountCredentialImportSource, sequence int) (created, updated bool, err error) {
+			account, err := h.createAccountFromCredentialImportSource(itemCtx, source, req, sequence)
+			if err != nil {
+				return false, false, err
+			}
+			return account != nil, false, nil
+		},
+	)
 }
 
 func (h *AccountHandler) createAccountFromCredentialImportSource(
