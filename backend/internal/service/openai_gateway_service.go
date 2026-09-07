@@ -5196,6 +5196,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if account.IsOpenAIOAuth() {
 		enforceCodexIdentityHeaders(req.Header)
 	}
+	ensureOpencodeSessionHeader(account, req)
 
 	return req, nil
 }
@@ -6670,6 +6671,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if account.IsOpenAIOAuth() {
 		enforceCodexIdentityHeaders(req.Header)
 	}
+	ensureOpencodeSessionHeader(account, req)
 
 	return req, nil
 }

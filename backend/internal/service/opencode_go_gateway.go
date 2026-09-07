@@ -12,10 +12,25 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/tidwall/sjson"
 )
 
 const opencodeResponsesRawEndpoint = "/v1/responses"
+
+// ensureOpencodeSessionHeader 确保 OpenCode 上游请求携带 x-opencode-session。
+// OpenCode Go 上游用该头做会话路由和 prompt 缓存；原生 OpenCode 客户端会自动携带，
+// 但通用 OpenAI 兼容客户端（如 Cherry Studio）不会。网关在缺失时生成一个稳定标识，
+// 避免上游报 "missing x-opencode-session" 400。
+func ensureOpencodeSessionHeader(account *Account, req *http.Request) {
+	if account == nil || req == nil || !account.IsOpencode() {
+		return
+	}
+	if req.Header.Get("x-opencode-session") != "" {
+		return
+	}
+	req.Header.Set("x-opencode-session", uuid.New().String())
+}
 
 // OpencodeGoResolvedModel is the single routing decision shared by all three
 // OpenCode Go ingress protocols. Protocol selection must use UpstreamModel,
