@@ -2147,6 +2147,13 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
 		return
 	}
+	if apiKey.Group != nil && apiKey.Group.Platform == service.PlatformGrok {
+		// This handler currently implements the OpenAI Responses WS v2 transport.
+		// Grok has a separate xAI Responses WS protocol and must not be accepted
+		// here only to fail later in the OpenAI protocol resolver.
+		h.errorResponse(c, http.StatusNotImplemented, "unsupported_protocol", "Grok Responses WebSocket is not supported on this endpoint; use the Grok HTTP Responses or Voice Realtime endpoint")
+		return
+	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")

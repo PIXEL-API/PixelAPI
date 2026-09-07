@@ -28,6 +28,9 @@ const openAIChatRawEndpoint = "/v1/chat/completions"
 var openaiChatRawAllowedHeaders = map[string]bool{
 	"accept-language": true,
 	"user-agent":      true,
+	// OpenCode Go uses this stable per-conversation identifier for routing and
+	// prompt caching. The gateway must preserve it when rebuilding requests.
+	"x-opencode-session": true,
 }
 
 func (s *OpenAIGatewayService) forwardAsRawChatCompletions(

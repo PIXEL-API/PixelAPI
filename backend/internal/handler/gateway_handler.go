@@ -1362,10 +1362,16 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		platform = forcedPlatform
 	}
 
-	// Get available models from account configurations (without platform filter)
-	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, "")
+	// Keep model discovery scoped to the API key's platform. Without this filter,
+	// a group containing mixed-platform accounts can expose mappings that cannot
+	// be routed through the current Grok/OpenAI endpoint.
+	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
 
 	if len(availableModels) > 0 {
+		if platform == service.PlatformGrok {
+			writeGrokModelsList(c, availableModels)
+			return
+		}
 		// Build model list from whitelist
 		models := make([]claude.Model, 0, len(availableModels))
 		for _, modelID := range availableModels {
@@ -1388,6 +1394,60 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		"object": "list",
 		"data":   defaultModelsForPlatform(platform),
 	})
+}
+
+type grokReasoningEffortOption struct {
+	Value   string `json:"value"`
+	Label   string `json:"label"`
+	Default bool   `json:"default,omitempty"`
+}
+
+type grokModelListItem struct {
+	xai.Model
+	SupportsReasoningEffort bool                        `json:"supportsReasoningEffort,omitempty"`
+	ReasoningEffort         string                      `json:"reasoningEffort,omitempty"`
+	ReasoningEfforts        []grokReasoningEffortOption `json:"reasoningEfforts,omitempty"`
+}
+
+func writeGrokModelsList(c *gin.Context, modelIDs []string) {
+	defaults := xai.DefaultModels()
+	defaultsByID := make(map[string]xai.Model, len(defaults))
+	for _, model := range defaults {
+		defaultsByID[model.ID] = model
+	}
+
+	models := make([]grokModelListItem, 0, len(modelIDs))
+	for _, modelID := range modelIDs {
+		model, ok := defaultsByID[modelID]
+		if !ok {
+			model = xai.Model{ID: modelID, Object: "model", Type: "model", OwnedBy: "xai", DisplayName: modelID}
+		}
+		item := grokModelListItem{Model: model}
+		if grokModelSupportsConfigurableReasoning(modelID) {
+			item.SupportsReasoningEffort = true
+			item.ReasoningEffort = "high"
+			item.ReasoningEfforts = []grokReasoningEffortOption{
+				{Value: "low", Label: "Low"},
+				{Value: "medium", Label: "Medium"},
+				{Value: "high", Label: "High", Default: true},
+			}
+			if service.GrokSupportsXHighReasoningEffort(modelID) {
+				item.ReasoningEfforts = append(item.ReasoningEfforts, grokReasoningEffortOption{Value: "xhigh", Label: "xHigh"})
+			}
+		}
+		models = append(models, item)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"object": "list", "data": models})
+}
+
+func grokModelSupportsConfigurableReasoning(modelID string) bool {
+	switch strings.ToLower(strings.TrimSpace(modelID)) {
+	case "grok-4.6", "grok-4.6-latest", "grok-4.5", "grok-4.5-latest", "grok", "grok-latest", "grok-build", "grok-build-latest", "grok-build-0.1":
+		return true
+	default:
+		return false
+	}
 }
 
 // fallbackModelCreatedAt 是没有真实上线时间时给出的占位创建时间。

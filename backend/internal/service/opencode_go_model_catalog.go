@@ -18,8 +18,8 @@ type OpencodeGoModelSpec struct {
 	Deprecated bool
 }
 
-// opencodeGoModelCatalog 是 2026-08-30 审核的 OpenCode Go 模型快照：
-// 成员以公开 GET /zen/go/v1/models 当日返回的 33 个可用 ID 为准；当前模型协议
+// opencodeGoModelCatalog 是 2026-09-07 审核的 OpenCode Go 模型快照：
+// 成员以公开 GET /zen/go/v1/models 当日返回的 35 个可用 ID 为准；当前模型协议
 // 优先依据 OpenCode Go 官方文档的“API 端点”表，未列出的历史模型再与固定
 // models.dev 快照交叉核对。因来源版本存在漂移，固定 models.dev 提交中的
 // ox-alpha-free（deprecated）不在公开端点返回值中，而公开端点中的 hy3-preview
@@ -59,6 +59,8 @@ var opencodeGoModelCatalog = [...]OpencodeGoModelSpec{
 	{ID: "grok-4.5", Protocol: OpencodeGoProtocolResponses, Deprecated: true},
 	{ID: "grok-4.6", Protocol: OpencodeGoProtocolResponses},
 	{ID: "muse-spark-1.2-contributor", Protocol: OpencodeGoProtocolResponses},
+	{ID: "muse-spark-1.3-contributor", Protocol: OpencodeGoProtocolResponses},
+	{ID: "omen-alpha", Protocol: OpencodeGoProtocolChat},
 }
 
 var opencodeGoModelByID = func() map[string]OpencodeGoModelSpec {

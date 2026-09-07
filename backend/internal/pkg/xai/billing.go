@@ -19,7 +19,7 @@ const (
 	// （grokCLIStableVersion，OAuth 走 CLI 代理）与 service 层
 	// （grokCLIVersion，网关请求头）都由它派生，下次升版只改这一行。
 	// Keep in sync with https://x.ai/cli/stable.
-	CLIClientVersion = "0.2.118"
+	CLIClientVersion = "0.2.120"
 	CLIUserAgent     = "grok-pager/" + CLIClientVersion + " grok-shell/" + CLIClientVersion + " (macos; aarch64)"
 
 	BillingWeeklyPath  = "/billing?format=credits"

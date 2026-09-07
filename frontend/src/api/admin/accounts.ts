@@ -4,7 +4,11 @@
  */
 
 import { apiClient } from '../client'
-import type { ImportCredentialContentsRequest, ImportCredentialContentsResponse } from '../accounts'
+import {
+  credentialImportTimeoutMs,
+  type ImportCredentialContentsRequest,
+  type ImportCredentialContentsResponse
+} from '../accounts'
 import type {
   Account,
   AccountStatsRange,
@@ -698,9 +702,13 @@ export async function importData(payload: {
   data: AdminDataPayload
   skip_default_group_bind?: boolean
 }): Promise<AdminDataImportResult> {
+  const accountCount = Array.isArray(payload.data.accounts) ? payload.data.accounts.length : 1
   const { data } = await apiClient.post<AdminDataImportResult>('/admin/accounts/data', {
     data: payload.data,
     skip_default_group_bind: payload.skip_default_group_bind
+  }, {
+    // Data imports also validate and upsert each account synchronously.
+    timeout: credentialImportTimeoutMs(accountCount)
   })
   return data
 }
@@ -720,7 +728,8 @@ export async function importCredentialContents(
 ): Promise<ImportCredentialContentsResponse> {
   const { data } = await apiClient.post<ImportCredentialContentsResponse>(
     '/admin/accounts/import-credentials',
-    request
+    request,
+    { timeout: credentialImportTimeoutMs(request.contents.length) }
   )
   return data
 }

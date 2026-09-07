@@ -158,7 +158,7 @@ func TestOpencodeDefaultModelSlugs(t *testing.T) {
 		"qwen3.7-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus",
 		"mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5-pro", "mimo-v2.5",
 		"hy4-preview", "hy3", "hy3-preview",
-		"gpt-5.6-luna", "grok-4.5", "grok-4.6", "muse-spark-1.2-contributor",
+		"gpt-5.6-luna", "grok-4.5", "grok-4.6", "muse-spark-1.2-contributor", "muse-spark-1.3-contributor", "omen-alpha",
 	}
 	if !slices.Equal(models, wantModels) {
 		t.Fatalf("model snapshot mismatch\n got: %v\nwant: %v", models, wantModels)
@@ -181,6 +181,7 @@ func TestOpencodeDefaultModelSlugs(t *testing.T) {
 		"grok-4.5":                   true,
 		"grok-4.6":                   true,
 		"muse-spark-1.2-contributor": true,
+		"muse-spark-1.3-contributor": true,
 	}
 	for _, model := range models {
 		if _, exists := seen[model]; exists {
@@ -224,7 +225,7 @@ func TestOpencodeDefaultModelSlugs(t *testing.T) {
 	}
 
 	models[0] = "mutated"
-	if fresh := OpencodeDefaultModelSlugs(); len(fresh) != 33 || fresh[0] == "mutated" {
+	if fresh := OpencodeDefaultModelSlugs(); len(fresh) != 35 || fresh[0] == "mutated" {
 		t.Fatalf("OpencodeDefaultModelSlugs did not return an independent copy: %v", fresh)
 	}
 }

@@ -808,6 +808,47 @@ func TestAccountServiceResolveOwnedPublicShareGroupMatchesGrokAccountLevel(t *te
 	require.Equal(t, int64(21), group.ID)
 }
 
+func TestAccountServiceResolveOwnedPublicShareGroupUsesGenericGrokPoolAsFallback(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 20, Name: "GROK通用共享号池", Platform: PlatformGrok, Status: StatusActive, Scope: GroupScopePublic},
+			},
+		},
+	}
+
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{
+		Platform:     PlatformGrok,
+		AccountLevel: AccountLevelHeavy,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(20), group.ID)
+}
+
+func TestAccountServiceResolveOwnedPublicShareGroupPrefersExactGrokPoolOverGenericPool(t *testing.T) {
+	t.Parallel()
+
+	svc := &AccountService{
+		groupRepo: &ownedPublicShareGroupRepoStub{
+			groups: []Group{
+				{ID: 20, Name: "GROK通用共享号池", Platform: PlatformGrok, Status: StatusActive, Scope: GroupScopePublic},
+				{ID: 21, Name: "GROK共享号池【heavy】", Platform: PlatformGrok, Status: StatusActive, Scope: GroupScopePublic, RequiredAccountLevel: AccountLevelHeavy},
+			},
+		},
+	}
+
+	group, err := svc.resolveOwnedPublicShareGroup(context.Background(), &Account{
+		Platform:     PlatformGrok,
+		AccountLevel: AccountLevelHeavy,
+	})
+
+	require.NoError(t, err)
+	require.Equal(t, int64(21), group.ID)
+}
+
 func TestAccountServiceResolveOwnedPublicShareGroupRejectsUnknownGrokLevel(t *testing.T) {
 	svc := &AccountService{
 		groupRepo: &ownedPublicShareGroupRepoStub{

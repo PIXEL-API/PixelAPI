@@ -39,10 +39,12 @@ func RuntimeModelMappingOptions() ModelMappingOptions {
 }
 
 const (
-	DefaultTextModel = "grok-4.5"
+	DefaultTextModel  = "grok-4.6"
+	DefaultVoiceModel = "grok-voice-latest"
 
 	DefaultImagineImageQualityModel  = "grok-imagine-image-quality"
 	DefaultImagineImageFastModel     = "grok-imagine-image"
+	DefaultImagineImage20Model       = "grok-imagine-image-2.0"
 	DefaultImagineVideoModel         = "grok-imagine-video"
 	DefaultImagineVideo15LegacyModel = "grok-imagine-video-1.5"
 	DefaultImagineVideo15Model       = "grok-imagine-video-1.5-preview"
@@ -51,10 +53,10 @@ const (
 // ModelMappingOptions controls optional expansions of the default mapping.
 // Cross-client wildcards (gpt-*/claude-*) default ON via settings
 // grok_cross_client_model_map_enabled so Codex/Claude clients keep working
-// against Grok groups (map to DefaultText / grok-4.5). Operators may disable.
+// against Grok groups (map to DefaultText / grok-4.6). Operators may disable.
 type ModelMappingOptions struct {
 	// DefaultText is the target for empty models and optional cross-client maps.
-	// Empty → DefaultTextModel (grok-4.5).
+	// Empty → DefaultTextModel (grok-4.6).
 	DefaultText string
 	// EnableCrossClientMap merges gpt-*/codex-*/o*/claude-* → DefaultText.
 	EnableCrossClientMap bool
@@ -71,6 +73,7 @@ func (o ModelMappingOptions) defaultText() string {
 type Model struct {
 	ID          string `json:"id"`
 	Object      string `json:"object"`
+	Type        string `json:"type,omitempty"`
 	Created     int64  `json:"created,omitempty"`
 	OwnedBy     string `json:"owned_by"`
 	DisplayName string `json:"display_name,omitempty"`
@@ -89,6 +92,7 @@ var defaultModels = []Model{
 	{ID: "grok-4.20-multi-agent-0309", Object: "model", OwnedBy: "xai", DisplayName: "Grok 4.20 Multi Agent"},
 	{ID: DefaultImagineImageQualityModel, Object: "model", OwnedBy: "xai", DisplayName: "Grok Imagine Image Quality"},
 	{ID: DefaultImagineImageFastModel, Object: "model", OwnedBy: "xai", DisplayName: "Grok Imagine Image"},
+	{ID: DefaultImagineImage20Model, Object: "model", OwnedBy: "xai", DisplayName: "Grok Imagine Image 2.0"},
 	{ID: DefaultImagineVideoModel, Object: "model", OwnedBy: "xai", DisplayName: "Grok Imagine Video"},
 	{ID: DefaultImagineVideo15Model, Object: "model", OwnedBy: "xai", DisplayName: "Grok Imagine Video 1.5 Preview"},
 	{ID: DefaultImagineVideo15LegacyModel, Object: "model", OwnedBy: "xai", DisplayName: "Grok Imagine Video 1.5 Legacy"},
@@ -99,14 +103,14 @@ var grokTextResponsesModelAliases = map[string]string{
 	"grok-latest":                  DefaultTextModel,
 	"grok-4.6":                     "grok-4.6",
 	"grok-4.6-latest":              "grok-4.6",
-	"grok-4.5":                     DefaultTextModel,
-	"grok-4.5-latest":              DefaultTextModel,
+	"grok-4.5":                     "grok-4.5",
+	"grok-4.5-latest":              "grok-4.5",
 	"grok-4.3":                     "grok-4.3",
 	"grok-4.3-latest":              "grok-4.3",
 	"grok-3-mini":                  "grok-3-mini",
 	"grok-3-mini-fast":             "grok-3-mini-fast",
 	"grok-build":                   "grok-build-0.1",
-	"grok-build-latest":            DefaultTextModel,
+	"grok-build-latest":            "grok-build-0.1",
 	"grok-build-0.1":               "grok-build-0.1",
 	"grok-composer-2.5-fast":       "grok-composer-2.5-fast",
 	"grok-composer":                "grok-composer-2.5-fast",
@@ -123,6 +127,11 @@ var grokTextResponsesModelAliases = map[string]string{
 func DefaultModels() []Model {
 	out := make([]Model, len(defaultModels))
 	copy(out, defaultModels)
+	for i := range out {
+		if out[i].Type == "" {
+			out[i].Type = "model"
+		}
+	}
 	return out
 }
 
@@ -152,7 +161,7 @@ func ModelMappingWithOptions(opts ModelMappingOptions) map[string]string {
 	}
 	for alias, canonical := range grokTextResponsesModelAliases {
 		// Remap aliases that pointed at DefaultTextModel constant to runtime default.
-		if canonical == DefaultTextModel {
+		if (alias == "grok" || alias == "grok-latest") && canonical == DefaultTextModel {
 			mapping[alias] = defaultText
 		} else {
 			mapping[alias] = canonical
@@ -166,6 +175,10 @@ func ModelMappingWithOptions(opts ModelMappingOptions) map[string]string {
 	mapping["grok-imagine-edit"] = DefaultImagineImageQualityModel
 	mapping["grok-imagine-image"] = DefaultImagineImageFastModel
 	mapping["grok-imagine-image-quality"] = DefaultImagineImageQualityModel
+	mapping["grok-imagine-image-2.0"] = DefaultImagineImage20Model
+	// Voice uses a separate endpoint, but must still participate in account
+	// model authorization when Realtime selects the actual requested model.
+	mapping[DefaultVoiceModel] = DefaultVoiceModel
 	// Keep official IDs as identity so client-requested model strings are not
 	// rewritten on the wire (pricing still canonicalizes 1.5* via CanonicalImagineVideoModel).
 	mapping["grok-imagine-video"] = DefaultImagineVideoModel
@@ -241,7 +254,7 @@ func ResolveGrokTextResponsesModelID(model string, defaultText ...string) string
 	}
 	normalized := strings.ToLower(StripGrokProviderPrefix(trimmed))
 	if canonical, ok := grokTextResponsesModelAliases[normalized]; ok {
-		if canonical == DefaultTextModel {
+		if (normalized == "grok" || normalized == "grok-latest") && canonical == DefaultTextModel {
 			return fallback
 		}
 		return canonical

@@ -1161,10 +1161,11 @@ func isInstructionsEmpty(reqBody map[string]any) bool {
 	return strings.TrimSpace(str) == ""
 }
 
-// filterCodexInput 按需过滤 item_reference 与 id。
-// preserveReferences 为 true 时保持引用与 id，以满足续链请求对上下文的依赖。
+// filterCodexInput 按需过滤 item_reference 与不安全的合成 id。
+// preserveReferences 为 true 时保持有效引用与 id，以满足续链请求对上下文的依赖。
 func filterCodexInput(input []any, preserveReferences bool) []any {
 	filtered := make([]any, 0, len(input))
+	strippedIDs := codexReplayedOptionalItemIDs(input, preserveReferences)
 	for _, item := range input {
 		m, ok := item.(map[string]any)
 		if !ok {
@@ -1198,12 +1199,19 @@ func filterCodexInput(input []any, preserveReferences bool) []any {
 			if !preserveReferences {
 				continue
 			}
+			if id := strings.TrimSpace(firstNonEmptyString(m["id"])); id != "" {
+				if _, stripped := strippedIDs[id]; stripped {
+					// Do not leave a reference to an ID removed as a synthetic
+					// call-input ID in this same replayed request.
+					continue
+				}
+			}
 			newItem := make(map[string]any, len(m))
 			for key, value := range m {
 				newItem[key] = value
 			}
 			if id, ok := newItem["id"].(string); ok && strings.HasPrefix(id, "call_") {
-				newItem["id"] = fixCallIDPrefix(id)
+				newItem["id"] = normalizeCodexCallID(id)
 			}
 			filtered = append(filtered, newItem)
 			continue
@@ -1225,8 +1233,8 @@ func filterCodexInput(input []any, preserveReferences bool) []any {
 
 		if isCodexToolCallItemType(typ) {
 			callID, ok := m["call_id"].(string)
-			if !ok || strings.TrimSpace(callID) == "" {
-				if id, ok := m["id"].(string); ok && strings.TrimSpace(id) != "" {
+			if (!ok || strings.TrimSpace(callID) == "") && typ != "local_shell_call" {
+				if id, ok := m["id"].(string); ok && strings.TrimSpace(id) != "" && !shouldStripCodexReplayedItemID(typ, id) {
 					callID = id
 					ensureCopy()
 					newItem["call_id"] = callID
@@ -1238,6 +1246,13 @@ func filterCodexInput(input []any, preserveReferences bool) []any {
 				if fixedCallID != callID {
 					ensureCopy()
 					newItem["call_id"] = fixedCallID
+				}
+			}
+
+			if shouldStripCodexReplayedItemID(typ, firstNonEmptyString(m["id"])) {
+				if _, ok := m["id"].(string); ok {
+					ensureCopy()
+					delete(newItem, "id")
 				}
 			}
 		}
@@ -1279,6 +1294,31 @@ func filterCodexInput(input []any, preserveReferences bool) []any {
 		filtered = append(filtered, newItem)
 	}
 	return filtered
+}
+
+func codexReplayedOptionalItemIDs(input []any, preserveReferences bool) map[string]struct{} {
+	if !preserveReferences {
+		return nil
+	}
+	stripped := make(map[string]struct{})
+	for _, raw := range input {
+		item, ok := raw.(map[string]any)
+		if !ok || !shouldStripCodexReplayedItemID(firstNonEmptyString(item["type"]), firstNonEmptyString(item["id"])) {
+			continue
+		}
+		if id := strings.TrimSpace(firstNonEmptyString(item["id"])); id != "" {
+			stripped[id] = struct{}{}
+		}
+	}
+	return stripped
+}
+
+// Only these Responses call-input IDs are optional. A client-generated item_*
+// value cannot be safely rewritten into a real upstream object ID, so remove
+// it while retaining the call_id association. Required-ID and output items are
+// deliberately left untouched until their upstream schema is confirmed.
+func shouldStripCodexReplayedItemID(itemType, id string) bool {
+	return id != "" && strings.HasPrefix(id, "item_") && (itemType == "function_call" || itemType == "custom_tool_call" || itemType == "tool_search_call")
 }
 
 func isCodexToolCallItemType(typ string) bool {

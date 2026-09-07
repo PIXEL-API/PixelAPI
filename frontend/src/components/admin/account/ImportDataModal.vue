@@ -86,7 +86,7 @@
           form="import-data-form"
           :disabled="importing"
         >
-          {{ importing ? t('admin.accounts.dataImporting') : t('admin.accounts.dataImportButton') }}
+          {{ importing ? `${t('admin.accounts.dataImporting')} (${importingElapsedSeconds}s)` : t('admin.accounts.dataImportButton') }}
         </button>
       </div>
     </template>
@@ -94,7 +94,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import { adminAPI } from '@/api/admin'
@@ -117,6 +117,8 @@ const { t } = useI18n()
 const appStore = useAppStore()
 
 const importing = ref(false)
+const importingElapsedSeconds = ref(0)
+let importingTimer: ReturnType<typeof setInterval> | undefined
 const file = ref<File | null>(null)
 type ImportResult = AdminDataImportResult & {
   credential_import?: boolean
@@ -128,6 +130,21 @@ const result = ref<ImportResult | null>(null)
 
 const fileInput = ref<HTMLInputElement | null>(null)
 const fileName = computed(() => file.value?.name || '')
+
+function startImportTimer(): void {
+  importingElapsedSeconds.value = 0
+  if (importingTimer) clearInterval(importingTimer)
+  importingTimer = setInterval(() => {
+    importingElapsedSeconds.value += 1
+  }, 1000)
+}
+
+function stopImportTimer(): void {
+  if (importingTimer) {
+    clearInterval(importingTimer)
+    importingTimer = undefined
+  }
+}
 
 const errorItems = computed(() => result.value?.errors || [])
 
@@ -230,6 +247,7 @@ const handleImport = async () => {
   }
 
   importing.value = true
+  startImportTimer()
   try {
     const text = await readFileAsText(file.value)
     const parsedPayload = JSON.parse(text)
@@ -279,7 +297,10 @@ const handleImport = async () => {
       appStore.showError(error?.message || t('admin.accounts.dataImportFailed'))
     }
   } finally {
+    stopImportTimer()
     importing.value = false
   }
 }
+
+onBeforeUnmount(stopImportTimer)
 </script>

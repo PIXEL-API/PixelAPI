@@ -1419,33 +1419,21 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 		return
 	}
 
-	result := service.AccountCredentialImportResult{
-		Total:  len(sources) + len(parseErrors),
-		Errors: []service.AccountCredentialImportError{},
-	}
-	result.Errors = append(result.Errors, parseErrors...)
-
-	for idx, source := range sources {
-		outcome, err := h.createOwnedAccountFromCredentialImportSource(c.Request.Context(), subject.UserID, source, req, idx+1)
-		if err != nil {
-			result.Failed++
-			result.Errors = append(result.Errors, service.AccountCredentialImportError{
-				Index:   len(parseErrors) + idx + 1,
-				Kind:    string(source.Kind),
-				Name:    source.Name,
-				Message: credentialImportFailureMessage(err),
-			})
-			continue
-		}
-		if outcome != nil && outcome.Account != nil {
-			if outcome.Updated {
-				result.Updated++
-			} else {
-				result.Created++
+	result := service.ProcessAccountCredentialImport(
+		c.Request.Context(),
+		sources,
+		parseErrors,
+		func(ctx context.Context, source service.AccountCredentialImportSource, sequence int) (created, updated bool, err error) {
+			outcome, err := h.createOwnedAccountFromCredentialImportSource(ctx, subject.UserID, source, req, sequence)
+			if err != nil {
+				return false, false, errors.New(credentialImportFailureMessage(err))
 			}
-		}
-	}
-	result.Failed += len(parseErrors)
+			if outcome == nil || outcome.Account == nil {
+				return false, false, nil
+			}
+			return !outcome.Updated, outcome.Updated, nil
+		},
+	)
 	response.Success(c, result)
 }
 

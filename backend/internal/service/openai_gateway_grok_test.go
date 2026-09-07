@@ -358,7 +358,7 @@ func TestForwardGrokResponsesAPIKeyUsesConfiguredXAIEndpoint(t *testing.T) {
 	require.Equal(t, "https://xai.example.com/v1/responses", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer xai-test-key", upstream.lastReq.Header.Get("Authorization"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Grok-Client-Version"), "API-key requests must not impersonate Grok CLI OAuth")
-	require.Equal(t, "grok-4.5", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "grok-4.6", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, 2, result.Usage.InputTokens)
 	require.Equal(t, 1, result.Usage.OutputTokens)
 }
@@ -856,6 +856,25 @@ func TestSanitizeGrokResponsesToolsDropsOrphanedToolChoice(t *testing.T) {
 			require.Equal(t, test.wantToolChoice, gjson.GetBytes(patched, "tool_choice").Exists())
 		})
 	}
+}
+
+func TestPatchGrokResponsesBodyRemovesUnsupportedMetadataAndLogprobs(t *testing.T) {
+	body := []byte(`{"metadata":{"tenant":"internal"},"logprobs":true,"top_logprobs":5,"input":"hello"}`)
+
+	patched, err := patchGrokResponsesBody(body, "grok-4.20-0309-reasoning")
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(patched, "metadata").Exists())
+	require.False(t, gjson.GetBytes(patched, "logprobs").Exists())
+	require.False(t, gjson.GetBytes(patched, "top_logprobs").Exists())
+}
+
+func TestExplicitGrokCacheSeedPrefersPromptCacheKeyOverConversationHeader(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.Request.Header.Set(grokConversationIDHeader, "conversation-header")
+
+	require.Equal(t, "body-key", explicitGrokCacheSeed(c, []byte(`{"prompt_cache_key":"body-key"}`), "fallback"))
 }
 
 func TestTrimGrokInvalidEncryptedContentRetryBody(t *testing.T) {

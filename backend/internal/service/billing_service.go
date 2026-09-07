@@ -650,7 +650,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	modelLower = strings.TrimPrefix(modelLower, "grok/")
 
 	switch modelLower {
-	case "grok", "grok-latest", "grok-4.5", "grok-4.5-latest":
+	case "grok", "grok-latest":
+		return s.fallbackPrices["grok-4.6"]
+	case "grok-4.5", "grok-4.5-latest":
 		return s.fallbackPrices["grok-4.5"]
 	case "grok-4.6", "grok-4.6-latest":
 		return s.fallbackPrices["grok-4.6"]
@@ -854,7 +856,7 @@ func (s *BillingService) grokUnknownTextFamilyFallback(model string) *ModelPrici
 	if s == nil || !isGrokUnknownTextFamilyModel(model) {
 		return nil
 	}
-	return s.fallbackPrices["grok-4.5"]
+	return s.fallbackPrices["grok-4.6"]
 }
 
 func isGrokUnknownTextFamilyModel(model string) bool {

@@ -754,19 +754,26 @@ func validateOpencodeMessagesBridge(body []byte, resolved OpencodeGoResolvedMode
 		targetName = "Chat Completions"
 	}
 
-	if rawThinking, exists := payload["thinking"]; exists && !isNullJSON(rawThinking) {
+	if rawThinking, exists := payload["thinking"]; target != OpencodeGoProtocolChat && exists && !isNullJSON(rawThinking) {
 		return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic thinking configuration cannot be represented losslessly by %s", targetName))
 	}
-	if hasOpencodeAnthropicCacheControl(payload) {
+	if target != OpencodeGoProtocolChat && hasOpencodeAnthropicCacheControl(payload) {
 		return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic cache_control cannot be preserved by %s", targetName))
 	}
-	if rawStop, exists := payload["stop_sequences"]; exists && !isNullJSON(rawStop) && !isEmptyRawJSONArray(rawStop) {
-		return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic stop_sequences cannot be represented losslessly by %s", targetName))
+	if target != OpencodeGoProtocolChat {
+		if rawStop, exists := payload["stop_sequences"]; exists && !isNullJSON(rawStop) && !isEmptyRawJSONArray(rawStop) {
+			return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic stop_sequences cannot be represented losslessly by %s", targetName))
+		}
 	}
 	allowedTopLevel := jsonFieldSet(
 		"model", "max_tokens", "system", "messages", "tools", "stream",
-		"temperature", "top_p", "stop_sequences", "tool_choice", "output_config",
+		"temperature", "top_p", "stop_sequences", "tool_choice", "output_config", "metadata",
 	)
+	if target == OpencodeGoProtocolChat {
+		allowedTopLevel["thinking"] = struct{}{}
+	}
+	// Claude Code sends metadata.user_id. Both compatibility bridges consume no
+	// metadata, so it is intentionally omitted from the upstream request.
 	if field := firstUnsupportedJSONField(payload, allowedTopLevel); field != "" {
 		return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic field %q is not preserved by the %s compatibility bridge", field, targetName))
 	}
@@ -904,7 +911,11 @@ func validateOpencodeAnthropicBlocks(rawBlocks json.RawMessage, role string, res
 		blockType := strings.ToLower(strings.TrimSpace(rawJSONString(block["type"])))
 		switch blockType {
 		case "text":
-			if field := firstUnsupportedJSONField(block, jsonFieldSet("type", "text")); field != "" {
+			allowed := jsonFieldSet("type", "text")
+			if targetName == "Chat Completions" {
+				allowed["cache_control"] = struct{}{}
+			}
+			if field := firstUnsupportedJSONField(block, allowed); field != "" {
 				return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic text block field %q is not preserved by the %s compatibility bridge", field, targetName))
 			}
 		case "image":
@@ -921,14 +932,22 @@ func validateOpencodeAnthropicBlocks(rawBlocks json.RawMessage, role string, res
 			if role != "assistant" {
 				return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic tool_use blocks for role %q cannot be represented losslessly by %s", role, targetName))
 			}
-			if field := firstUnsupportedJSONField(block, jsonFieldSet("type", "id", "name", "input")); field != "" {
+			allowed := jsonFieldSet("type", "id", "name", "input")
+			if targetName == "Chat Completions" {
+				allowed["cache_control"] = struct{}{}
+			}
+			if field := firstUnsupportedJSONField(block, allowed); field != "" {
 				return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic tool_use field %q is not preserved by the %s compatibility bridge", field, targetName))
 			}
 		case "tool_result":
 			if role != "user" {
 				return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic tool_result blocks for role %q cannot be represented losslessly by %s", role, targetName))
 			}
-			if field := firstUnsupportedJSONField(block, jsonFieldSet("type", "tool_use_id", "content", "is_error")); field != "" {
+			allowed := jsonFieldSet("type", "tool_use_id", "content", "is_error")
+			if targetName == "Chat Completions" {
+				allowed["cache_control"] = struct{}{}
+			}
+			if field := firstUnsupportedJSONField(block, allowed); field != "" {
 				return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic tool_result field %q is not preserved by the %s compatibility bridge", field, targetName))
 			}
 			if rawIsError := block["is_error"]; !isNullJSON(rawIsError) && rawJSONBool(rawIsError) {
@@ -938,6 +957,11 @@ func validateOpencodeAnthropicBlocks(rawBlocks json.RawMessage, role string, res
 				return err
 			}
 		case "thinking", "redacted_thinking":
+			if targetName == "Chat Completions" && role == "assistant" {
+				// Chat has no inbound thinking block. The direct converter drops
+				// historical private reasoning while preserving text/tool calls.
+				continue
+			}
 			return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic content block type %q cannot be replayed through %s", blockType, targetName))
 		default:
 			return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic content block type %q is not supported by the %s compatibility bridge", blockType, targetName))
@@ -997,7 +1021,13 @@ func validateOpencodeAnthropicTools(rawTools json.RawMessage, resolved OpencodeG
 		if toolType != "" && toolType != "custom" {
 			return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic tool type %q is not supported by the %s compatibility bridge", toolType, targetName))
 		}
-		if field := firstUnsupportedJSONField(tool, jsonFieldSet("type", "name", "description", "input_schema")); field != "" {
+		allowed := jsonFieldSet("type", "name", "description", "input_schema")
+		if target == OpencodeGoProtocolChat {
+			// Chat has no prompt-cache breakpoint equivalent; the direct bridge
+			// intentionally omits this Anthropic-only hint.
+			allowed["cache_control"] = struct{}{}
+		}
+		if field := firstUnsupportedJSONField(tool, allowed); field != "" {
 			return newOpencodeGoCapabilityMismatch(OpencodeGoProtocolMessages, resolved, fmt.Sprintf("Anthropic function tool field %q is not preserved by the %s compatibility bridge", field, targetName))
 		}
 	}

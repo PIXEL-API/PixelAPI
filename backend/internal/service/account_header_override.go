@@ -50,6 +50,7 @@ var headerOverrideBlockedNames = map[string]struct{}{
 	"x-codex-turn-metadata":    {},
 	"chatgpt-account-id":       {},
 	"x-claude-code-session-id": {},
+	"x-opencode-session":       {},
 	"x-client-request-id":      {},
 	"x-grok-conv-id":           {},
 }

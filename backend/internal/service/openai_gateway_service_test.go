@@ -3947,6 +3947,18 @@ func TestExtractCodexFinalResponse_SampleReplay(t *testing.T) {
 	require.Contains(t, string(finalResp), `"input_tokens":11`)
 }
 
+func TestExtractCodexFinalResponse_AcceptsIncompleteEvent(t *testing.T) {
+	body := strings.Join([]string{
+		`data: {"type":"response.incomplete","response":{"id":"resp_incomplete","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`,
+		`data: [DONE]`,
+	}, "\n")
+
+	finalResp, ok := extractCodexFinalResponse(body)
+	require.True(t, ok)
+	require.Equal(t, "resp_incomplete", gjson.GetBytes(finalResp, "id").String())
+	require.Equal(t, "incomplete", gjson.GetBytes(finalResp, "status").String())
+}
+
 func TestOpenAISSEHelpersSupportMultiDataFrames(t *testing.T) {
 	completedBody := strings.Join([]string{
 		"event: response.completed",

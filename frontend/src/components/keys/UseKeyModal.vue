@@ -909,7 +909,7 @@ default = "grok"
 web_search = "grok"
 
 [model."grok"]
-model = "grok-4.5"
+model = "grok-4.6"
 base_url = "${baseUrl}"
 name = "Grok 4.5"
 api_key = "${apiKey}"
@@ -983,8 +983,12 @@ function generateOpenCodeGoConfig(baseUrl: string, apiKey: string): FileConfig {
       '@ai-sdk/anthropic'
     ),
     ...createModelOverrides(
-      ['gpt-5.6-luna', 'grok-4.5', 'grok-4.6', 'muse-spark-1.2-contributor'],
+      ['gpt-5.6-luna', 'grok-4.5', 'grok-4.6', 'muse-spark-1.2-contributor', 'muse-spark-1.3-contributor'],
       '@ai-sdk/openai'
+    ),
+    ...createModelOverrides(
+      ['omen-alpha'],
+      '@ai-sdk/openai-compatible'
     )
   }
 
@@ -1407,6 +1411,10 @@ function generateOpenCodeConfig(platform: string, baseUrl: string, apiKey: strin
     }
   }
   const grokModels = {
+    'grok-4.6': {
+      name: 'Grok 4.6',
+      limit: { context: 2000000, output: 128000 }
+    },
     'grok-4.5': {
       name: 'Grok 4.5',
       limit: { context: 1000000, output: 128000 }
