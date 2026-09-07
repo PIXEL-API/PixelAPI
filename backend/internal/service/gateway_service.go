@@ -439,6 +439,7 @@ var allowedHeaders = map[string]bool{
 	"accept-encoding":                           true,
 	"x-claude-code-session-id":                  true,
 	"x-client-request-id":                       true,
+	"x-opencode-session":                        true,
 }
 
 // GatewayCache 定义网关服务的缓存操作接口。
