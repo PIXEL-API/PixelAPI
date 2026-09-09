@@ -170,6 +170,14 @@ func (s *OpenAIGatewayService) handleOpenAIAccountUpstreamErrorForModel(
 	}
 	shouldDisable := s.rateLimitService.HandleUpstreamErrorForModel(stateCtx, account, requestedModel, statusCode, headers, responseBody)
 	if shouldDisable {
+		// A handled image/endpoint mismatch still requires request failover, but
+		// the existing model cooldown exemption must also preserve account availability.
+		if account.IsOpenAIOAuth() && isOpenAICodexPlanGatedModelError(statusCode, responseBody) {
+			modelKey := modelRateLimitKeyForUpstreamModelNotFound(stateCtx, account, requestedModel)
+			if shouldSkipCodexPlanGatedImageModelCooldown(stateCtx, upstreamCodexPlanGatedModelReason, requestedModel, modelKey) {
+				return shouldDisable
+			}
+		}
 		s.BlockAccountScheduling(account, time.Time{}, "upstream_disable")
 	}
 	return shouldDisable

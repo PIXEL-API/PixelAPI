@@ -154,6 +154,12 @@ const intervalRequestLabel = computed(() =>
 
 function formatIntervalPrice(value: number | null, scale = TOKEN_PRICE_SCALE): string {
   const effectiveValue = value == null ? null : value * props.priceMultiplier
-  return formatAvailablePrice(effectiveValue, scale, translate, props.pricingKeyPrefix)
+  return formatAvailablePrice(
+    effectiveValue,
+    scale,
+    translate,
+    props.pricingKeyPrefix,
+    props.model.pricing?.billing_mode,
+  )
 }
 </script>

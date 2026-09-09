@@ -129,7 +129,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		upstreamReq.Header.Set("user-agent", userAgent)
 	}
 	account.ApplyHeaderOverrides(upstreamReq.Header)
-	ensureOpencodeSessionHeader(account, upstreamReq)
+	ensureOpencodeSessionHeader(c, account, upstreamReq, body)
 
 	proxyURL := ""
 	if account.Proxy != nil {
@@ -279,9 +279,7 @@ func (s *OpenAIGatewayService) streamRawChatCompletions(
 				observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 				billingUsageObservation.observePayload([]byte(payload))
 				usageOnlyChunk := isOpenAIChatUsageOnlyStreamChunk(payload)
-				if u := extractOpenAIChatStreamUsage(payload); u != nil {
-					usage = *u
-				}
+				mergeOpenAIChatUsage(&usage, payload)
 				if responseID == "" {
 					responseID = strings.TrimSpace(gjson.Get(payload, "id").String())
 				}
@@ -353,14 +351,6 @@ func isOpenAIChatUsageOnlyStreamChunk(payload string) bool {
 	}
 	choices := gjson.Get(payload, "choices")
 	return choices.Exists() && choices.IsArray() && len(choices.Array()) == 0
-}
-
-func extractOpenAIChatStreamUsage(payload string) *OpenAIUsage {
-	usageResult := gjson.Get(payload, "usage")
-	if !usageResult.Exists() || !usageResult.IsObject() {
-		return nil
-	}
-	return openAIUsageFromChatCompletionsUsage(payload)
 }
 
 func (s *OpenAIGatewayService) bufferRawChatCompletions(

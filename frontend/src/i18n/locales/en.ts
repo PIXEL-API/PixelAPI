@@ -2181,6 +2181,7 @@ export default {
       timeRanges: "Time-of-day Pricing (peak/off-peak)",
       unitPerMillion: "/ 1M tokens",
       unitPerRequest: "/ request",
+      unitPerImage: "/ image",
     },
   },
 
@@ -4444,6 +4445,7 @@ export default {
         intervals: "Tiered Pricing",
         unitPerMillion: "/ 1M tokens",
         unitPerRequest: "/ request",
+        unitPerImage: "/ image",
       },
     },
 

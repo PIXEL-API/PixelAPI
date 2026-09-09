@@ -12,24 +12,46 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/tidwall/sjson"
 )
 
 const opencodeResponsesRawEndpoint = "/v1/responses"
 
-// ensureOpencodeSessionHeader 确保 OpenCode 上游请求携带 x-opencode-session。
-// OpenCode Go 上游用该头做会话路由和 prompt 缓存；原生 OpenCode 客户端会自动携带，
-// 但通用 OpenAI 兼容客户端（如 Cherry Studio）不会。网关在缺失时生成一个稳定标识，
-// 避免上游报 "missing x-opencode-session" 400。
-func ensureOpencodeSessionHeader(account *Account, req *http.Request) {
+// ensureOpencodeSessionHeader preserves the client's real conversation identity
+// across protocol conversion. A random ID per request defeats upstream prompt
+// cache affinity; requests without a session must retain the upstream error.
+func ensureOpencodeSessionHeader(c *gin.Context, account *Account, req *http.Request, body []byte) {
 	if account == nil || req == nil || !account.IsOpencode() {
 		return
 	}
-	if req.Header.Get("x-opencode-session") != "" {
+	if strings.TrimSpace(req.Header.Get("x-opencode-session")) != "" {
 		return
 	}
-	req.Header.Set("x-opencode-session", uuid.New().String())
+	if c == nil || c.Request == nil {
+		return
+	}
+	if sessionID := strings.TrimSpace(c.GetHeader("x-opencode-session")); sessionID != "" {
+		req.Header.Set("x-opencode-session", sessionID)
+		return
+	}
+	apiKeyID := getAPIKeyIDFromContext(c)
+	if apiKeyID <= 0 {
+		return
+	}
+	sessionID := extractClaudeCodeSessionID(c, body)
+	if sessionID == "" {
+		for _, header := range []string{"session-id", "thread-id", "x-deepseek-harness-session-id"} {
+			if sessionID = strings.TrimSpace(c.GetHeader(header)); sessionID != "" {
+				break
+			}
+		}
+	}
+	if sessionID == "" {
+		sessionID = explicitOpenAIHeaderSessionID(c)
+	}
+	if sessionID != "" {
+		req.Header.Set("x-opencode-session", isolateOpenAISessionID(apiKeyID, "opencode-session:"+sessionID))
+	}
 }
 
 // OpencodeGoResolvedModel is the single routing decision shared by all three

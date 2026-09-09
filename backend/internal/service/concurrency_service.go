@@ -234,6 +234,12 @@ type accountShareMembershipConcurrencyCache interface {
 	GetAccountShareMembershipConcurrency(ctx context.Context, membershipID int64) (int, error)
 }
 
+const (
+	accountShareMembershipReleaseTimeout       = 5 * time.Second
+	accountShareMembershipReleaseAttempts      = 3
+	accountShareMembershipReleaseRetryInterval = 100 * time.Millisecond
+)
+
 // accountShareRuntimeLeaseCache is optional so existing cache implementations
 // remain source-compatible. Account-share dispatch requires this capability and
 // fails closed when the backing cache cannot prove continued slot ownership.
@@ -690,17 +696,17 @@ func (s *ConcurrencyService) AcquireAccountShareMembershipSlot(ctx context.Conte
 	requestID := generateRequestID()
 	acquired, err := membershipCache.AcquireAccountShareMembershipSlot(ctx, membershipID, maxConcurrency, requestID)
 	if err != nil {
+		// Redis may have committed the slot before the caller lost its response.
+		// No request will use it after this error, so reclaim this exact ID with
+		// an independent context even when selection was canceled.
+		releaseAccountShareMembershipSlot(membershipCache, membershipID, requestID)
 		return nil, err
 	}
 	if acquired {
 		result := &AcquireResult{
 			Acquired: true,
 			ReleaseFunc: func() {
-				bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				if err := membershipCache.ReleaseAccountShareMembershipSlot(bgCtx, membershipID, requestID); err != nil {
-					logger.LegacyPrintf("service.concurrency", "Warning: failed to release account share membership slot for %d (req=%s): %v", membershipID, requestID, err)
-				}
+				releaseAccountShareMembershipSlot(membershipCache, membershipID, requestID)
 			},
 			LeaseTTL: leaseCache.SlotLeaseTTL(),
 			RefreshFunc: func(refreshCtx context.Context) (bool, error) {
@@ -713,6 +719,31 @@ func (s *ConcurrencyService) AcquireAccountShareMembershipSlot(ctx context.Conte
 		Acquired:    false,
 		ReleaseFunc: nil,
 	}, nil
+}
+
+func releaseAccountShareMembershipSlot(cache accountShareMembershipConcurrencyCache, membershipID int64, requestID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), accountShareMembershipReleaseTimeout)
+	defer cancel()
+	var releaseErr error
+	for attempt := 0; attempt < accountShareMembershipReleaseAttempts; attempt++ {
+		releaseErr = cache.ReleaseAccountShareMembershipSlot(ctx, membershipID, requestID)
+		if releaseErr == nil {
+			return
+		}
+		if ctx.Err() != nil || attempt+1 == accountShareMembershipReleaseAttempts {
+			break
+		}
+		timer := time.NewTimer(accountShareMembershipReleaseRetryInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+		case <-timer.C:
+		}
+		if ctx.Err() != nil {
+			break
+		}
+	}
+	logger.LegacyPrintf("service.concurrency", "Warning: failed to release account share membership slot for %d (req=%s): %v", membershipID, requestID, releaseErr)
 }
 
 // TrackAPIKeySlot records one active request slot for an API key without

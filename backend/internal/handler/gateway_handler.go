@@ -1365,9 +1365,27 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	// Keep model discovery scoped to the API key's platform. Without this filter,
 	// a group containing mixed-platform accounts can expose mappings that cannot
 	// be routed through the current Grok/OpenAI endpoint.
-	availableModels := h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
+	roomModels, err := h.gatewayService.GetAccountShareModels(c.Request.Context(), apiKey, platform)
+	if err != nil {
+		if c.Request.Context().Err() != nil {
+			return
+		}
+		if h.handleAccountShareModeAnthropicError(c, err, false) {
+			return
+		}
+		logger.L().Warn("gateway.account_share_models.failed", zap.Error(err))
+		h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Unable to load account share models")
+		return
+	}
+	var availableModels []string
+	if roomModels != nil {
+		c.Header("Cache-Control", "private, no-store")
+		availableModels = roomModels.Models
+	} else {
+		availableModels = h.gatewayService.GetAvailableModels(c.Request.Context(), groupID, platform)
+	}
 
-	if len(availableModels) > 0 {
+	if roomModels != nil || len(availableModels) > 0 {
 		if platform == service.PlatformGrok {
 			writeGrokModelsList(c, availableModels)
 			return

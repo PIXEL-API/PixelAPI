@@ -1155,6 +1155,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		upstreamReq.Header.Set("user-agent", userAgent)
 	}
 	account.ApplyHeaderOverrides(upstreamReq.Header)
+	ensureOpencodeSessionHeader(c, account, upstreamReq, body)
 	proxyURL := ""
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
@@ -1230,6 +1231,7 @@ func (s *OpenAIGatewayService) bufferDirectChatCompletionsAsAnthropic(
 	usage := OpenAIUsage{}
 	if parsed := openAIUsageFromChatCompletionsUsage(string(respBody)); parsed != nil {
 		usage = *parsed
+		chatResp.Usage = normalizedChatUsage(chatResp.Usage, usage)
 	}
 	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
 		requestID:            requestID,
@@ -1328,13 +1330,11 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 		}
 		if payload == "[DONE]" {
 			sawDone = true
-			continue
+			break
 		}
 		observer.ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 		billingUsageObservation.observePayload([]byte(payload))
-		if parsed := extractOpenAIChatStreamUsage(payload); parsed != nil {
-			usage = *parsed
-		}
+		usageUpdated := mergeOpenAIChatUsage(&usage, payload)
 		var chunk apicompat.ChatCompletionsChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 			logger.L().Warn("openai messages chat fallback: failed to parse stream chunk", zap.Error(err), zap.String("request_id", requestID))
@@ -1343,6 +1343,11 @@ func (s *OpenAIGatewayService) streamDirectChatCompletionsAsAnthropic(
 		if firstTokenMs == nil && !isOpenAIChatUsageOnlyStreamChunk(payload) && chatChunkStartsResponsesOutput(&chunk) {
 			milliseconds := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &milliseconds
+		}
+		if usageUpdated {
+			chunk.Usage = normalizedChatUsage(chunk.Usage, usage)
+		} else {
+			chunk.Usage = nil
 		}
 		emit(ChatCompletionsChunkToAnthropicEvents(&chunk, state))
 	}
