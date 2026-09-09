@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
+	"github.com/Wei-Shaw/sub2api/ent/schema/mixins"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/suite"
@@ -561,6 +562,54 @@ func (s *GroupRepoSuite) TestListActive_DoesNotLoadAccountCounts() {
 		}
 	}
 	s.Require().True(found, "active-lite group should be in results")
+}
+
+func (s *GroupRepoSuite) TestListActiveIDsMatchesActiveGroupsAcrossScopesAndSoftDelete() {
+	owner := mustCreateUser(s.T(), s.tx.Client(), &service.User{Email: "active-ids-owner@example.com"})
+	public := mustCreateGroup(s.T(), s.tx.Client(), &service.Group{
+		Name: "active-ids-public", Status: service.StatusActive, Scope: service.GroupScopePublic,
+	})
+	private := mustCreateGroup(s.T(), s.tx.Client(), &service.Group{
+		Name: "active-ids-private", Status: service.StatusActive,
+		Scope: service.GroupScopeUserPrivate, OwnerUserID: &owner.ID,
+	})
+	disabled := mustCreateGroup(s.T(), s.tx.Client(), &service.Group{
+		Name: "active-ids-disabled", Status: service.StatusDisabled, Scope: service.GroupScopePublic,
+	})
+	deleted := mustCreateGroup(s.T(), s.tx.Client(), &service.Group{
+		Name: "active-ids-deleted", Status: service.StatusActive, Scope: service.GroupScopePublic,
+	})
+	s.Require().NoError(s.repo.Delete(s.ctx, deleted.ID))
+
+	for _, tc := range []struct {
+		name           string
+		ctx            context.Context
+		includeDeleted bool
+	}{
+		{name: "default", ctx: s.ctx},
+		{name: "skip-soft-delete", ctx: mixins.SkipSoftDelete(s.ctx), includeDeleted: true},
+	} {
+		s.Run(tc.name, func() {
+			groups, err := s.repo.ListActive(tc.ctx)
+			s.Require().NoError(err)
+			wantIDs := make([]int64, 0, len(groups))
+			for _, group := range groups {
+				wantIDs = append(wantIDs, group.ID)
+			}
+
+			ids, err := s.repo.ListActiveIDs(tc.ctx)
+			s.Require().NoError(err)
+			s.Require().ElementsMatch(wantIDs, ids)
+			s.Require().Contains(ids, public.ID)
+			s.Require().Contains(ids, private.ID)
+			s.Require().NotContains(ids, disabled.ID)
+			if tc.includeDeleted {
+				s.Require().Contains(ids, deleted.ID)
+			} else {
+				s.Require().NotContains(ids, deleted.ID)
+			}
+		})
+	}
 }
 
 func (s *GroupRepoSuite) TestListActiveByPlatform() {

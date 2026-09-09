@@ -50,6 +50,8 @@ func (s *ProxyRepoSuite) TestCreate() {
 	got, err := s.repo.GetByID(s.ctx, proxy.ID)
 	s.Require().NoError(err, "GetByID")
 	s.Require().Equal("test-create", got.Name)
+	s.Require().True(proxy.CreatedAt.Equal(got.CreatedAt), "Create must return the stored creation time")
+	s.Require().True(proxy.UpdatedAt.Equal(got.UpdatedAt), "Create must return the stored optimistic-lock token")
 }
 
 func (s *ProxyRepoSuite) TestGetByID_NotFound() {
@@ -75,6 +77,14 @@ func (s *ProxyRepoSuite) TestUpdate() {
 	got, err := s.repo.GetByID(s.ctx, proxy.ID)
 	s.Require().NoError(err, "GetByID after update")
 	s.Require().Equal("updated", got.Name)
+	s.Require().True(proxy.UpdatedAt.Equal(got.UpdatedAt), "Update must return the stored optimistic-lock token")
+
+	proxy.Name = "updated again"
+	s.Require().NoError(s.repo.Update(s.ctx, proxy), "Update the same object again without reloading")
+	got, err = s.repo.GetByID(s.ctx, proxy.ID)
+	s.Require().NoError(err, "GetByID after second update")
+	s.Require().Equal("updated again", got.Name)
+	s.Require().True(proxy.UpdatedAt.Equal(got.UpdatedAt), "second Update must return the stored optimistic-lock token")
 }
 
 func (s *ProxyRepoSuite) TestDelete() {

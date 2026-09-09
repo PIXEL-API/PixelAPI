@@ -2517,10 +2517,10 @@ func (r *accountRepository) UpdateStatusAndError(ctx context.Context, id int64, 
 	err := r.withAccountWriteTransaction(ctx, "account status update", func(txCtx context.Context, _ *dbent.Client, exec sqlQueryExecutor) error {
 		result, err := exec.ExecContext(txCtx, `
 			UPDATE accounts
-			SET status = $2,
+			SET status = $2::text,
 				error_message = $3,
 				error_since = CASE
-					WHEN $2 = $4 THEN COALESCE(error_since, NOW())
+					WHEN $2::text = $4::text THEN COALESCE(error_since, NOW())
 					ELSE NULL
 				END,
 				updated_at = NOW()

@@ -114,10 +114,17 @@ func (r *proxyRepository) createWithClient(ctx context.Context, client *dbent.Cl
 	}
 
 	created, err := builder.Save(ctx)
-	if err == nil {
-		applyProxyEntityToService(proxyIn, created)
+	if err != nil {
+		return err
 	}
-	return err
+	// Ent's create result retains the input timestamp precision. Read the stored
+	// values inside this transaction so UpdatedAt is a valid optimistic-lock token.
+	created, err = client.Proxy.Get(ctx, created.ID)
+	if err != nil {
+		return fmt.Errorf("read created proxy: %w", err)
+	}
+	applyProxyEntityToService(proxyIn, created)
+	return nil
 }
 
 func (r *proxyRepository) withProxyWriteTransaction(

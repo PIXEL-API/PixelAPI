@@ -92,6 +92,51 @@ type schedulerAccountQueryCache struct {
 	accounts  map[schedulerAccountQueryKey][]Account
 }
 
+type schedulerFullRebuildProgress struct {
+	stage            string
+	stageStarted     time.Time
+	registeredTime   time.Duration
+	activeGroupTime  time.Duration
+	prepareTime      time.Duration
+	rebuildTime      time.Duration
+	registeredCount  int
+	activeGroupCount int
+	preparedCount    int
+}
+
+func (p *schedulerFullRebuildProgress) advance(stage string) {
+	now := time.Now()
+	elapsed := now.Sub(p.stageStarted)
+	switch p.stage {
+	case "registered":
+		p.registeredTime += elapsed
+	case "active_groups":
+		p.activeGroupTime += elapsed
+	case "prepare":
+		p.prepareTime += elapsed
+	case "rebuild":
+		p.rebuildTime += elapsed
+	}
+	p.stage = stage
+	p.stageStarted = now
+}
+
+func (p *schedulerFullRebuildProgress) log(reason string, started time.Time, err error) {
+	lastStage := p.stage
+	p.advance("")
+	errorClass := "none"
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		errorClass = "deadline"
+	case errors.Is(err, context.Canceled):
+		errorClass = "canceled"
+	case err != nil:
+		errorClass = "other"
+	}
+	logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] full rebuild summary: reason=%s last_stage=%s error_class=%s total_ms=%d registered_ms=%d active_groups_ms=%d prepare_ms=%d rebuild_ms=%d registered_buckets=%d active_groups=%d prepared_buckets=%d",
+		reason, lastStage, errorClass, time.Since(started).Milliseconds(), p.registeredTime.Milliseconds(), p.activeGroupTime.Milliseconds(), p.prepareTime.Milliseconds(), p.rebuildTime.Milliseconds(), p.registeredCount, p.activeGroupCount, p.preparedCount)
+}
+
 func newSchedulerAccountQueryCache(taskSets ...[]schedulerBucketWriteTask) *schedulerAccountQueryCache {
 	queries := &schedulerAccountQueryCache{
 		remaining: make(map[schedulerAccountQueryKey]int),
@@ -1165,30 +1210,40 @@ func (s *SchedulerSnapshotService) triggerFullRebuild(reason string) error {
 	})
 }
 
-func (s *SchedulerSnapshotService) rebuildFullSnapshot(ctx context.Context, reason string) error {
+func (s *SchedulerSnapshotService) rebuildFullSnapshot(ctx context.Context, reason string) (retErr error) {
+	started := time.Now()
+	progress := schedulerFullRebuildProgress{stage: "setup", stageStarted: started}
+	defer func() { progress.log(reason, started, retErr) }()
 	if _, err := s.lifecycleCache(); err != nil {
 		return err
 	}
+	progress.advance("registered")
 	registered, err := s.cache.ListBuckets(ctx)
 	if err != nil {
 		return err
 	}
 	registered = dedupeBuckets(registered)
+	progress.registeredCount = len(registered)
 
 	if s.isRunModeSimple() {
+		progress.advance("prepare")
 		canonical := schedulerCanonicalBuckets(0)
 		captured, err := s.captureFullRebuildCanonicalTasks(ctx, canonical)
 		if err != nil {
 			return err
 		}
+		progress.preparedCount = len(captured)
 		ordinary := appendBucketsExcept(nil, registered, canonical)
-		return s.prepareAndRebuildFullSnapshot(ctx, captured, nil, ordinary, reason)
+		return s.prepareAndRebuildFullSnapshot(ctx, captured, nil, ordinary, reason, &progress)
 	}
 
+	progress.advance("active_groups")
 	activeGroupIDs, err := s.listActiveSchedulerGroupIDs(ctx)
 	if err != nil {
 		return err
 	}
+	progress.activeGroupCount = len(activeGroupIDs)
+	progress.advance("prepare")
 	activeGroups := make(map[int64]struct{}, len(activeGroupIDs))
 	for _, groupID := range activeGroupIDs {
 		activeGroups[groupID] = struct{}{}
@@ -1204,6 +1259,7 @@ func (s *SchedulerSnapshotService) rebuildFullSnapshot(ctx context.Context, reas
 	if err != nil {
 		return err
 	}
+	progress.preparedCount = len(capturedTasks)
 	ordinaryBuckets := appendBucketsExcept(nil, registeredByGroup[0], groupZeroCanonical)
 	for groupID, buckets := range registeredByGroup {
 		if groupID < 0 {
@@ -1217,6 +1273,7 @@ func (s *SchedulerSnapshotService) rebuildFullSnapshot(ctx context.Context, reas
 		canonicalTasks, captureErr := s.captureFullRebuildCanonicalTasks(ctx, canonical)
 		if captureErr == nil {
 			capturedTasks = append(capturedTasks, canonicalTasks...)
+			progress.preparedCount = len(capturedTasks) + len(reopenedTasks)
 			ordinaryBuckets = appendBucketsExcept(ordinaryBuckets, registeredByGroup[groupID], canonical)
 			continue
 		}
@@ -1233,6 +1290,7 @@ func (s *SchedulerSnapshotService) rebuildFullSnapshot(ctx context.Context, reas
 		}
 		if plan.active {
 			reopenedTasks = append(reopenedTasks, plan.tasks...)
+			progress.preparedCount = len(capturedTasks) + len(reopenedTasks)
 			ordinaryBuckets = appendBucketsExcept(ordinaryBuckets, registeredByGroup[groupID], canonical)
 		}
 	}
@@ -1254,10 +1312,11 @@ func (s *SchedulerSnapshotService) rebuildFullSnapshot(ctx context.Context, reas
 		}
 		if plan.active {
 			reopenedTasks = append(reopenedTasks, plan.tasks...)
+			progress.preparedCount = len(capturedTasks) + len(reopenedTasks)
 			ordinaryBuckets = appendBucketsExcept(ordinaryBuckets, registeredByGroup[groupID], schedulerBucketsForGroup(groupID))
 		}
 	}
-	return s.prepareAndRebuildFullSnapshot(ctx, capturedTasks, reopenedTasks, ordinaryBuckets, reason)
+	return s.prepareAndRebuildFullSnapshot(ctx, capturedTasks, reopenedTasks, ordinaryBuckets, reason, &progress)
 }
 
 func (s *SchedulerSnapshotService) listActiveSchedulerGroupIDs(ctx context.Context) ([]int64, error) {
@@ -1297,7 +1356,7 @@ func (s *SchedulerSnapshotService) listActiveSchedulerGroupIDs(ctx context.Conte
 	return normalized, nil
 }
 
-func (s *SchedulerSnapshotService) prepareAndRebuildFullSnapshot(ctx context.Context, captured, reopened []schedulerBucketWriteTask, ordinaryBuckets []SchedulerBucket, reason string) error {
+func (s *SchedulerSnapshotService) prepareAndRebuildFullSnapshot(ctx context.Context, captured, reopened []schedulerBucketWriteTask, ordinaryBuckets []SchedulerBucket, reason string, progress *schedulerFullRebuildProgress) error {
 	preparedBuckets := make(map[SchedulerBucket]struct{}, len(captured)+len(reopened))
 	for _, task := range captured {
 		preparedBuckets[task.bucket] = struct{}{}
@@ -1317,6 +1376,8 @@ func (s *SchedulerSnapshotService) prepareAndRebuildFullSnapshot(ctx context.Con
 		return firstErr
 	}
 	captured = append(captured, ordinary...)
+	progress.preparedCount = len(captured) + len(reopened)
+	progress.advance("rebuild")
 	queries := newSchedulerAccountQueryCache(reopened, captured)
 	if err := s.rebuildPreparedBucketTasks(ctx, reopened, reason, true, queries); err != nil {
 		firstErr = err
