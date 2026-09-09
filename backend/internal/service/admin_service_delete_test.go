@@ -8,6 +8,10 @@ import (
 	"testing"
 	"time"
 
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
+	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 )
@@ -527,6 +531,52 @@ func TestAdminService_DeleteUser_DeleteError(t *testing.T) {
 	err := svc.DeleteUser(context.Background(), 9)
 	require.ErrorIs(t, err, deleteErr)
 	require.Equal(t, []int64{9}, repo.deletedIDs)
+}
+
+type unsettledUserDeletionRepo struct {
+	userRepoStub
+	t *testing.T
+}
+
+func (s *unsettledUserDeletionRepo) Delete(ctx context.Context, _ int64) error {
+	require.NotNil(s.t, dbent.TxFromContext(ctx), "the settlement guard must share the API key deletion transaction")
+	return ErrUserAccountShareUnsettled
+}
+
+type userDeletionAPIKeyRepo struct {
+	APIKeyRepository
+	t          *testing.T
+	deletedIDs []int64
+}
+
+func (s *userDeletionAPIKeyRepo) ListByUserID(context.Context, int64, pagination.PaginationParams, APIKeyListFilters) ([]APIKey, *pagination.PaginationResult, error) {
+	return []APIKey{{ID: 71, UserID: 7, Key: "synthetic-key"}}, nil, nil
+}
+
+func (s *userDeletionAPIKeyRepo) Delete(ctx context.Context, id int64) error {
+	require.NotNil(s.t, dbent.TxFromContext(ctx), "API key deletion must roll back if user deletion is blocked")
+	s.deletedIDs = append(s.deletedIDs, id)
+	return nil
+}
+
+func TestAdminService_DeleteUser_UnsettledMembershipRollsBackAPIKeyDeletion(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	t.Cleanup(func() { _ = client.Close() })
+	keys := &userDeletionAPIKeyRepo{t: t}
+	svc := &adminServiceImpl{
+		entClient:  client,
+		userRepo:   &unsettledUserDeletionRepo{userRepoStub: userRepoStub{user: &User{ID: 7, Role: RoleUser}}, t: t},
+		apiKeyRepo: keys,
+	}
+	mock.ExpectBegin()
+	mock.ExpectRollback()
+	err = svc.DeleteUser(context.Background(), 7)
+	require.ErrorIs(t, err, ErrUserAccountShareUnsettled)
+	require.Equal(t, []int64{71}, keys.deletedIDs)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 func TestAdminService_DeleteGroup_Success_WithCacheInvalidation(t *testing.T) {

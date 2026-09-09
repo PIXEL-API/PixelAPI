@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,7 +29,7 @@ func (c *openAIHTTPContinuationTestCache) GetSessionAccountID(_ context.Context,
 	if accountID, ok := c.accountBindings[c.key(groupID, sessionHash)]; ok {
 		return accountID, nil
 	}
-	return 0, redis.Nil
+	return 0, ErrGatewaySessionStringNotFound
 }
 
 func (c *openAIHTTPContinuationTestCache) SetSessionAccountID(_ context.Context, groupID int64, sessionHash string, accountID int64, _ time.Duration) error {

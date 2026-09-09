@@ -97,7 +97,6 @@ function room(): AccountShareListing {
     codex_cli_only: true,
     codex_5h_limit_percent: 100,
     codex_7d_limit_percent: 100,
-    editing_mine: false,
     created_at: '2026-07-24T00:00:00Z',
     updated_at: '2026-07-24T00:00:00Z',
   }
@@ -276,6 +275,30 @@ describe('CreateRoomAccountFlow', () => {
     expect(attachRoomAccounts).toHaveBeenCalledTimes(2)
     expect(attachRoomAccounts.mock.calls[0][1].idempotency_key)
       .toBe(attachRoomAccounts.mock.calls[1][1].idempotency_key)
+    expect(wrapper.emitted('completed')).toEqual([[{ accountID: 91 }]])
+  })
+
+  it('uses a new attach key after a confirmed unsuccessful result', async () => {
+    vi.mocked(globalThis.crypto.randomUUID)
+      .mockReturnValueOnce('33333333-3333-4333-8333-333333333333')
+    attachRoomAccounts.mockResolvedValueOnce({
+      success: 0,
+      failed: 1,
+      results: [{ account_id: 91, success: false, error: '房间账号配额已满' }],
+    })
+    const wrapper = mountFlow()
+    await flushPromises()
+    await emitCreated(wrapper, [account()])
+
+    expect(wrapper.text()).toContain('房间账号配额已满')
+    expect(wrapper.emitted('completed')).toBeUndefined()
+    await wrapper.get('[data-testid="retry-room-account-attach"]').trigger('click')
+    await flushPromises()
+
+    expect(convertAccountExternalPlacement).toHaveBeenCalledTimes(1)
+    expect(attachRoomAccounts).toHaveBeenCalledTimes(2)
+    expect(attachRoomAccounts.mock.calls[0][1].idempotency_key)
+      .not.toBe(attachRoomAccounts.mock.calls[1][1].idempotency_key)
     expect(wrapper.emitted('completed')).toEqual([[{ accountID: 91 }]])
   })
 

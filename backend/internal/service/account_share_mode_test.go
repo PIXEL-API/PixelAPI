@@ -18,87 +18,92 @@ import (
 )
 
 type accountShareModeRepoStub struct {
-	ensureNameErr        error
-	modeGroup            *bool
-	modeGroupErr         error
-	modeGroups           map[string]*Group
-	modeGroupGetCalls    []string
-	modeGroupEnsureCalls []string
-	isModeCalls          int
-	bindingCalls         int
-	activationCalls      int
-	activationErr        error
-	bindingResults       []accountShareModeBindingResult
-	membership           *AccountShareMembership
-	listing              *AccountShareListing
-	getListingIDs        []int64
-	getListingViewerIDs  []int64
-	listingsByPage       map[int][]AccountShareListing
-	listPages            []int
-	listParams           []pagination.PaginationParams
-	listFilters          AccountShareListingFilters
-	spendQuery           AccountShareMySpendQuery
-	spendSummary         *AccountShareMySpendSummary
-	spendErr             error
-	updateAdmin          bool
-	updateCalls          int
-	updateInput          UpdateAccountShareListingInput
-	updateListing        *AccountShareListing
-	beginInput           BeginAccountShareListingEditInput
-	beginActorIsAdmin    bool
-	beginListing         *AccountShareListing
-	beginErr             error
-	endSnapshot          *AccountShareMembership
-	endMembership        *AccountShareMembership
-	endBilling           *AccountShareSeatBillingResult
-	endInput             BeginAccountShareMembershipEndInput
-	endErr               error
-	endCalls             int
-	idleEndCalls         int
-	idleEndMembership    *AccountShareMembership
-	finalizeMembership   *AccountShareMembership
-	finalizeBilling      *AccountShareSeatBillingResult
-	finalizeDone         bool
-	finalizeErr          error
-	finalizeCalls        int
-	finalizeOperationID  string
-	endingCandidates     []AccountShareEndingMembershipCandidate
-	endingCandidatesErr  error
-	submitReview         *AccountShareReview
-	submitReviewInput    SubmitAccountShareReviewInput
-	submitReviewCalls    int
-	submitReviewErr      error
-	requestBillingCalls  int
-	requestBillingErr    error
-	waiverCompCalls      int
-	waiverCompLimit      int
-	waiverBacklogQueue   []*AccountShareSeatWaiverBatch
-	waiverBacklogCursors [][2]any
-	waiverLateCalls      int
-	waiverLateQueue      []*AccountShareSeatWaiverBatch
-	waiverLateUsageSince []time.Time
-	recoverableIDs       []int64
-	recoverableSuspend   *AccountShareMembership
-	recoverableCalls     int
-	touchCalls           int
-	touchTimes           []time.Time
-	touchSignal          chan time.Time
-	touchErr             error
-	createdAccount       *Account
-	createdListing       *AccountShareListing
-	createdModeGroupID   int64
-	joinInput            AccountShareJoinRepositoryInput
-	joinMembership       *AccountShareMembership
-	joinErr              error
-	revisionTerms        *AccountShareListingTermsSnapshot
-	revisionTermsErr     error
-	policy               *AccountSharePolicy
-	policyErr            error
-	bindingMemberships   []AccountShareMembership
-	bindingErr           error
-	bindingConsumerID    int64
-	bindingAPIKeyID      int64
-	bindingStatusCalls   int
+	ensureNameErr         error
+	modeGroup             *bool
+	modeGroupErr          error
+	modeGroups            map[string]*Group
+	modeGroupGetCalls     []string
+	modeGroupEnsureCalls  []string
+	isModeCalls           int
+	bindingCalls          int
+	activationCalls       int
+	activationErr         error
+	bindingResults        []accountShareModeBindingResult
+	membership            *AccountShareMembership
+	listing               *AccountShareListing
+	getListingIDs         []int64
+	getListingViewerIDs   []int64
+	listingsByPage        map[int][]AccountShareListing
+	listPages             []int
+	listParams            []pagination.PaginationParams
+	listFilters           AccountShareListingFilters
+	spendQuery            AccountShareMySpendQuery
+	spendSummary          *AccountShareMySpendSummary
+	spendErr              error
+	updateAdmin           bool
+	updateCalls           int
+	updateInput           UpdateAccountShareListingInput
+	updateListing         *AccountShareListing
+	beginActorIsAdmin     bool
+	beginListing          *AccountShareListing
+	beginErr              error
+	endSnapshot           *AccountShareMembership
+	endMembership         *AccountShareMembership
+	endBilling            *AccountShareSeatBillingResult
+	endInput              BeginAccountShareMembershipEndInput
+	endErr                error
+	endCalls              int
+	idleEndCalls          int
+	idleEndMembership     *AccountShareMembership
+	finalizeMembership    *AccountShareMembership
+	finalizeBilling       *AccountShareSeatBillingResult
+	finalizeDone          bool
+	finalizeErr           error
+	finalizeCalls         int
+	finalizeHook          func(context.Context, int64, string) (*AccountShareMembership, *AccountShareSeatBillingResult, bool, error)
+	finalizeOperationID   string
+	endProgress           []AccountShareMembershipEndProgress
+	endProgressOperations []string
+	endProgressHook       func(context.Context, AccountShareMembershipEndProgress) error
+	endingCandidates      []AccountShareEndingMembershipCandidate
+	endingCandidatesErr   error
+	submitReview          *AccountShareReview
+	submitReviewInput     SubmitAccountShareReviewInput
+	submitReviewCalls     int
+	submitReviewErr       error
+	requestBillingCalls   int
+	requestBillingErr     error
+	seatBillingErr        error
+	waiverCompCalls       int
+	waiverCompLimit       int
+	waiverBacklogQueue    []*AccountShareSeatWaiverBatch
+	waiverBacklogCursors  [][2]any
+	waiverLateCalls       int
+	waiverLateQueue       []*AccountShareSeatWaiverBatch
+	waiverLateUsageSince  []time.Time
+	recoverableIDs        []int64
+	recoverableSuspend    *AccountShareMembership
+	recoverableCalls      int
+	touchCalls            int
+	touchTimes            []time.Time
+	touchSignal           chan time.Time
+	touchErr              error
+	createdAccount        *Account
+	createdListing        *AccountShareListing
+	createdModeGroupID    int64
+	joinInput             AccountShareJoinRepositoryInput
+	joinCalls             int
+	joinMembership        *AccountShareMembership
+	joinErr               error
+	revisionTerms         *AccountShareListingTermsSnapshot
+	revisionTermsErr      error
+	policy                *AccountSharePolicy
+	policyErr             error
+	bindingMemberships    []AccountShareMembership
+	bindingErr            error
+	bindingConsumerID     int64
+	bindingAPIKeyID       int64
+	bindingStatusCalls    int
 }
 
 type accountShareBillingLifecycleRepoStub struct {
@@ -109,10 +114,11 @@ type accountShareBillingLifecycleRepoStub struct {
 
 func (r *accountShareBillingLifecycleRepoStub) ListEndingMembershipCandidates(
 	ctx context.Context,
+	afterID int64,
 	limit int,
 ) ([]AccountShareEndingMembershipCandidate, error) {
 	r.endingCalls++
-	return r.AccountShareModeRepository.ListEndingMembershipCandidates(ctx, limit)
+	return r.AccountShareModeRepository.ListEndingMembershipCandidates(ctx, afterID, limit)
 }
 
 func (r *accountShareBillingLifecycleRepoStub) GetRoomManagementState(
@@ -427,22 +433,6 @@ func (r *accountShareEditRuntimeRepoStub) GetRoomManagementState(
 	return &state, nil
 }
 
-func (r *accountShareEditRuntimeRepoStub) BeginListingEdit(
-	_ context.Context,
-	actorUserID int64,
-	_ bool,
-	listingID int64,
-	input BeginAccountShareListingEditInput,
-) (*AccountShareListing, error) {
-	r.beginCalls++
-	return &AccountShareListing{
-		ID:              listingID,
-		OwnerUserID:     actorUserID,
-		EditSessionID:   input.SessionID,
-		EditingByUserID: &actorUserID,
-	}, nil
-}
-
 func (r *accountShareRoomRepoStub) ListRoomAccounts(_ context.Context, listingID, viewerUserID int64, viewerIsAdmin bool) ([]AccountShareRoomAccount, error) {
 	r.roomAccountsListingID = listingID
 	r.roomAccountsViewerUserID = viewerUserID
@@ -582,6 +572,7 @@ type accountShareMembershipConcurrencyCacheStub struct {
 	accountRefreshCalls    int
 	membershipRefreshCalls int
 	current                int
+	currentByMembership    map[int64]int
 	currentErr             error
 	refreshErr             error
 	refreshLost            bool
@@ -599,7 +590,10 @@ func (s *accountShareMembershipConcurrencyCacheStub) ReleaseAccountShareMembersh
 	return nil
 }
 
-func (s *accountShareMembershipConcurrencyCacheStub) GetAccountShareMembershipConcurrency(context.Context, int64) (int, error) {
+func (s *accountShareMembershipConcurrencyCacheStub) GetAccountShareMembershipConcurrency(_ context.Context, membershipID int64) (int, error) {
+	if s.currentByMembership != nil {
+		return s.currentByMembership[membershipID], s.currentErr
+	}
 	return s.current, s.currentErr
 }
 
@@ -1486,22 +1480,6 @@ func TestCreateRoomFromOwnedAccountRejectsUnsupportedPlatformBeforeRuntimeMutati
 	require.Empty(t, modeRepo.modeGroupEnsureCalls)
 }
 
-func (r *accountShareModeRepoStub) BeginListingEdit(_ context.Context, _ int64, actorIsAdmin bool, _ int64, input BeginAccountShareListingEditInput) (*AccountShareListing, error) {
-	r.beginActorIsAdmin = actorIsAdmin
-	r.beginInput = input
-	if r.beginErr != nil {
-		return nil, r.beginErr
-	}
-	if r.beginListing != nil {
-		return r.beginListing, nil
-	}
-	return nil, ErrAccountShareListingNotFound
-}
-
-func (r *accountShareModeRepoStub) ReleaseListingEdit(context.Context, int64, bool, int64, string) (*AccountShareListing, error) {
-	return nil, ErrAccountShareListingNotFound
-}
-
 func (r *accountShareModeRepoStub) UpdateListing(_ context.Context, _ int64, actorIsAdmin bool, _ int64, input UpdateAccountShareListingInput) (*AccountShareListing, error) {
 	r.updateAdmin = actorIsAdmin
 	r.updateCalls++
@@ -1534,6 +1512,7 @@ func (r *accountShareModeRepoStub) EnsureListingRevisionTerms(_ context.Context,
 }
 
 func (r *accountShareModeRepoStub) JoinListing(_ context.Context, input AccountShareJoinRepositoryInput) (*AccountShareMembership, error) {
+	r.joinCalls++
 	r.joinInput = input
 	if r.joinErr != nil {
 		return nil, r.joinErr
@@ -1543,6 +1522,23 @@ func (r *accountShareModeRepoStub) JoinListing(_ context.Context, input AccountS
 		return &membership, nil
 	}
 	return nil, ErrAccountShareListingNotFound
+}
+
+func (r *accountShareModeRepoStub) FindMembershipByJoinIntent(_ context.Context, consumerUserID, listingID, apiKeyID int64, nonce string) (*AccountShareMembership, error) {
+	if r.joinCalls == 0 || r.joinMembership == nil || r.joinErr != nil ||
+		r.joinInput.ConsumerUserID != consumerUserID || r.joinInput.ListingID != listingID ||
+		r.joinInput.APIKeyID != apiKeyID || r.joinInput.IntentNonce != nonce {
+		return nil, nil
+	}
+	switch r.joinMembership.Status {
+	case AccountShareMembershipStatusActive:
+		membership := *r.joinMembership
+		return &membership, nil
+	case AccountShareMembershipStatusEnding:
+		return nil, ErrAccountShareMembershipEnding
+	default:
+		return nil, ErrAccountShareJoinIntentConsumed
+	}
 }
 
 func (r *accountShareModeRepoStub) GetMembershipForEnd(_ context.Context, consumerUserID int64, membershipID int64) (*AccountShareMembership, error) {
@@ -1585,9 +1581,12 @@ func (r *accountShareModeRepoStub) BeginMembershipEnd(_ context.Context, input B
 	return nil, nil, ErrAccountShareMembershipNotFound
 }
 
-func (r *accountShareModeRepoStub) FinalizeMembershipEnd(_ context.Context, membershipID int64, operationID string) (*AccountShareMembership, *AccountShareSeatBillingResult, bool, error) {
+func (r *accountShareModeRepoStub) FinalizeMembershipEnd(ctx context.Context, membershipID int64, operationID string) (*AccountShareMembership, *AccountShareSeatBillingResult, bool, error) {
 	r.finalizeCalls++
 	r.finalizeOperationID = operationID
+	if r.finalizeHook != nil {
+		return r.finalizeHook(ctx, membershipID, operationID)
+	}
 	if r.finalizeErr != nil {
 		return nil, nil, false, r.finalizeErr
 	}
@@ -1605,8 +1604,23 @@ func (r *accountShareModeRepoStub) FinalizeMembershipEnd(_ context.Context, memb
 	}, nil, false, nil
 }
 
-func (r *accountShareModeRepoStub) ListEndingMembershipCandidates(context.Context, int) ([]AccountShareEndingMembershipCandidate, error) {
-	return append([]AccountShareEndingMembershipCandidate(nil), r.endingCandidates...), r.endingCandidatesErr
+func (r *accountShareModeRepoStub) UpdateMembershipEndProgress(ctx context.Context, _ int64, operationID string, progress AccountShareMembershipEndProgress) error {
+	r.endProgress = append(r.endProgress, progress)
+	r.endProgressOperations = append(r.endProgressOperations, operationID)
+	if r.endProgressHook != nil {
+		return r.endProgressHook(ctx, progress)
+	}
+	return nil
+}
+
+func (r *accountShareModeRepoStub) ListEndingMembershipCandidates(_ context.Context, afterID int64, limit int) ([]AccountShareEndingMembershipCandidate, error) {
+	var candidates []AccountShareEndingMembershipCandidate
+	for _, candidate := range r.endingCandidates {
+		if candidate.MembershipID > afterID && len(candidates) < limit {
+			candidates = append(candidates, candidate)
+		}
+	}
+	return candidates, r.endingCandidatesErr
 }
 
 func (r *accountShareModeRepoStub) UpdateMembershipIdleTimeout(context.Context, int64, int64, int) (*AccountShareMembership, error) {
@@ -1649,10 +1663,6 @@ func (r *accountShareModeRepoStub) FailReviewModeration(context.Context, int64, 
 	return nil
 }
 
-func (r *accountShareModeRepoStub) ListMembershipQueue(context.Context, int64, int64) ([]AccountShareMembership, error) {
-	return nil, nil
-}
-
 func (r *accountShareModeRepoStub) ListAPIKeyBindingMemberships(_ context.Context, consumerUserID int64, apiKeyID int64) ([]AccountShareMembership, error) {
 	r.bindingStatusCalls++
 	r.bindingConsumerID = consumerUserID
@@ -1667,7 +1677,6 @@ func TestAccountShareModeGetAPIKeyBindingStatusCountsEveryBlockingState(t *testi
 	repo := &accountShareModeRepoStub{
 		bindingMemberships: []AccountShareMembership{
 			{ID: 1, APIKeyID: 42, Status: AccountShareMembershipStatusActive},
-			{ID: 2, APIKeyID: 42, Status: AccountShareMembershipStatusQueued},
 			{
 				ID:                    3,
 				APIKeyID:              42,
@@ -1688,12 +1697,11 @@ func TestAccountShareModeGetAPIKeyBindingStatusCountsEveryBlockingState(t *testi
 	require.NoError(t, err)
 	require.Equal(t, int64(42), status.APIKeyID)
 	require.Equal(t, 1, status.ActiveCount)
-	require.Equal(t, 1, status.QueuedCount)
 	require.Equal(t, 1, status.EndingCount)
-	require.Equal(t, 3, status.BlockingCount)
-	require.Len(t, status.Memberships, 3)
-	require.Equal(t, "pending", status.Memberships[2].SettlementStatus)
-	require.Equal(t, "needs_attention", status.Memberships[2].EndingOperationStatus)
+	require.Equal(t, 2, status.BlockingCount)
+	require.Len(t, status.Memberships, 2)
+	require.Equal(t, "pending", status.Memberships[1].SettlementStatus)
+	require.Equal(t, "needs_attention", status.Memberships[1].EndingOperationStatus)
 	require.Equal(t, 1, repo.bindingStatusCalls)
 	require.Equal(t, int64(7), repo.bindingConsumerID)
 	require.Equal(t, int64(42), repo.bindingAPIKeyID)
@@ -1711,10 +1719,6 @@ func TestAccountShareModeGetAPIKeyBindingStatusRejectsForeignAPIKey(t *testing.T
 	require.Nil(t, status)
 	require.ErrorIs(t, err, ErrInsufficientPerms)
 	require.Zero(t, repo.bindingStatusCalls)
-}
-
-func (r *accountShareModeRepoStub) ReorderMembershipQueue(context.Context, int64, int64, []int64) ([]AccountShareMembership, error) {
-	return nil, ErrAccountShareQueueInvalid
 }
 
 func (r *accountShareModeRepoStub) TouchMembershipLastRequest(_ context.Context, _ int64, at time.Time) error {
@@ -1758,7 +1762,7 @@ func (r *accountShareModeRepoStub) ListRecoverableUnavailableMembershipIDs(conte
 	return append([]int64(nil), r.recoverableIDs...), nil
 }
 
-func (r *accountShareModeRepoStub) SuspendRecoverableUnavailableMembership(context.Context, int64, time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error) {
+func (r *accountShareModeRepoStub) BeginUnavailableMembershipEnd(context.Context, int64, time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error) {
 	r.recoverableCalls++
 	if r.recoverableSuspend != nil && r.membership != nil && r.recoverableSuspend.ID == r.membership.ID {
 		r.membership = nil
@@ -1776,7 +1780,7 @@ func (r *accountShareModeRepoStub) EndUnavailableAccountMemberships(context.Cont
 }
 
 func (r *accountShareModeRepoStub) ProcessSeatBilling(context.Context, time.Time, int) (*AccountShareSeatBillingResult, error) {
-	return &AccountShareSeatBillingResult{}, nil
+	return &AccountShareSeatBillingResult{}, r.seatBillingErr
 }
 
 func (r *accountShareModeRepoStub) ProcessSeatWaiverBacklogCompensations(_ context.Context, _ time.Time, limit int, cursorPeriodEndedAt time.Time, cursorID int64) (*AccountShareSeatWaiverBatch, error) {
@@ -1819,6 +1823,11 @@ func (r *accountShareModeRepoStub) GetActiveMembershipForAPIKey(context.Context,
 	return nil, nil, ErrAccountShareListingNotFound
 }
 
+func (r *accountShareModeRepoStub) GetMembershipRequestState(context.Context, int64, int64, int64, time.Time) error {
+
+	return ErrAccountShareListingNotFound
+}
+
 func (r *accountShareModeRepoStub) GetActiveMembershipForRequest(context.Context, int64, int64, int64) (*AccountShareMembership, *AccountShareListing, error) {
 	r.bindingCalls++
 	if len(r.bindingResults) > 0 {
@@ -1830,19 +1839,6 @@ func (r *accountShareModeRepoStub) GetActiveMembershipForRequest(context.Context
 		return nil, nil, ErrAccountShareListingNotFound
 	}
 	return r.membership, r.listing, nil
-}
-
-func (r *accountShareModeRepoStub) ActivateNextQueuedMembershipForRequest(context.Context, int64, int64, int64, int, time.Time) (*AccountShareMembership, *AccountShareListing, error) {
-	r.activationCalls++
-	if r.activationErr != nil {
-		return nil, nil, r.activationErr
-	}
-	if len(r.bindingResults) > 0 {
-		result := r.bindingResults[0]
-		r.bindingResults = r.bindingResults[1:]
-		return result.membership, result.listing, result.err
-	}
-	return nil, nil, ErrAccountShareListingNotFound
 }
 
 type accountShareModeRebindRepoStub struct {
@@ -1917,7 +1913,7 @@ func TestAccountShareModeSeatBillingDoesNotRunRoomLifecycle(t *testing.T) {
 	err := svc.processSeatBillingOnceLeased(context.Background(), &ClusterLeaseGuard{})
 
 	require.NoError(t, err)
-	require.Equal(t, 1, repo.endingCalls)
+	require.Zero(t, repo.endingCalls)
 	require.Zero(t, repo.lifecycleCalls)
 }
 
@@ -1927,7 +1923,7 @@ func TestAccountShareModeRoomLifecycleFinalizerRunsIndependentlyFromSeatBilling(
 	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
 	svc.taskExecutor = &ClusterTaskExecutor{}
 
-	svc.processRoomLifecycleFinalizationOnce()
+	require.NoError(t, svc.processRoomLifecycleFinalizationOnce())
 
 	require.Equal(t, 1, repo.lifecycleCalls)
 }
@@ -2676,9 +2672,6 @@ func TestAccountShareModeRecommendListingsScansAllPagesAndKeepsTopCandidates(t *
 	if got.Items[0].Listing.ID != 2 {
 		t.Fatalf("expected second page listing to win, got listing %d", got.Items[0].Listing.ID)
 	}
-	if got.Recommended == nil || got.Recommended.Listing.ID != 2 {
-		t.Fatalf("expected recommended listing 2, got %#v", got.Recommended)
-	}
 	if len(repo.listPages) != 2 || repo.listPages[0] != 1 || repo.listPages[1] != 2 {
 		t.Fatalf("expected pages 1 and 2 to be loaded, got %#v", repo.listPages)
 	}
@@ -2690,7 +2683,7 @@ func TestAccountShareModeRecommendListingsScansAllPagesAndKeepsTopCandidates(t *
 	}
 }
 
-func TestAccountShareModeRecommendListingsUsesRoomQuotaMaximumForRiskRanking(t *testing.T) {
+func TestAccountShareModeRecommendListingsPreservesQuotaDetailsWithoutQualityRanking(t *testing.T) {
 	high5h := 96.0
 	high7d := 91.0
 	low5h := 30.0
@@ -2773,12 +2766,9 @@ func TestAccountShareModeRecommendListingsUsesRoomQuotaMaximumForRiskRanking(t *
 
 	require.NoError(t, err)
 	require.Len(t, got.Items, 2)
-	require.Equal(t, int64(2), got.Items[0].Listing.ID)
-	require.Greater(
-		t,
-		got.Items[0].ScoreBreakdown.RiskControlScore,
-		got.Items[1].ScoreBreakdown.RiskControlScore,
-	)
+	require.Equal(t, int64(1), got.Items[0].Listing.ID, "equal estimated costs use stable room ID ordering")
+	require.Equal(t, &high5h, got.Items[0].Listing.QuotaSummary.Window5h.MaxUtilization)
+	require.Equal(t, &low5h, got.Items[1].Listing.QuotaSummary.Window5h.MaxUtilization)
 }
 
 func TestAccountShareModeRecommendListingsExcludesRepresentativeAccountWithZeroConcurrency(t *testing.T) {
@@ -2906,21 +2896,11 @@ func TestAccountShareModeRecommendListingsRanksByEstimatedCostBeforeQuality(t *t
 	if got.Items[0].Estimate.TotalCost >= got.Items[1].Estimate.TotalCost {
 		t.Fatalf("expected first candidate to be cheaper: first=%f second=%f", got.Items[0].Estimate.TotalCost, got.Items[1].Estimate.TotalCost)
 	}
-	if got.Items[0].ScoreBreakdown.CostSavingScore <= 0 {
-		t.Fatalf("expected score breakdown to include cost saving score, got %#v", got.Items[0].ScoreBreakdown)
-	}
-	if got.Items[0].ScoreBreakdown.OverallScore != got.Items[0].Score {
-		t.Fatalf("expected candidate score to mirror overall score, score=%f breakdown=%#v", got.Items[0].Score, got.Items[0].ScoreBreakdown)
-	}
-	if !accountShareTestContainsString(got.Items[0].Tags, "最省额度") {
-		t.Fatalf("expected cheapest candidate to receive cost-saving tag, got %#v", got.Items[0].Tags)
-	}
-	if got.Recommended == nil || got.Recommended.Listing.ID != 2 {
-		t.Fatalf("expected recommended listing 2, got %#v", got.Recommended)
-	}
+	require.Contains(t, got.Items[0].Estimate.Assumption, "均匀分布")
+	require.Contains(t, got.Items[0].Estimate.Assumption, "每小时窗口")
 }
 
-func TestAccountShareModeRecommendListingsAddsSmartLabels(t *testing.T) {
+func TestAccountShareModeRecommendListingsReturnsCostEstimateWithoutSubjectiveLabels(t *testing.T) {
 	repo := &accountShareModeRepoStub{
 		listingsByPage: map[int][]AccountShareListing{
 			1: {
@@ -2981,57 +2961,20 @@ func TestAccountShareModeRecommendListingsAddsSmartLabels(t *testing.T) {
 	if got.Items[0].Listing.ID != 1 {
 		t.Fatalf("expected cheapest listing to remain first, got listing %d", got.Items[0].Listing.ID)
 	}
-	if !accountShareTestContainsString(got.Items[0].Tags, "最省额度") {
-		t.Fatalf("expected cheapest listing to receive cost-saving tag, got %#v", got.Items[0].Tags)
+	for _, candidate := range got.Items {
+		require.NotEmpty(t, candidate.Estimate.Assumption)
 	}
-	var stableCandidate *AccountShareRecommendationCandidate
-	for i := range got.Items {
-		if got.Items[i].Listing.ID == 2 {
-			stableCandidate = &got.Items[i]
-			break
-		}
-	}
-	if stableCandidate == nil {
-		t.Fatal("expected stable candidate to be returned")
-	}
-	if !accountShareTestContainsString(stableCandidate.Tags, "最稳妥") {
-		t.Fatalf("expected stable candidate to receive stability tag, got %#v", stableCandidate.Tags)
-	}
-	if !accountShareTestContainsString(stableCandidate.Tags, "性价比最高") {
-		t.Fatalf("expected best overall candidate to receive value tag, got %#v", stableCandidate.Tags)
-	}
-	if stableCandidate.ScoreBreakdown.OverallScore <= got.Items[0].ScoreBreakdown.OverallScore {
-		t.Fatalf("expected stable candidate to have higher overall score: stable=%#v cheapest=%#v", stableCandidate.ScoreBreakdown, got.Items[0].ScoreBreakdown)
+	payload, err := json.Marshal(got)
+	require.NoError(t, err)
+	for _, removed := range []string{"score", "score_breakdown", "tags", "reasons", "recommended"} {
+		require.NotContains(t, string(payload), "\""+removed+"\":")
 	}
 }
 
-func TestAccountShareRecommendationSelectCandidatesKeepsQualityOutliersWithinLimit(t *testing.T) {
-	candidates := []AccountShareRecommendationCandidate{
-		accountShareRecommendationTestCandidate(1, 0.10, 56, 56, 72, 78),
-		accountShareRecommendationTestCandidate(2, 0.11, 55, 55, 70, 76),
-		accountShareRecommendationTestCandidate(3, 0.12, 54, 54, 68, 74),
-		accountShareRecommendationTestCandidate(4, 0.13, 53, 53, 66, 72),
-		accountShareRecommendationTestCandidate(5, 0.14, 52, 52, 64, 70),
-		accountShareRecommendationTestCandidate(6, 0.15, 51, 51, 62, 68),
-		accountShareRecommendationTestCandidate(7, 0.19, 96, 95, 98, 97),
-	}
-
-	selected := accountShareRecommendationSelectCandidates(candidates, 5)
-
-	if len(selected) != 5 {
-		t.Fatalf("expected selector to respect limit, got %d candidates", len(selected))
-	}
-	if !accountShareRecommendationTestContainsListing(selected, 7) {
-		t.Fatalf("expected higher quality outlier to remain selectable, got listing IDs %#v", accountShareRecommendationTestListingIDs(selected))
-	}
-	if accountShareRecommendationTestContainsListing(selected, 5) || accountShareRecommendationTestContainsListing(selected, 6) {
-		t.Fatalf("expected lower quality filler candidates to be displaced, got listing IDs %#v", accountShareRecommendationTestListingIDs(selected))
-	}
-	for i := 1; i < len(selected); i++ {
-		if selected[i-1].Estimate.TotalCost > selected[i].Estimate.TotalCost {
-			t.Fatalf("expected final candidates to stay sorted by estimated cost, got listing IDs %#v", accountShareRecommendationTestListingIDs(selected))
-		}
-	}
+func TestAccountShareEstimateWarningsDoNotSuggestReservations(t *testing.T) {
+	warnings := buildAccountShareEstimateWarnings(AccountShareListing{SeatLimit: 2, ActiveSeats: 2}, AccountShareRecommendationEstimate{})
+	require.Contains(t, warnings, "当前没有空闲席位，暂时无法加入")
+	require.Contains(t, warnings, "实时并发状态暂不可用")
 }
 
 func TestAccountShareModeRecommendListingsDeduplicatesSameAccountIdentity(t *testing.T) {
@@ -3100,9 +3043,6 @@ func TestAccountShareModeRecommendListingsDeduplicatesSameAccountIdentity(t *tes
 	}
 	if got.Items[0].Listing.ID != 2 {
 		t.Fatalf("expected better duplicate listing to win, got listing %d", got.Items[0].Listing.ID)
-	}
-	if got.Recommended == nil || got.Recommended.Listing.ID != 2 {
-		t.Fatalf("expected recommended listing 2, got %#v", got.Recommended)
 	}
 }
 
@@ -3219,7 +3159,7 @@ func TestAccountShareModeUpdateListingRejectsRoomLevelAccountConcurrencyEdit(t *
 	concurrency := AccountShareModeMaxAccountConcurrency + 1
 	expectedVersion := int64(1)
 
-	_, err := svc.UpdateListing(context.Background(), 42, true, 7, UpdateAccountShareListingInput{Concurrency: &concurrency, EditSessionID: "edit-session", ExpectedVersion: &expectedVersion})
+	_, err := svc.UpdateListing(context.Background(), 42, true, 7, UpdateAccountShareListingInput{Concurrency: &concurrency, ExpectedVersion: &expectedVersion})
 	if !errors.Is(err, ErrAccountShareRoomAccountConfigUnsupported) {
 		t.Fatalf("expected room-level account config rejection, got %v", err)
 	}
@@ -3269,14 +3209,9 @@ func TestAccountShareModeUpdateListingOwnerPermissions(t *testing.T) {
 	if repo.updateCalls != callsBeforeSessionless+1 {
 		t.Fatalf("expected sessionless contract update to be forwarded to the repository, calls=%d", repo.updateCalls)
 	}
-	if strings.TrimSpace(repo.updateInput.EditSessionID) != "" {
-		t.Fatalf("expected empty edit session to be forwarded verbatim, got %q", repo.updateInput.EditSessionID)
-	}
 
-	sessionID := "edit-session-1"
 	_, err = svc.UpdateListing(context.Background(), 42, false, 7, UpdateAccountShareListingInput{
 		AllowedModels:   &models,
-		EditSessionID:   sessionID,
 		ExpectedVersion: &expectedVersion,
 		Reason:          "调整可用模型",
 	})
@@ -3346,7 +3281,6 @@ func TestAccountShareModeUpdateListingAdminForceRequiresReasonAndConfirmation(t 
 
 	_, err := svc.UpdateListing(context.Background(), 42, true, 7, UpdateAccountShareListingInput{
 		SeatLimit:       &seatLimit,
-		EditSessionID:   "admin-edit",
 		ExpectedVersion: &expectedVersion,
 		ForceActiveEdit: true,
 		Confirmed:       true,
@@ -3357,7 +3291,6 @@ func TestAccountShareModeUpdateListingAdminForceRequiresReasonAndConfirmation(t 
 
 	_, err = svc.UpdateListing(context.Background(), 42, true, 7, UpdateAccountShareListingInput{
 		SeatLimit:       &seatLimit,
-		EditSessionID:   "admin-edit",
 		ExpectedVersion: &expectedVersion,
 		ForceActiveEdit: true,
 		Reason:          "risk accepted",
@@ -3368,149 +3301,6 @@ func TestAccountShareModeUpdateListingAdminForceRequiresReasonAndConfirmation(t 
 	if repo.updateCalls != 0 {
 		t.Fatalf("expected invalid force requests to skip repository, got %d calls", repo.updateCalls)
 	}
-}
-
-func TestAccountShareModeBeginListingEditAttachesOwnerProxySnapshot(t *testing.T) {
-	ownerUserID := int64(42)
-	proxyID := int64(77)
-	now := time.Now().UTC()
-	repo := &accountShareModeRepoStub{
-		beginListing: &AccountShareListing{
-			ID:          7,
-			AccountID:   9,
-			OwnerUserID: ownerUserID,
-			ProxyID:     &proxyID,
-		},
-	}
-	proxyRepo := &accountShareModeProxyRepoStub{
-		proxy: &Proxy{
-			ID:          proxyID,
-			Name:        "owner-proxy",
-			Protocol:    "socks5",
-			Host:        "203.0.113.10",
-			Port:        1080,
-			Username:    "proxy-user",
-			Password:    "secret",
-			OwnerUserID: &ownerUserID,
-			Status:      StatusActive,
-			MaxAccounts: 2,
-			CreatedAt:   now,
-			UpdatedAt:   now,
-		},
-	}
-	svc := &AccountShareModeService{repo: repo, proxyRepo: proxyRepo}
-
-	got, err := svc.BeginListingEdit(context.Background(), 100, true, 7, "edit-session", true)
-	if err != nil {
-		t.Fatalf("BeginListingEdit failed: %v", err)
-	}
-	if !repo.beginActorIsAdmin {
-		t.Fatal("expected admin flag to pass through")
-	}
-	if repo.beginInput.SessionID != "edit-session" {
-		t.Fatalf("unexpected edit session: %q", repo.beginInput.SessionID)
-	}
-	if !repo.beginInput.Force {
-		t.Fatal("expected admin force edit to pass through")
-	}
-	if proxyRepo.getVisibleCalls != 1 {
-		t.Fatalf("expected proxy lookup once, got %d", proxyRepo.getVisibleCalls)
-	}
-	if proxyRepo.getVisibleUserID != ownerUserID {
-		t.Fatalf("expected proxy lookup by owner user %d, got %d", ownerUserID, proxyRepo.getVisibleUserID)
-	}
-	if proxyRepo.getVisibleID != proxyID {
-		t.Fatalf("expected proxy lookup id %d, got %d", proxyID, proxyRepo.getVisibleID)
-	}
-	if got.Proxy == nil {
-		t.Fatal("expected listing proxy snapshot")
-	}
-	if got.Proxy.ID != proxyID || got.Proxy.Name != "owner-proxy" || got.Proxy.Host != "203.0.113.10" {
-		t.Fatalf("unexpected proxy snapshot: %#v", got.Proxy)
-	}
-}
-
-func TestAccountShareModeBeginListingEditFailsClosedWhenRuntimeUnavailable(t *testing.T) {
-	repo := &accountShareEditRuntimeRepoStub{
-		state: &AccountShareRoomManagementState{
-			ListingID:       7,
-			OwnerUserID:     42,
-			LifecycleStatus: AccountShareListingStatusPaused,
-		},
-	}
-	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
-
-	listing, err := svc.BeginListingEdit(context.Background(), 42, false, 7, "edit-session", false)
-
-	require.Nil(t, listing)
-	require.ErrorIs(t, err, ErrAccountShareRuntimeDependencyUnavailable)
-	require.Equal(t, 1, repo.stateCalls)
-	require.Zero(t, repo.beginCalls)
-}
-
-func TestAccountShareModeBeginListingEditRejectsInFlightRuntime(t *testing.T) {
-	repo := &accountShareEditRuntimeRepoStub{
-		state: &AccountShareRoomManagementState{
-			ListingID:            7,
-			OwnerUserID:          42,
-			LifecycleStatus:      AccountShareListingStatusPaused,
-			RuntimeMembershipIDs: []int64{70},
-		},
-	}
-	cache := &accountShareMembershipConcurrencyCacheStub{current: 1}
-	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
-	svc.SetRuntimeDependencies(NewConcurrencyService(cache), nil, nil, nil)
-
-	listing, err := svc.BeginListingEdit(context.Background(), 42, false, 7, "edit-session", false)
-
-	require.Nil(t, listing)
-	require.ErrorIs(t, err, ErrAccountShareListingInUse)
-	require.Equal(t, 1, repo.stateCalls)
-	require.Zero(t, repo.beginCalls)
-}
-
-func TestAccountShareModeBeginListingEditRenewalIgnoresOwnValidSessionBlocker(t *testing.T) {
-	repo := &accountShareEditRuntimeRepoStub{
-		state: &AccountShareRoomManagementState{
-			ListingID:       7,
-			OwnerUserID:     42,
-			LifecycleStatus: AccountShareListingStatusPaused,
-			Blockers: AccountShareRoomBlockers{
-				ValidEditSession: true,
-			},
-		},
-	}
-	cache := &accountShareMembershipConcurrencyCacheStub{}
-	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
-	svc.SetRuntimeDependencies(NewConcurrencyService(cache), nil, nil, nil)
-
-	listing, err := svc.BeginListingEdit(context.Background(), 42, false, 7, "edit-session", false)
-
-	require.NoError(t, err)
-	require.NotNil(t, listing)
-	require.Equal(t, "edit-session", listing.EditSessionID)
-	require.Equal(t, 1, repo.stateCalls)
-	require.Equal(t, 1, repo.beginCalls)
-}
-
-func TestAccountShareModeBeginListingEditAdminForceBypassesRuntimeBlockers(t *testing.T) {
-	repo := &accountShareEditRuntimeRepoStub{
-		state: &AccountShareRoomManagementState{
-			ListingID: 7,
-			Blockers: AccountShareRoomBlockers{
-				InFlightRequestCount:      1,
-				PendingBillingIntentCount: 1,
-			},
-		},
-	}
-	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
-
-	listing, err := svc.BeginListingEdit(context.Background(), 9, true, 7, "admin-edit", true)
-
-	require.NoError(t, err)
-	require.NotNil(t, listing)
-	require.Zero(t, repo.stateCalls)
-	require.Equal(t, 1, repo.beginCalls)
 }
 
 func TestAccountShareModeListingConfigRejectsNegativeWaiverMinimum(t *testing.T) {
@@ -3565,7 +3355,6 @@ func TestAccountShareModeUpdateListingRejectsPerUserConcurrencyAboveRoomConcurre
 
 	listing, err := svc.UpdateListing(context.Background(), 42, false, 7, UpdateAccountShareListingInput{
 		PerUserConcurrency: &perUserConcurrency,
-		EditSessionID:      "edit-session",
 		ExpectedVersion:    &expectedVersion,
 		Reason:             "调整单用户并发",
 	})
@@ -3573,27 +3362,6 @@ func TestAccountShareModeUpdateListingRejectsPerUserConcurrencyAboveRoomConcurre
 	require.Nil(t, listing)
 	require.ErrorIs(t, err, ErrAccountShareModeInvalidConcurrency)
 	require.Zero(t, repo.updateCalls)
-}
-
-func TestAccountShareRoomQueueLimit(t *testing.T) {
-	tests := []struct {
-		name      string
-		seatLimit int
-		want      int
-	}{
-		{name: "one seat keeps minimum", seatLimit: 1, want: 20},
-		{name: "two seats keeps minimum", seatLimit: 2, want: 20},
-		{name: "three seats scales", seatLimit: 3, want: 30},
-		{name: "ten seats reaches maximum", seatLimit: 10, want: 100},
-		{name: "fifteen seats stays capped", seatLimit: 15, want: 100},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := AccountShareRoomQueueLimit(tt.seatLimit); got != tt.want {
-				t.Fatalf("AccountShareRoomQueueLimit(%d) = %d, want %d", tt.seatLimit, got, tt.want)
-			}
-		})
-	}
 }
 
 func TestAccountShareModeListingConfigSeatBounds(t *testing.T) {
@@ -3683,7 +3451,6 @@ func TestAccountShareModeJoinListingRejectsUnavailableAPIKey(t *testing.T) {
 			_, err := svc.CreateJoinIntent(context.Background(), 1, 2, CreateAccountShareJoinIntentInput{
 				APIKeyID:           3,
 				IdleTimeoutMinutes: 10,
-				AcceptQueue:        true,
 			})
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("expected %v, got %v", tt.want, err)
@@ -3725,7 +3492,6 @@ func TestAccountShareModeJoinIntentRejectsAutomaticallyPausedExpiredAccount(t *t
 	_, err := svc.CreateJoinIntent(context.Background(), 1, 2, CreateAccountShareJoinIntentInput{
 		APIKeyID:           3,
 		IdleTimeoutMinutes: 30,
-		AcceptQueue:        true,
 	})
 
 	require.ErrorIs(t, err, ErrAccountShareAccountUnavailable)
@@ -3766,7 +3532,6 @@ func TestAccountShareModeJoinIntentRejectsMembershipEnding(t *testing.T) {
 	_, err := svc.CreateJoinIntent(context.Background(), 1, listing.ID, CreateAccountShareJoinIntentInput{
 		APIKeyID:           3,
 		IdleTimeoutMinutes: 30,
-		AcceptQueue:        true,
 	})
 	require.ErrorIs(t, err, ErrAccountShareMembershipEnding)
 }
@@ -3774,7 +3539,7 @@ func TestAccountShareModeJoinIntentRejectsMembershipEnding(t *testing.T) {
 // 旧房间退出结算中（ending）时加入新房间：该 key 被唯一索引锁定，新加入必然进排队。
 // CreateJoinIntent 必须把跨房 ending 纳入 queue_may_be_required，让确认弹窗如实提示
 // 「需要预约队列」，避免用户以为可直接加入、提交时才被后端拒绝。
-func TestAccountShareModeJoinIntentFlagsQueueWhenOtherRoomEnding(t *testing.T) {
+func TestAccountShareModeJoinIntentRejectsOtherRoomEnding(t *testing.T) {
 	groupID := int64(1)
 	revisionID := int64(91)
 	listing := &AccountShareListing{
@@ -3818,13 +3583,11 @@ func TestAccountShareModeJoinIntentFlagsQueueWhenOtherRoomEnding(t *testing.T) {
 	}
 	svc.SetActionTokenSecret(strings.Repeat("s", 32))
 
-	intent, err := svc.CreateJoinIntent(context.Background(), 1, listing.ID, CreateAccountShareJoinIntentInput{
+	_, err := svc.CreateJoinIntent(context.Background(), 1, listing.ID, CreateAccountShareJoinIntentInput{
 		APIKeyID:           3,
 		IdleTimeoutMinutes: 30,
-		AcceptQueue:        true,
 	})
-	require.NoError(t, err)
-	require.True(t, intent.QueueMayBeRequired, "cross-room ending membership must force queue consent")
+	require.ErrorIs(t, err, ErrAccountShareAPIKeyAlreadyBound)
 }
 
 func TestAccountShareModeJoinIntentBindsAcceptedTermsToFinalJoin(t *testing.T) {
@@ -3872,12 +3635,13 @@ func TestAccountShareModeJoinIntentBindsAcceptedTermsToFinalJoin(t *testing.T) {
 		apiKeyRepo: apiKeyRepo,
 		userRepo:   &accountShareJoinUserRepoStub{user: &User{ID: 1, Balance: 100}},
 	}
+	invalidator := &authCacheInvalidatorStub{}
+	svc.authCacheInvalidator = invalidator
 	svc.SetActionTokenSecret(strings.Repeat("s", 32))
 
 	intent, err := svc.CreateJoinIntent(context.Background(), 1, listing.ID, CreateAccountShareJoinIntentInput{
 		APIKeyID:           3,
 		IdleTimeoutMinutes: 30,
-		AcceptQueue:        true,
 	})
 	require.NoError(t, err)
 	require.Equal(t, listing.RowVersion, intent.ExpectedVersion)
@@ -3892,16 +3656,62 @@ func TestAccountShareModeJoinIntentBindsAcceptedTermsToFinalJoin(t *testing.T) {
 		IntentToken:        intent.Token,
 		ExpectedVersion:    intent.ExpectedVersion,
 		ExpectedRevisionID: intent.ExpectedRevisionID,
-		AcceptQueue:        intent.AcceptQueue,
 	})
 	require.NoError(t, err)
 	require.Equal(t, int64(300), membership.ID)
 	require.Equal(t, listing.RowVersion, repo.joinInput.ExpectedVersion)
 	require.Equal(t, revisionID, repo.joinInput.ExpectedRevisionID)
-	require.Equal(t, intent.AcceptQueue, repo.joinInput.AcceptQueue)
 	require.Equal(t, listing.HourlyRate, repo.joinInput.AcceptedTerms.HourlyRate)
 	require.NotEmpty(t, repo.joinInput.IntentNonce)
 	require.False(t, repo.joinInput.IntentIssuedAt.IsZero())
+	require.Equal(t, 1, repo.joinCalls)
+
+	// Simulate a committed join whose response never reached the caller. Its
+	// own prepay, seat use and a later room edit must not obstruct exact replay.
+	userRepo, ok := svc.userRepo.(*accountShareJoinUserRepoStub)
+	require.True(t, ok)
+	userRepo.user.Balance = 0
+	listing.ActiveSeats = listing.SeatLimit
+	listing.RowVersion++
+	repo.bindingMemberships = []AccountShareMembership{*membership}
+	retry := CompleteAccountShareJoinInput{
+		APIKeyID: 3, IdleTimeoutMinutes: 30, IntentToken: intent.Token,
+		ExpectedVersion: intent.ExpectedVersion, ExpectedRevisionID: intent.ExpectedRevisionID,
+	}
+	replayed, err := svc.CompleteJoinListing(context.Background(), 1, listing.ID, retry)
+	require.NoError(t, err)
+	require.Equal(t, membership.ID, replayed.ID)
+	require.Equal(t, 1, repo.joinCalls, "replay must never reserve or prepay again")
+	require.Equal(t, []int64{1}, invalidator.userIDs, "replay repairs auth caches even when the original commit response was lost")
+
+	var claims accountShareJoinIntentTokenClaims
+	require.NoError(t, svc.decodeAccountShareActionToken(intent.Token, &claims, ErrAccountShareJoinIntentInvalid))
+	claims.IssuedAt = time.Now().Add(-2 * AccountShareModeJoinIntentTTL).UnixNano()
+	claims.ExpiresAt = claims.IssuedAt + AccountShareModeJoinIntentTTL.Nanoseconds()
+	retry.IntentToken, err = svc.signAccountShareActionToken(claims)
+	require.NoError(t, err)
+	replayed, err = svc.CompleteJoinListing(context.Background(), 1, listing.ID, retry)
+	require.NoError(t, err, "an expired signed intent can only replay its persisted receipt")
+	require.Equal(t, membership.ID, replayed.ID)
+	require.Equal(t, 1, repo.joinCalls)
+
+	repo.joinMembership.Status = AccountShareMembershipStatusEnding
+	_, err = svc.CompleteJoinListing(context.Background(), 1, listing.ID, retry)
+	require.ErrorIs(t, err, ErrAccountShareMembershipEnding)
+	repo.joinMembership.Status = AccountShareMembershipStatusEnded
+	_, err = svc.CompleteJoinListing(context.Background(), 1, listing.ID, retry)
+	require.ErrorIs(t, err, ErrAccountShareJoinIntentConsumed)
+	require.Equal(t, 1, repo.joinCalls, "ending and ended receipts cannot re-enter")
+
+	repo.joinMembership.Status = AccountShareMembershipStatusActive
+	claims.Nonce = "294dd1e1-33d3-410e-b76d-1f523ad629b4"
+	claims.IssuedAt = time.Now().UnixNano()
+	claims.ExpiresAt = claims.IssuedAt + AccountShareModeJoinIntentTTL.Nanoseconds()
+	retry.IntentToken, err = svc.signAccountShareActionToken(claims)
+	require.NoError(t, err)
+	_, err = svc.CompleteJoinListing(context.Background(), 1, listing.ID, retry)
+	require.ErrorIs(t, err, ErrAccountShareAPIKeyAlreadyBound, "a distinct intent must pass current admission checks")
+	require.Equal(t, 1, repo.joinCalls)
 }
 
 func TestAccountShareModeJoinIntentMaterializesLegacyRevisionBeforeSigning(t *testing.T) {
@@ -3950,7 +3760,6 @@ func TestAccountShareModeJoinIntentMaterializesLegacyRevisionBeforeSigning(t *te
 	intent, err := svc.CreateJoinIntent(context.Background(), 1, listing.ID, CreateAccountShareJoinIntentInput{
 		APIKeyID:           3,
 		IdleTimeoutMinutes: 30,
-		AcceptQueue:        true,
 	})
 
 	require.NoError(t, err)
@@ -4001,7 +3810,6 @@ func TestAccountShareModeJoinIntentRejectsTermsChangedAfterConfirmation(t *testi
 	intent, err := svc.CreateJoinIntent(context.Background(), 1, listing.ID, CreateAccountShareJoinIntentInput{
 		APIKeyID:           3,
 		IdleTimeoutMinutes: 30,
-		AcceptQueue:        true,
 	})
 	require.NoError(t, err)
 
@@ -4015,13 +3823,12 @@ func TestAccountShareModeJoinIntentRejectsTermsChangedAfterConfirmation(t *testi
 		IntentToken:        intent.Token,
 		ExpectedVersion:    intent.ExpectedVersion,
 		ExpectedRevisionID: intent.ExpectedRevisionID,
-		AcceptQueue:        true,
 	})
 	require.ErrorIs(t, err, ErrAccountShareJoinTermsChanged)
 	require.Zero(t, repo.joinInput.ListingID)
 }
 
-func TestAccountShareModeJoinIntentRejectsTamperedTokenAndQueueFlag(t *testing.T) {
+func TestAccountShareModeJoinIntentRejectsTamperedTokenAndVersion(t *testing.T) {
 	groupID := int64(1)
 	revisionID := int64(91)
 	listing := &AccountShareListing{
@@ -4058,7 +3865,6 @@ func TestAccountShareModeJoinIntentRejectsTamperedTokenAndQueueFlag(t *testing.T
 	intent, err := svc.CreateJoinIntent(context.Background(), 1, listing.ID, CreateAccountShareJoinIntentInput{
 		APIKeyID:           3,
 		IdleTimeoutMinutes: 30,
-		AcceptQueue:        true,
 	})
 	require.NoError(t, err)
 
@@ -4068,7 +3874,6 @@ func TestAccountShareModeJoinIntentRejectsTamperedTokenAndQueueFlag(t *testing.T
 		IntentToken:        intent.Token + "tampered",
 		ExpectedVersion:    intent.ExpectedVersion,
 		ExpectedRevisionID: intent.ExpectedRevisionID,
-		AcceptQueue:        true,
 	})
 	require.ErrorIs(t, err, ErrAccountShareJoinIntentInvalid)
 
@@ -4076,9 +3881,8 @@ func TestAccountShareModeJoinIntentRejectsTamperedTokenAndQueueFlag(t *testing.T
 		APIKeyID:           3,
 		IdleTimeoutMinutes: 30,
 		IntentToken:        intent.Token,
-		ExpectedVersion:    intent.ExpectedVersion,
+		ExpectedVersion:    intent.ExpectedVersion + 1,
 		ExpectedRevisionID: intent.ExpectedRevisionID,
-		AcceptQueue:        false,
 	})
 	require.ErrorIs(t, err, ErrAccountShareJoinIntentInvalid)
 	require.Zero(t, repo.joinInput.ListingID)
@@ -4228,9 +4032,7 @@ func TestAccountShareModeEndMembershipActiveWithoutLeaseFinalizes(t *testing.T) 
 	}
 	svc.SetActionTokenSecret(strings.Repeat("s", 32))
 
-	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 71)
-	require.NoError(t, err)
-	membership, err := svc.EndMembership(context.Background(), 42, 71, intent.Token)
+	membership, err := svc.EndMembership(context.Background(), 42, 71)
 	require.NoError(t, err)
 	require.NotNil(t, membership)
 	require.Equal(t, AccountShareMembershipStatusEnded, membership.Status)
@@ -4261,9 +4063,7 @@ func TestAccountShareModeEndMembershipActiveLeaseReturnsEnding(t *testing.T) {
 	}
 	svc.SetActionTokenSecret(strings.Repeat("s", 32))
 
-	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 72)
-	require.NoError(t, err)
-	membership, err := svc.EndMembership(context.Background(), 42, 72, intent.Token)
+	membership, err := svc.EndMembership(context.Background(), 42, 72)
 	require.NoError(t, err)
 	require.NotNil(t, membership)
 	require.Equal(t, AccountShareMembershipStatusEnding, membership.Status)
@@ -4292,52 +4092,11 @@ func TestAccountShareModeEndMembershipUnknownLeaseFailsClosed(t *testing.T) {
 	}
 	svc.SetActionTokenSecret(strings.Repeat("s", 32))
 
-	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 73)
-	require.NoError(t, err)
-	membership, err := svc.EndMembership(context.Background(), 42, 73, intent.Token)
+	membership, err := svc.EndMembership(context.Background(), 42, 73)
 	require.NoError(t, err)
 	require.NotNil(t, membership)
 	require.Equal(t, AccountShareMembershipStatusEnding, membership.Status)
 	require.Equal(t, 0, repo.finalizeCalls)
-}
-
-func TestAccountShareModeEndMembershipPendingIntentStaysEnding(t *testing.T) {
-	updatedAt := time.Date(2026, 7, 27, 6, 20, 0, 0, time.UTC)
-	repo := &accountShareModeRepoStub{
-		endSnapshot: &AccountShareMembership{
-			ID:             74,
-			ConsumerUserID: 42,
-			Status:         AccountShareMembershipStatusActive,
-			UpdatedAt:      updatedAt,
-		},
-		endMembership: &AccountShareMembership{
-			ID:             74,
-			ConsumerUserID: 42,
-			Status:         AccountShareMembershipStatusEnding,
-		},
-		finalizeMembership: &AccountShareMembership{
-			ID:               74,
-			ConsumerUserID:   42,
-			Status:           AccountShareMembershipStatusEnding,
-			SettlementStatus: "pending",
-		},
-		finalizeDone: false,
-	}
-	cache := &accountShareMembershipConcurrencyCacheStub{current: 0}
-	svc := &AccountShareModeService{
-		repo:               repo,
-		concurrencyService: NewConcurrencyService(cache),
-	}
-	svc.SetActionTokenSecret(strings.Repeat("s", 32))
-
-	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 74)
-	require.NoError(t, err)
-	membership, err := svc.EndMembership(context.Background(), 42, 74, intent.Token)
-	require.NoError(t, err)
-	require.NotNil(t, membership)
-	require.Equal(t, AccountShareMembershipStatusEnding, membership.Status)
-	require.Equal(t, "pending", membership.SettlementStatus)
-	require.Equal(t, 1, repo.finalizeCalls)
 }
 
 func TestAccountShareModeEndMembershipRejectsLifecycleConflict(t *testing.T) {
@@ -4354,9 +4113,7 @@ func TestAccountShareModeEndMembershipRejectsLifecycleConflict(t *testing.T) {
 	svc := &AccountShareModeService{repo: repo}
 	svc.SetActionTokenSecret(strings.Repeat("s", 32))
 
-	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 75)
-	require.NoError(t, err)
-	_, err = svc.EndMembership(context.Background(), 42, 75, intent.Token)
+	_, err := svc.EndMembership(context.Background(), 42, 75)
 	require.ErrorIs(t, err, ErrAccountShareEndStateConflict)
 	require.Equal(t, 1, repo.endCalls)
 	require.Equal(t, 0, repo.finalizeCalls)
@@ -4391,31 +4148,151 @@ func TestAccountShareModeEndMembershipUsesExistingConcurrentOperation(t *testing
 	}
 	svc.SetActionTokenSecret(strings.Repeat("s", 32))
 
-	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 761)
-	require.NoError(t, err)
-	require.NotEqual(t, existingOperationID, intent.OperationID)
-
-	membership, err := svc.EndMembership(context.Background(), 42, 761, intent.Token)
+	membership, err := svc.EndMembership(context.Background(), 42, 761)
 	require.NoError(t, err)
 	require.Equal(t, AccountShareMembershipStatusEnded, membership.Status)
 	require.Equal(t, existingOperationID, repo.finalizeOperationID)
 }
 
-func TestAccountShareModeCreateEndTokenRejectsEndedMembership(t *testing.T) {
+func TestAccountShareModeEndingWorkerRunsDespiteRepeatedSeatBillingErrors(t *testing.T) {
 	repo := &accountShareModeRepoStub{
-		endSnapshot: &AccountShareMembership{
-			ID:             77,
-			ConsumerUserID: 42,
-			Status:         AccountShareMembershipStatusEnded,
-			UpdatedAt:      time.Now().UTC(),
+		seatBillingErr:     errors.New("unrelated prepaid billing failure"),
+		endingCandidates:   []AccountShareEndingMembershipCandidate{{MembershipID: 1, OperationID: "same-operation"}},
+		finalizeMembership: &AccountShareMembership{ID: 1, Status: AccountShareMembershipStatusEnded},
+		finalizeDone:       true,
+	}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.taskExecutor = &ClusterTaskExecutor{}
+	svc.concurrencyService = NewConcurrencyService(&accountShareMembershipConcurrencyCacheStub{})
+	for i := 0; i < 3; i++ {
+		require.ErrorIs(t, svc.processSeatBillingOnceLeased(context.Background(), nil), repo.seatBillingErr)
+		svc.processMembershipEndingOnce()
+	}
+	require.Equal(t, 3, repo.finalizeCalls, "each independent ending round must still run")
+	require.NotEqual(t, accountShareSeatBillingTaskName, accountShareMembershipEndingTaskName)
+}
+
+func TestAccountShareModeEndingWorkerSlowMemberDoesNotConsumeWholeRound(t *testing.T) {
+	t.Parallel()
+	var attempted []int64
+	repo := &accountShareModeRepoStub{
+		endingCandidates: []AccountShareEndingMembershipCandidate{
+			{MembershipID: 1, OperationID: "slow-operation"}, {MembershipID: 2, OperationID: "ready-operation"},
+		},
+		endProgressHook: func(ctx context.Context, _ AccountShareMembershipEndProgress) error {
+			require.NoError(t, ctx.Err(), "progress must not reuse the expired attempt context")
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			require.LessOrEqual(t, time.Until(deadline), AccountShareModeMembershipTouchTimeout)
+			return nil
+		},
+		finalizeHook: func(ctx context.Context, membershipID int64, operationID string) (*AccountShareMembership, *AccountShareSeatBillingResult, bool, error) {
+			attempted = append(attempted, membershipID)
+			deadline, ok := ctx.Deadline()
+			require.True(t, ok)
+			require.LessOrEqual(t, time.Until(deadline), AccountShareModeMembershipEndAttemptTimeout)
+			if membershipID == 1 {
+				<-ctx.Done()
+				return nil, nil, false, ctx.Err()
+			}
+			return &AccountShareMembership{ID: membershipID, Status: AccountShareMembershipStatusEnded, EndingOperationID: operationID}, nil, true, nil
 		},
 	}
-	svc := &AccountShareModeService{repo: repo}
-	svc.SetActionTokenSecret(strings.Repeat("s", 32))
+	svc := &AccountShareModeService{repo: repo, concurrencyService: NewConcurrencyService(&accountShareMembershipConcurrencyCacheStub{})}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*AccountShareModeMembershipEndAttemptTimeout)
+	defer cancel()
+	svc.processEndingMembershipsOnce(ctx)
+	require.NoError(t, ctx.Err(), "the single-member timeout must leave the round usable")
+	require.Equal(t, []int64{1, 2}, attempted)
+	require.Equal(t, int64(2), svc.endingAfterID)
+	require.Len(t, repo.endProgress, 1)
+	require.Equal(t, AccountShareMembershipEndBlockerSettlement, repo.endProgress[0].Code)
+	require.False(t, repo.endProgress[0].CheckedAt.IsZero())
+}
 
-	_, err := svc.CreateEndMembershipToken(context.Background(), 42, 77)
-	require.ErrorIs(t, err, ErrAccountShareEndStateConflict)
-	require.Equal(t, 0, repo.endCalls)
+func TestAccountShareModeEndingWorkerStartsImmediatelyAndStopCancelsAttempt(t *testing.T) {
+	started := make(chan struct{})
+	repo := &accountShareModeRepoStub{
+		seatBillingErr:   errors.New("prepaid unavailable"),
+		endingCandidates: []AccountShareEndingMembershipCandidate{{MembershipID: 1, OperationID: "pending-operation"}},
+		finalizeHook: func(ctx context.Context, _ int64, _ string) (*AccountShareMembership, *AccountShareSeatBillingResult, bool, error) {
+			close(started)
+			<-ctx.Done()
+			return nil, nil, false, ctx.Err()
+		},
+	}
+	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.taskExecutor = &ClusterTaskExecutor{}
+	svc.concurrencyService = NewConcurrencyService(&accountShareMembershipConcurrencyCacheStub{})
+	svc.StartSeatBillingWorker()
+	t.Cleanup(svc.StopSeatBillingWorker)
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ending worker did not start independently")
+	}
+	stopped := make(chan struct{})
+	go func() { svc.StopSeatBillingWorker(); close(stopped) }()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("stop did not cancel ending attempt")
+	}
+	require.Equal(t, 1, repo.finalizeCalls)
+}
+
+func TestAccountShareModeEndMembershipFailurePreservesOperationAndRecovery(t *testing.T) {
+	for _, finalizeErr := range []error{errors.New("settlement failed"), context.DeadlineExceeded} {
+		t.Run(finalizeErr.Error(), func(t *testing.T) {
+			operationID := "existing-operation"
+			repo := &accountShareModeRepoStub{
+				endMembership: &AccountShareMembership{ID: 4, ConsumerUserID: 42, Status: AccountShareMembershipStatusEnding, EndingOperationID: operationID},
+				finalizeHook: func(ctx context.Context, _ int64, _ string) (*AccountShareMembership, *AccountShareSeatBillingResult, bool, error) {
+					deadline, ok := ctx.Deadline()
+					require.True(t, ok)
+					require.LessOrEqual(t, time.Until(deadline), AccountShareModeMembershipEndAttemptTimeout)
+					return nil, nil, false, finalizeErr
+				},
+			}
+			svc := &AccountShareModeService{repo: repo, concurrencyService: NewConcurrencyService(&accountShareMembershipConcurrencyCacheStub{})}
+			membership, err := svc.EndMembership(context.Background(), 42, 4)
+			require.NoError(t, err)
+			require.Equal(t, AccountShareMembershipStatusEnding, membership.Status)
+			require.Equal(t, operationID, membership.EndingOperationID)
+			require.Len(t, repo.endProgress, 1)
+			require.Equal(t, AccountShareMembershipEndBlockerSettlement, repo.endProgress[0].Code)
+			require.Equal(t, []string{operationID}, repo.endProgressOperations)
+			repo.finalizeHook = nil
+			repo.finalizeDone = true
+			repo.finalizeMembership = &AccountShareMembership{ID: 4, Status: AccountShareMembershipStatusEnded}
+			membership, err = svc.EndMembership(context.Background(), 42, 4)
+			require.NoError(t, err)
+			require.Equal(t, AccountShareMembershipStatusEnded, membership.Status)
+			require.Equal(t, operationID, repo.finalizeOperationID)
+		})
+	}
+}
+
+func TestAccountShareModeEndingProgressReflectsRuntimeRecovery(t *testing.T) {
+	repo := &accountShareModeRepoStub{endingCandidates: []AccountShareEndingMembershipCandidate{{MembershipID: 1, OperationID: "same-operation"}}}
+	cache := &accountShareMembershipConcurrencyCacheStub{currentErr: errors.New("redis unavailable")}
+	svc := &AccountShareModeService{repo: repo, concurrencyService: NewConcurrencyService(cache)}
+	svc.processEndingMembershipsOnce(context.Background())
+	require.Zero(t, repo.finalizeCalls)
+	require.Equal(t, AccountShareMembershipEndBlockerRuntime, repo.endProgress[0].Code)
+	cache.currentErr, cache.current = nil, 2
+	svc.processEndingMembershipsOnce(context.Background())
+	require.Zero(t, repo.finalizeCalls)
+	require.Equal(t, AccountShareMembershipEndBlockerInFlight, repo.endProgress[1].Code)
+	require.Equal(t, 2, repo.endProgress[1].InFlightRequestCount)
+	require.Empty(t, repo.endProgress[1].ErrorMessage)
+	cache.current = 0
+	repo.finalizeDone = true
+	repo.finalizeMembership = &AccountShareMembership{ID: 1, Status: AccountShareMembershipStatusEnded}
+	svc.processEndingMembershipsOnce(context.Background())
+	require.Equal(t, 1, repo.finalizeCalls)
+	require.Equal(t, "same-operation", repo.finalizeOperationID)
+	require.Len(t, repo.endProgress, 2, "successful finalization owns clearing operation diagnostics")
 }
 
 func TestAccountShareModeEndingWorkerFinalizesAfterLeaseDrains(t *testing.T) {
@@ -4444,17 +4321,41 @@ func TestAccountShareModeEndingWorkerFinalizesAfterLeaseDrains(t *testing.T) {
 	require.Equal(t, operationID, repo.finalizeOperationID)
 }
 
-func TestAccountShareModeEndingWorkerForceFinalizeSkipsInFlightRequest(t *testing.T) {
+func TestAccountShareModeEndingWorkerCursorDoesNotStarveLaterMemberships(t *testing.T) {
+	batchSize := AccountShareModeSeatBillingBatchSize
+	lastID := int64(batchSize + 1)
+	repo := &accountShareModeRepoStub{
+		finalizeMembership: &AccountShareMembership{ID: lastID, Status: AccountShareMembershipStatusEnded},
+		finalizeDone:       true,
+	}
+	cache := &accountShareMembershipConcurrencyCacheStub{currentByMembership: make(map[int64]int)}
+	for id := int64(1); id <= lastID; id++ {
+		repo.endingCandidates = append(repo.endingCandidates, AccountShareEndingMembershipCandidate{MembershipID: id, OperationID: "ending-operation"})
+		if id < lastID {
+			cache.currentByMembership[id] = 1
+		}
+	}
+	svc := &AccountShareModeService{repo: repo, concurrencyService: NewConcurrencyService(cache)}
+	svc.processEndingMembershipsOnce(context.Background())
+	require.Zero(t, repo.finalizeCalls)
+	require.Equal(t, int64(batchSize), svc.endingAfterID)
+	svc.processEndingMembershipsOnce(context.Background())
+	require.Equal(t, 1, repo.finalizeCalls, "the first full batch of busy memberships must not starve the next page")
+	require.Equal(t, lastID, svc.endingAfterID)
+	svc.processEndingMembershipsOnce(context.Background())
+	require.Equal(t, int64(batchSize), svc.endingAfterID, "the scan wraps after reaching the end")
+	require.Equal(t, 1, repo.finalizeCalls)
+}
+
+func TestAccountShareModeEndingWorkerRedisFailureKeepsInFlightRequest(t *testing.T) {
 	operationID := "a19e2b8f-4c2d-4e9a-9b1c-7f6e5d4c3b2a"
-	endingRequestedAt := time.Now().UTC().Add(-AccountShareModeEndSettlementForceTimeout - time.Minute)
+	endingRequestedAt := time.Now().UTC().Add(-time.Hour)
 	repo := &accountShareModeRepoStub{
 		endingCandidates: []AccountShareEndingMembershipCandidate{{
 			MembershipID:      79,
 			OperationID:       operationID,
 			EndingRequestedAt: endingRequestedAt,
-			// 在途请求的心跳把 last_request_at 刷到了结束请求之后：说明还有请求在跑，
-			// 即使 Redis 断连也不应强制结算。
-			LastRequestAt: endingRequestedAt.Add(5 * time.Minute),
+			// Redis 不可读时无法证明在途请求已结束。
 		}},
 		finalizeMembership: &AccountShareMembership{ID: 79, ConsumerUserID: 42, Status: AccountShareMembershipStatusEnded},
 		finalizeDone:       true,
@@ -4470,16 +4371,15 @@ func TestAccountShareModeEndingWorkerForceFinalizeSkipsInFlightRequest(t *testin
 	require.Equal(t, 0, repo.finalizeCalls)
 }
 
-func TestAccountShareModeEndingWorkerForceFinalizesWhenNoInFlightRequest(t *testing.T) {
+func TestAccountShareModeEndingWorkerRedisFailureNeverFinalizesAfterTimeout(t *testing.T) {
 	operationID := "b20e3c9a-5d3e-4fa0-8a2c-8a7f6e5d4c3b"
-	endingRequestedAt := time.Now().UTC().Add(-AccountShareModeEndSettlementForceTimeout - time.Minute)
+	endingRequestedAt := time.Now().UTC().Add(-time.Hour - time.Minute)
 	repo := &accountShareModeRepoStub{
 		endingCandidates: []AccountShareEndingMembershipCandidate{{
 			MembershipID:      80,
 			OperationID:       operationID,
 			EndingRequestedAt: endingRequestedAt,
-			// 无在途请求（LastRequestAt 早于结束请求）：Redis 断连超过阈值后应强制结算。
-			LastRequestAt: endingRequestedAt.Add(-time.Minute),
+			// 即使超过旧强制结束阈值，也必须等待租约状态可确认。
 		}},
 		finalizeMembership: &AccountShareMembership{ID: 80, ConsumerUserID: 42, Status: AccountShareMembershipStatusEnded},
 		finalizeDone:       true,
@@ -4492,8 +4392,7 @@ func TestAccountShareModeEndingWorkerForceFinalizesWhenNoInFlightRequest(t *test
 
 	svc.processEndingMembershipsOnce(context.Background())
 
-	require.Equal(t, 1, repo.finalizeCalls)
-	require.Equal(t, operationID, repo.finalizeOperationID)
+	require.Equal(t, 0, repo.finalizeCalls)
 }
 
 func TestAccountShareModeResolveBindingUsesRequestContextCache(t *testing.T) {
@@ -4562,54 +4461,6 @@ func TestAccountShareModeResolveBindingRefreshesExpiredSeatBeforeActivatingQueue
 	if repo.activationCalls != 0 {
 		t.Fatalf("expected cached resolve to avoid extra activation, got %d", repo.activationCalls)
 	}
-}
-
-func TestAccountShareModeResolveBindingRecoversConcurrentActivationWinner(t *testing.T) {
-	membership := &AccountShareMembership{ID: 11, AccountID: 99, ConsumerUserID: 20, APIKeyID: 30}
-	listing := &AccountShareListing{ID: 12, AccountID: 99, OwnerUserID: 40, Status: AccountShareListingStatusActive}
-	repo := &accountShareModeRepoStub{
-		bindingResults: []accountShareModeBindingResult{
-			{err: ErrAccountShareListingNotFound},
-			{err: ErrAccountShareListingNotFound},
-			{err: ErrAccountShareListingNotFound},
-			{err: ErrAccountShareAPIKeyAlreadyBound},
-			{membership: membership, listing: listing},
-		},
-	}
-	svc := &AccountShareModeService{repo: repo}
-	gotMembership, gotListing, err := svc.ResolveActiveBindingForRequest(WithAccountShareModeRequest(context.Background(), 20, 30), 20, 30, 50)
-	if err != nil {
-		t.Fatalf("resolve concurrent activation winner failed: %v", err)
-	}
-	if gotMembership == nil || gotMembership.ID != membership.ID || gotListing == nil || gotListing.ID != listing.ID {
-		t.Fatalf("unexpected recovered binding: membership=%#v listing=%#v", gotMembership, gotListing)
-	}
-}
-
-func TestAccountShareModeResolveBindingPreservesQueuedRecoveringState(t *testing.T) {
-	repo := &accountShareModeRepoStub{
-		bindingResults: []accountShareModeBindingResult{
-			{err: ErrAccountShareListingNotFound},
-			{err: ErrAccountShareListingNotFound},
-			{err: ErrAccountShareListingNotFound},
-			{err: ErrAccountShareModeRecovering},
-		},
-	}
-	svc := &AccountShareModeService{repo: repo}
-
-	membership, listing, err := svc.ResolveActiveBindingForRequest(
-		WithAccountShareModeRequest(context.Background(), 20, 30),
-		20,
-		30,
-		50,
-	)
-
-	require.Nil(t, membership)
-	require.Nil(t, listing)
-	require.ErrorIs(t, err, ErrAccountShareModeRecovering)
-	require.NotErrorIs(t, err, ErrAccountShareModeGroupUnbound)
-	require.Equal(t, 4, repo.bindingCalls)
-	require.Equal(t, 1, repo.activationCalls)
 }
 
 func TestAccountShareModeMembershipHeartbeatAndReleaseTouchCompletion(t *testing.T) {
@@ -4781,7 +4632,7 @@ func TestAccountShareModeAcquireMembershipSlotFailsClosedWithInvalidLeaseTTL(t *
 	require.Zero(t, cache.releaseCalls)
 }
 
-func TestAccountShareModeResolveBindingSuspendsDurableRateLimitAsRecovering(t *testing.T) {
+func TestAccountShareModeResolveBindingStartsEndingForDurableFailure(t *testing.T) {
 	resetAt := time.Now().UTC().Add(time.Hour)
 	repo := &accountShareModeRepoStub{
 		membership: &AccountShareMembership{ID: 11, AccountID: 99, ConsumerUserID: 20, APIKeyID: 30},
@@ -4796,14 +4647,14 @@ func TestAccountShareModeResolveBindingSuspendsDurableRateLimitAsRecovering(t *t
 			CurrentMembershipID: accountShareModeInt64Ptr(11),
 			CurrentAPIKeyID:     accountShareModeInt64Ptr(30),
 		},
-		activationErr: ErrAccountShareModeRecovering,
+		activationErr: ErrAccountShareMembershipEnding,
 	}
 	repo.recoverableSuspend = repo.membership
 	svc := &AccountShareModeService{repo: repo}
 	selectionCtx := WithAccountShareModeRequest(context.Background(), 20, 30)
 
 	membership, listing, err := svc.ResolveActiveBindingForRequest(selectionCtx, 20, 30, 50)
-	if !errors.Is(err, ErrAccountShareModeRecovering) {
+	if !errors.Is(err, ErrAccountShareMembershipEnding) {
 		t.Fatalf("expected durable unavailable account to suspend and report recovering, got membership=%#v listing=%#v err=%v", membership, listing, err)
 	}
 	if repo.recoverableCalls != 1 {
@@ -4812,10 +4663,10 @@ func TestAccountShareModeResolveBindingSuspendsDurableRateLimitAsRecovering(t *t
 
 	taskCtx := WithAccountShareModeRequestFromContext(context.Background(), selectionCtx)
 	_, _, err = svc.ResolveActiveBindingForRequest(taskCtx, 20, 30, 50)
-	if !errors.Is(err, ErrAccountShareModeRecovering) {
+	if !errors.Is(err, ErrAccountShareMembershipEnding) {
 		t.Fatalf("expected cached recovering error, got %v", err)
 	}
-	if repo.bindingCalls != 5 {
+	if repo.bindingCalls != 1 {
 		t.Fatalf("expected unavailable resolve to query active binding before retry, got %d", repo.bindingCalls)
 	}
 	if repo.recoverableCalls != 1 {
@@ -5083,45 +4934,6 @@ func accountShareTestContainsString(values []string, target string) bool {
 		}
 	}
 	return false
-}
-
-func accountShareRecommendationTestCandidate(id int64, totalCost, overallScore, stabilityScore, availabilityScore, riskControlScore float64) AccountShareRecommendationCandidate {
-	return AccountShareRecommendationCandidate{
-		Listing: AccountShareListing{
-			ID:        id,
-			AccountID: id,
-		},
-		Estimate: AccountShareRecommendationEstimate{
-			TotalCost:     totalCost,
-			RequestCost:   totalCost,
-			HourlyNetCost: 0,
-		},
-		Score: overallScore,
-		ScoreBreakdown: AccountShareRecommendationScoreBreakdown{
-			CostSavingScore:   100 - totalCost,
-			StabilityScore:    stabilityScore,
-			AvailabilityScore: availabilityScore,
-			RiskControlScore:  riskControlScore,
-			OverallScore:      overallScore,
-		},
-	}
-}
-
-func accountShareRecommendationTestContainsListing(candidates []AccountShareRecommendationCandidate, listingID int64) bool {
-	for _, candidate := range candidates {
-		if candidate.Listing.ID == listingID {
-			return true
-		}
-	}
-	return false
-}
-
-func accountShareRecommendationTestListingIDs(candidates []AccountShareRecommendationCandidate) []int64 {
-	ids := make([]int64, 0, len(candidates))
-	for _, candidate := range candidates {
-		ids = append(ids, candidate.Listing.ID)
-	}
-	return ids
 }
 
 func TestValidateAccountShareAccountNameRejectsNamesLongerThanDatabaseLimit(t *testing.T) {

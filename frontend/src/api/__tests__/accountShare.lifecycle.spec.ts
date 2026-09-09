@@ -18,7 +18,6 @@ vi.mock('@/api/client', () => ({
 
 import {
   activateRoom,
-  beginListingEdit,
   createJoinIntent,
   createRoomDeleteIntent,
   deleteRoom,
@@ -29,7 +28,6 @@ import {
   getRoomOperation,
   joinListing,
   listMembershipHistory,
-  releaseListingEdit,
   submitReview,
   suspendRoom,
   updateListing
@@ -179,7 +177,7 @@ describe('account share room lifecycle API', () => {
     )
   })
 
-  it('sends required idempotency headers for OAuth, edit sessions, and reviews', async () => {
+  it('sends required idempotency headers for OAuth and reviews', async () => {
     post.mockResolvedValue({ data: {} })
     const openAIPayload = {
       session_id: 'openai-session',
@@ -207,8 +205,6 @@ describe('account share room lifecycle API', () => {
 
     await exchangeOpenAICode(openAIPayload, 'oauth-openai-key')
     await exchangeAnthropicCode(anthropicPayload, 'oauth-anthropic-key')
-    await beginListingEdit(42, { force: true }, 'begin-edit-key')
-    await releaseListingEdit(42, 'edit-session', 'release-edit-key')
     await submitReview(81, { score: 9, comment: '稳定' }, 'review-key')
 
     expect(post).toHaveBeenNthCalledWith(
@@ -225,18 +221,6 @@ describe('account share room lifecycle API', () => {
     )
     expect(post).toHaveBeenNthCalledWith(
       3,
-      '/account-share/listings/42/edit-session',
-      { force: true },
-      { headers: { 'Idempotency-Key': 'begin-edit-key' } }
-    )
-    expect(post).toHaveBeenNthCalledWith(
-      4,
-      '/account-share/listings/42/edit-session/release',
-      { session_id: 'edit-session' },
-      { headers: { 'Idempotency-Key': 'release-edit-key' } }
-    )
-    expect(post).toHaveBeenNthCalledWith(
-      5,
       '/account-share/memberships/81/review',
       { score: 9, comment: '稳定' },
       { headers: { 'Idempotency-Key': 'review-key' } }
@@ -246,8 +230,7 @@ describe('account share room lifecycle API', () => {
   it('creates a signed join intent and completes the join with the exact accepted snapshot', async () => {
     const intentPayload = {
       api_key_id: 9,
-      idle_timeout_minutes: 30,
-      accept_queue: true
+      idle_timeout_minutes: 30
     }
     const joinPayload = {
       ...intentPayload,
@@ -257,7 +240,7 @@ describe('account share room lifecycle API', () => {
     }
     post
       .mockResolvedValueOnce({ data: { listing_id: 42, token: 'signed-join-intent' } })
-      .mockResolvedValueOnce({ data: { id: 88, status: 'queued' } })
+      .mockResolvedValueOnce({ data: { id: 88, status: 'active' } })
 
     await createJoinIntent(42, intentPayload)
     await joinListing(42, joinPayload)

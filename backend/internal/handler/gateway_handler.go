@@ -671,7 +671,7 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	}
 
 	currentAPIKey := apiKey
-	currentSubscription := subscription
+	var currentSubscription *service.UserSubscription
 	routeCursor, _, routeErr := newAPIKeyGroupRouteCursorWithModeIsolation(
 		c.Request.Context(),
 		apiKey,
@@ -1018,7 +1018,7 @@ routeLoop:
 				if sessionErr := h.gatewayService.RegisterAccountSessionAfterWait(c.Request.Context(), account, sessionKey); sessionErr != nil {
 					if accountReleaseFunc != nil {
 						accountReleaseFunc()
-						accountReleaseFunc = nil
+						accountReleaseFunc = nil //nolint:ineffassign // Drop the released slot closure before retrying or returning.
 					}
 					if failoverClientGone(c) {
 						return
@@ -1360,6 +1360,27 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 	if forcedPlatform, ok := middleware2.GetForcePlatformFromContext(c); ok && strings.TrimSpace(forcedPlatform) != "" {
 		platform = forcedPlatform
+	}
+	if c.Query("capability") == "image" {
+		models, err := h.gatewayService.GetAvailableImageModels(c.Request.Context(), apiKey, platform)
+		if err != nil {
+			if c.Request.Context().Err() != nil {
+				return
+			}
+			if h.handleAccountShareModeAnthropicError(c, err, false) {
+				return
+			}
+			logger.L().Warn("gateway.image_models.failed", zap.Error(err))
+			h.errorResponse(c, http.StatusServiceUnavailable, "api_error", "Unable to load image models")
+			return
+		}
+		c.Header("Cache-Control", "private, no-store")
+		items := make([]claude.Model, 0, len(models))
+		for _, model := range models {
+			items = append(items, claude.Model{ID: model, Type: "model", DisplayName: model, CreatedAt: fallbackModelCreatedAt})
+		}
+		c.JSON(http.StatusOK, gin.H{"object": "list", "data": items})
+		return
 	}
 
 	// Keep model discovery scoped to the API key's platform. Without this filter,
@@ -2920,6 +2941,11 @@ func (h *GatewayHandler) submitUsageRecordTask(requestCtx context.Context, task 
 		return
 	}
 	task = detachUsageRecordTask(requestCtx, task)
+	if service.IsAccountShareModeBillingRequest(requestCtx) {
+		// Keep the membership lease until the billing transaction finishes.
+		runUsageRecordTaskSync(task, "handler.gateway.messages", "gateway.usage_record_task_panic_recovered")
+		return
+	}
 	if h.usageRecordWorkerPool != nil {
 		mode := h.usageRecordWorkerPool.Submit(task)
 		if mode != service.UsageRecordSubmitModeDropped {
@@ -2936,7 +2962,7 @@ func runUsageRecordTaskSync(task service.UsageRecordTask, component, panicEvent 
 	if task == nil {
 		return
 	}
-	// 回退路径：worker 池未注入或提交被拒绝时同步执行，避免计费记录被静默丢弃。
+	// 账号广场请求在释放租约前同步计费；普通请求也在 worker 不可用时使用此路径。
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	defer func() {

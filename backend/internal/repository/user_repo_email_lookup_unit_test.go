@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	sqlmock "github.com/DATA-DOG/go-sqlmock"
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -17,6 +18,81 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	_ "modernc.org/sqlite"
 )
+
+func TestUserRepositoryDeleteRequiresAccountShareSettlement(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		owner          bool
+		status         string
+		deletedListing bool
+		unrelated      bool
+		blocked        bool
+	}{
+		{name: "consumer active", status: "active", blocked: true},
+		{name: "consumer ending", status: "ending", blocked: true},
+		{name: "owner active", owner: true, status: "active", blocked: true},
+		{name: "owner ending", owner: true, status: "ending", blocked: true},
+		{name: "deleted room still unsettled", owner: true, status: "ending", deletedListing: true, blocked: true},
+		{name: "settled consumer", status: "ended"},
+		{name: "settled owner", owner: true, status: "ended"},
+		{name: "unrelated membership", status: "active", unrelated: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			repo, client := newUserEntRepo(t)
+			ctx := context.Background()
+			user, err := client.User.Create().SetEmail("delete@example.com").SetPasswordHash("hash").Save(ctx)
+			require.NoError(t, err)
+			_, err = repo.sql.ExecContext(ctx, `CREATE TABLE account_share_listings (id INTEGER PRIMARY KEY, owner_user_id BIGINT, deleted_at TIMESTAMP)`)
+			require.NoError(t, err)
+			_, err = repo.sql.ExecContext(ctx, `CREATE TABLE account_share_memberships (id INTEGER PRIMARY KEY, listing_id BIGINT, consumer_user_id BIGINT, status TEXT, deleted_at TIMESTAMP)`)
+			require.NoError(t, err)
+			ownerID, consumerID := int64(101), user.ID
+			if tc.owner {
+				ownerID, consumerID = user.ID, 102
+			}
+			if tc.unrelated {
+				ownerID, consumerID = 101, 102
+			}
+			var deletedAt any
+			if tc.deletedListing {
+				deletedAt = time.Now()
+			}
+			_, err = repo.sql.ExecContext(ctx, `INSERT INTO account_share_listings (id, owner_user_id, deleted_at) VALUES (1, $1, $2)`, ownerID, deletedAt)
+			require.NoError(t, err)
+			_, err = repo.sql.ExecContext(ctx, `INSERT INTO account_share_memberships (id, listing_id, consumer_user_id, status) VALUES (1, 1, $1, $2)`, consumerID, tc.status)
+			require.NoError(t, err)
+
+			err = repo.Delete(ctx, user.ID)
+			if tc.blocked {
+				require.ErrorIs(t, err, service.ErrUserAccountShareUnsettled)
+				_, err = repo.GetByID(ctx, user.ID)
+				require.NoError(t, err, "a blocked deletion must leave the user available for settlement")
+			} else {
+				require.NoError(t, err)
+				_, err = repo.GetByID(ctx, user.ID)
+				require.ErrorIs(t, err, service.ErrUserNotFound)
+			}
+		})
+	}
+}
+
+func TestUserRepositoryDeleteLocksUserBeforeCheckingSettlement(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	client := dbent.NewClient(dbent.Driver(entsql.OpenDB(dialect.Postgres, db)))
+	t.Cleanup(func() { _ = client.Close() })
+	repo := newUserRepositoryWithSQL(client, db)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`SELECT .*FROM "users".*FOR UPDATE`).WithArgs(int64(7)).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(7))
+	mock.ExpectQuery(`(?s)SELECT EXISTS .*m.consumer_user_id = \$1.* OR EXISTS .*l.owner_user_id = \$1`).
+		WithArgs(int64(7), "active", "ending").
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(true))
+	mock.ExpectRollback()
+	require.ErrorIs(t, repo.Delete(context.Background(), 7), service.ErrUserAccountShareUnsettled)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
 
 func newUserEntRepo(t *testing.T) (*userRepository, *dbent.Client) {
 	t.Helper()

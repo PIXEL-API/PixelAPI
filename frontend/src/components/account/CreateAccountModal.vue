@@ -2825,6 +2825,7 @@
           :proxies="proxyOptions"
           :can-test="!isUserScope"
           :hide-endpoint="isUserScope"
+          :user-scope="isUserScope"
           disable-full
         />
         <p v-if="isUserScope" class="input-hint">
@@ -4207,7 +4208,7 @@ const canManageProxy = computed(() =>
   props.allowProxy !== false && (!isUserScope.value || userOAuthProxyLoginRequired.value)
 )
 
-// 用户不再上传代理，只能从平台代理列表中选择。
+// 可用代理包含当前用户自己的代理和平台公共代理。
 const proxyOptions = computed(() => props.proxies)
 
 const selectedProxy = computed(() => {
@@ -5003,9 +5004,7 @@ const resetForm = () => {
 
   antigravityModelRestrictionMode.value = 'mapping'
   antigravityWhitelistModels.value = []
-  fetchAntigravityDefaultMappings().then(mappings => {
-    antigravityModelMappings.value = [...mappings]
-  })
+  antigravityModelMappings.value = []
   poolModeEnabled.value = false
   poolModeRetryCount.value = DEFAULT_POOL_MODE_RETRY_COUNT
   customErrorCodesEnabled.value = false

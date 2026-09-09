@@ -172,9 +172,7 @@ func decompressRequestBody(encoding string, source io.Reader) ([]byte, error) {
 	default:
 		return nil, errors.New("unsupported Content-Encoding")
 	}
-	if closeReader != nil {
-		defer closeReader()
-	}
+	defer closeReader()
 
 	return readBodyUpToLimit(reader, maxDecompressedBodySize)
 }

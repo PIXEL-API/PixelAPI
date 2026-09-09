@@ -85,6 +85,7 @@
           :proxies="proxies"
           :allow-empty="false"
           :can-test="false"
+          user-scope
           disable-full
           hide-endpoint
         />
@@ -202,6 +203,7 @@
           :proxies="proxies"
           :allow-empty="false"
           :can-test="false"
+          user-scope
           disable-full
           hide-endpoint
         />
@@ -905,6 +907,11 @@ watch(
   (open) => {
     if (!open) {
       resetOAuthImportState()
+      // 关闭后可能会新增、停用或删除代理，下次打开必须重新拉取。
+      proxyRequestSeq++
+      lastProxyScopeKey = ''
+      proxies.value = []
+      proxyLoading.value = false
     }
   }
 )
@@ -963,7 +970,7 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
   return accountsAPI.importCredentialContents(request)
 }
 
-// 用户只能选择平台代理：按当前平台/等级拉取可选代理。scope 变化用不同缓存键，
+// 按当前平台/等级拉取自己的代理和平台公共代理。scope 变化用不同缓存键，
 // 保证切换平台或等级后（watcher 会重新调用 loadProxies）能取到对应的代理集合。
 //
 // 用请求序号而不是「有请求在飞就返回」来去重：快速连续切换平台/等级时，

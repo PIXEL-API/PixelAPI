@@ -1052,7 +1052,7 @@ func ProvideAdminService(
 	systemNoticeService *SystemNoticeService,
 	agentIdentityWSInvalidator *AgentIdentityWSInvalidatorProxy,
 	rateLimitService *RateLimitService,
-	channelService   *ChannelService,
+	channelService *ChannelService,
 ) AdminService {
 	svc := NewAdminService(
 		userRepo,

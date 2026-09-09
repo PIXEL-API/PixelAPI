@@ -78,7 +78,7 @@ func TestReadResponsesRequestBodyTimesOutSlowHTTPUpload(t *testing.T) {
 	address := strings.TrimPrefix(server.URL, "http://")
 	conn, err := net.DialTimeout("tcp", address, time.Second)
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_, err = io.WriteString(conn, "POST /v1/responses HTTP/1.1\r\nHost: "+address+"\r\nContent-Length: 32\r\nConnection: close\r\n\r\n{")
 	require.NoError(t, err)
 
@@ -208,7 +208,7 @@ func TestReadResponsesRequestBodyUnsupportedEncodingClosesSlowConnectionAndRelea
 	address := strings.TrimPrefix(server.URL, "http://")
 	conn, err := net.DialTimeout("tcp", address, time.Second)
 	require.NoError(t, err)
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	require.NoError(t, conn.SetDeadline(time.Now().Add(3*time.Second)))
 	_, err = io.WriteString(conn, "POST /v1/responses HTTP/1.1\r\nHost: "+address+"\r\nContent-Length: 32\r\nContent-Encoding: br\r\n\r\n{")
 	require.NoError(t, err)

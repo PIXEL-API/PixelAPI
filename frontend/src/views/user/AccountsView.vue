@@ -30,6 +30,9 @@
             <Icon name="download" size="md" class="mr-2" />
             {{ selectedCount > 0 ? t('userAccounts.exportSelected') : t('userAccounts.exportAccounts') }}
           </button>
+          <button type="button" class="btn btn-secondary" @click="showProxyManager = true">
+            {{ t('userAccounts.proxyManagerTitle') }}
+          </button>
           <button type="button" class="btn btn-secondary" @click="showImportModal = true">
             <Icon name="upload" size="md" class="mr-2" />
             {{ t('userAccounts.importAccounts') }}
@@ -400,6 +403,12 @@
       </template>
     </TablePageLayout>
 
+    <UserProxyManagerDialog
+      :show="showProxyManager"
+      @close="showProxyManager = false"
+      @changed="invalidateUserProxies"
+    />
+
     <CreateAccountModal
       :show="showCreateModal"
       :proxies="userProxies"
@@ -571,6 +580,7 @@ import AccountTestModal from '@/components/account/AccountTestModal.vue'
 import UserAccountActionMenu from '@/components/account/UserAccountActionMenu.vue'
 import UserContentModerationModal from '@/components/account/UserContentModerationModal.vue'
 import ImportAccountsModal from '@/components/user/ImportAccountsModal.vue'
+import UserProxyManagerDialog from '@/components/user/UserProxyManagerDialog.vue'
 import { ACCOUNT_STATUS_FILTER_OPTIONS } from '@/constants/account'
 import type { Account, AccountLevel, AccountPlatform, AccountType, AdminGroup, Group, Proxy, WindowStats } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -597,6 +607,7 @@ const loading = ref(false)
 const showCreateModal = ref(false)
 const showEditModal = ref(false)
 const showImportModal = ref(false)
+const showProxyManager = ref(false)
 const showBulkEditModal = ref(false)
 const showDeleteDialog = ref(false)
 const showBulkDeleteDialog = ref(false)
@@ -1211,7 +1222,7 @@ async function loadGroups(): Promise<void> {
   }
 }
 
-// 用户只能选择平台代理（外加自己名下的遗留自有代理）。按账号平台/等级拉取可选代理；
+// 用户可以选择平台公共代理或自己的代理。按账号平台/等级拉取可选代理；
 // scope 变化时用不同的缓存键，避免切换账号后仍显示上一个账号的代理集合。
 //
 // 这里不能用「有请求在飞就直接返回」来去重：那样第二个 scope 的请求会被静默丢掉，
@@ -1219,6 +1230,13 @@ async function loadGroups(): Promise<void> {
 // 先发的响应回来时直接丢弃。
 let lastUserProxyScopeKey = ''
 let userProxyRequestSeq = 0
+function invalidateUserProxies(): void {
+  userProxyRequestSeq++
+  lastUserProxyScopeKey = ''
+  userProxies.value = []
+  userProxiesLoading.value = false
+}
+
 async function loadUserProxies(
   scope: ListProxiesScope = {},
   force = false

@@ -37,6 +37,7 @@ const (
 	AccountShareListingStatusDisabled = "disabled"
 
 	AccountShareMembershipStatusActive = "active"
+	// Historical DTO/query compatibility only; migration 280 retires queued rows.
 	AccountShareMembershipStatusQueued = "queued"
 	AccountShareMembershipStatusEnded  = "ended"
 
@@ -71,28 +72,18 @@ const (
 	AccountShareModeSeatWaiverLateUsageSlack = 24 * time.Hour
 	AccountShareModeSeatBillingInterval      = 15 * time.Second
 	AccountShareModeSeatBillingBatchSize     = 100
+	// 退出的单次尝试独立限时，慢事务不能占满整轮并阻塞后续会员。
+	AccountShareModeMembershipEndAttemptTimeout = 10 * time.Second
 	// 孤儿 binding 清扫频率：低优先兜底 worker，处理历史遗留脏数据即可，不必高频。
 	AccountShareModeOrphanBindingCleanupInterval = 10 * time.Minute
-	// ending 结算超时兜底阈值：Redis lease 持续不可用时，超过该时长强制结算。
 	// 比在途 slot 的 TTL（默认 30 分钟）短，用户不必等满 slot 回收。
-	AccountShareModeEndSettlementForceTimeout = 10 * time.Minute
-	AccountShareModeJoinIntentTTL             = 2 * time.Minute
-	AccountShareModeEndMembershipTokenTTL     = 2 * time.Minute
-	AccountShareModeMaxIdleTimeoutMinutes     = 10080
-	AccountShareModeLastRequestTouchInterval  = 30 * time.Second
-	AccountShareModeRequestHeartbeatInterval  = 15 * time.Second
-	AccountShareModeMembershipTouchTimeout    = 5 * time.Second
-	AccountShareModeEditSessionTTL            = 10 * time.Minute
-	AccountShareModeQueueMaxItems             = 5
-	AccountShareModeRoomQueueMinimum          = 20
-	AccountShareModeRoomQueueMaximum          = 100
-	AccountShareModeRoomQueuePerSeat          = 10
-	// 排队成员的保留期限：入队/降级重排队后经过该时长仍未被激活则自动释放。
-	// 前端 queueIdleTimeoutSummary 的「预约最长保留 2 小时」文案与此对齐，改这里要同步改前端。
-	AccountShareModeQueueExpiryDuration = 2 * time.Hour
-	AccountShareModeDispatchCooldown    = 5 * time.Minute
+	AccountShareModeJoinIntentTTL            = 2 * time.Minute
+	AccountShareModeMaxIdleTimeoutMinutes    = 10080
+	AccountShareModeLastRequestTouchInterval = 30 * time.Second
+	AccountShareModeRequestHeartbeatInterval = 15 * time.Second
+	AccountShareModeMembershipTouchTimeout   = 5 * time.Second
 	// 秒级 429 fallback 仅表示当前请求暂时不可调度，不能据此关闭长期 membership/binding。
-	// 后台恢复任务只对超过该完整窗口的限流执行持久化重排队。
+	// 持续超过该窗口后才允许同房切换或进入安全退出。
 	AccountShareModeTransientRateLimitGrace       = 30 * time.Second
 	AccountShareModeDefaultRecoveryRetryAfter     = 5
 	AccountShareModeConnectivityTestTimeout       = 90 * time.Second
@@ -144,6 +135,7 @@ const (
 	AccountShareMembershipEndReasonPrepay         = "prepay_insufficient"
 	AccountShareMembershipEndReasonUnavailable    = "account_unavailable"
 	AccountShareMembershipEndReasonQueueExpired   = "queue_expired"
+	AccountShareMembershipEndReasonQueueRemoved   = "queue_removed"
 	AccountShareMembershipEndReasonRoomDraining   = "room_draining"
 	AccountShareReviewCommentStatusNone           = "none"
 	AccountShareReviewCommentStatusPending        = "pending"
@@ -156,6 +148,7 @@ const (
 	AccountShareReviewModerationMaxAttempts       = 5
 	AccountShareRoomBatchMaxAccounts              = 1000
 	accountShareSeatBillingTaskName               = "account_share_seat_billing"
+	accountShareMembershipEndingTaskName          = "account_share_membership_ending"
 	accountShareBillingIntentTaskName             = "account_share_billing_intents"
 	accountShareSeatWaiverCompensationTaskName    = "account_share_seat_waiver_compensation"
 	accountShareRoomLifecycleFinalizerTaskName    = "account_share_room_lifecycle_finalizer"
@@ -164,7 +157,6 @@ const (
 	accountShareReviewModerationTaskName          = "account_share_review_moderation"
 	accountShareModeContextBindingMissingError    = "该分组未绑定账号"
 	accountShareModeJoinIntentTokenAction         = "account_share_mode:join_listing:v1"
-	accountShareModeEndMembershipTokenAction      = "account_share_mode:end_membership:v2"
 )
 
 var (
@@ -194,9 +186,7 @@ var (
 	ErrAccountShareOwnerCannotJoin              = infraerrors.BadRequest("ACCOUNT_SHARE_OWNER_CANNOT_JOIN", "owner cannot join own shared account")
 	ErrAccountShareAlreadyUsing                 = infraerrors.Conflict("ACCOUNT_SHARE_ALREADY_USING", "user is already using an account share listing")
 	ErrAccountShareAPIKeyAlreadyBound           = infraerrors.Conflict("ACCOUNT_SHARE_API_KEY_ALREADY_BOUND", "api key is already bound to an account share listing")
-	ErrAccountShareQueueFull                    = infraerrors.Conflict("ACCOUNT_SHARE_QUEUE_FULL", "account share reservation queue is full")
-	ErrAccountShareRoomQueueLimitExceeded       = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_QUEUE_LIMIT_EXCEEDED", "account share room reservation queue is full")
-	ErrAccountShareQueueInvalid                 = infraerrors.BadRequest("ACCOUNT_SHARE_QUEUE_INVALID", "account share reservation queue is invalid")
+	ErrAccountShareRoomFull                     = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_FULL", "account share room is full")
 	ErrAccountShareAPIKeyMustUseModeGroup       = infraerrors.BadRequest("ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP", "api key must use account mode group")
 	ErrAccountShareBalanceBelowMinimum          = infraerrors.Forbidden("ACCOUNT_SHARE_BALANCE_BELOW_MINIMUM", "user balance is below account share minimum")
 	ErrAccountSharePerUserConcurrencyExceeded   = infraerrors.TooManyRequests("ACCOUNT_SHARE_PER_USER_CONCURRENCY_EXCEEDED", "account share per-user concurrency exceeded")
@@ -222,7 +212,6 @@ var (
 	ErrAccountShareJoinIntentConsumed           = infraerrors.Conflict("ACCOUNT_SHARE_JOIN_INTENT_CONSUMED", "account share join intent has already been consumed")
 	ErrAccountShareJoinTermsChanged             = infraerrors.Conflict("ACCOUNT_SHARE_JOIN_TERMS_CHANGED", "account share room terms changed; review the latest terms and try again")
 	ErrAccountShareMembershipEnding             = infraerrors.Conflict("ACCOUNT_SHARE_MEMBERSHIP_ENDING", "the previous room membership is still completing exit settlement")
-	ErrAccountShareQueueConfirmationRequired    = infraerrors.Conflict("ACCOUNT_SHARE_QUEUE_CONFIRMATION_REQUIRED", "joining this room requires explicit queue confirmation")
 	ErrAccountShareEndTokenRequired             = infraerrors.BadRequest("ACCOUNT_SHARE_END_TOKEN_REQUIRED", "account share end confirmation token is required")
 	ErrAccountShareEndTokenInvalid              = infraerrors.Forbidden("ACCOUNT_SHARE_END_TOKEN_INVALID", "account share end confirmation token is invalid or expired")
 	ErrAccountShareEndStateConflict             = infraerrors.Conflict("ACCOUNT_SHARE_END_STATE_CONFLICT", "account share membership changed after end confirmation; refresh and try again")
@@ -231,16 +220,13 @@ var (
 	ErrAccountShareBillingBindingUnavailable   = errors.New("account share billing binding is no longer active")
 	ErrAccountShareModeInvalidIdleTimeout      = infraerrors.BadRequest("ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT", "idle_timeout_minutes must be between 1 and 10080")
 	ErrAccountShareListingInUse                = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_IN_USE", "account share listing has active seats")
-	ErrAccountShareListingEditing              = infraerrors.Conflict("ACCOUNT_SHARE_LISTING_EDITING", "account share listing is being edited")
-	ErrAccountShareEditSessionRequired         = infraerrors.BadRequest("ACCOUNT_SHARE_EDIT_SESSION_REQUIRED", "account share edit session is required")
-	ErrAccountShareEditSessionInvalid          = infraerrors.Conflict("ACCOUNT_SHARE_EDIT_SESSION_INVALID", "account share edit session is invalid or expired")
 	ErrAccountShareExpectedVersionRequired     = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_EXPECTED_VERSION_REQUIRED", "expected_version is required")
 	ErrAccountShareVersionConflict             = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_VERSION_CONFLICT", "account share room version conflict")
 	ErrAccountShareForceAdminRequired          = infraerrors.Forbidden("ACCOUNT_SHARE_ROOM_FORCE_ADMIN_REQUIRED", "only an administrator can force an account share room update")
 	ErrAccountShareUpdateReasonRequired        = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED", "update reason is required")
 	ErrAccountShareForceReasonRequired         = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED", "force update reason is required")
 	ErrAccountShareForceConfirmationRequired   = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED", "force update confirmation is required")
-	ErrAccountShareUpdateRequiresPaused        = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED", "contract updates require an empty active or paused room with no active, queued, or ending memberships")
+	ErrAccountShareUpdateRequiresPaused        = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED", "contract updates require an empty active or paused room with no active or ending memberships")
 	ErrAccountShareConsumerProtectionViolation = infraerrors.Conflict("ACCOUNT_SHARE_CONSUMER_PROTECTION_VIOLATION", "the update would reduce rights already granted to consumers")
 	ErrAccountShareRelistAccountUnavailable    = infraerrors.BadRequest("ACCOUNT_SHARE_RELIST_ACCOUNT_UNAVAILABLE", "账号测试通过，但账号状态仍不可调度，请先启用账号或恢复调度后重试")
 	ErrAccountShareReviewInvalidScore          = infraerrors.BadRequest("ACCOUNT_SHARE_REVIEW_INVALID_SCORE", "评分必须在 0-10 之间")
@@ -506,11 +492,6 @@ type AccountShareListing struct {
 	LastUsedMembershipID                    *int64                      `json:"last_used_membership_id,omitempty"`
 	LastUsedAt                              *time.Time                  `json:"last_used_at,omitempty"`
 	HistorySnapshotQuality                  string                      `json:"history_snapshot_quality,omitempty"`
-	EditingByUserID                         *int64                      `json:"editing_by_user_id,omitempty"`
-	EditingByUsername                       string                      `json:"editing_by_username,omitempty"`
-	EditingExpiresAt                        *time.Time                  `json:"editing_expires_at,omitempty"`
-	EditingMine                             bool                        `json:"editing_mine"`
-	EditSessionID                           string                      `json:"edit_session_id,omitempty"`
 	CreatedAt                               time.Time                   `json:"created_at"`
 	UpdatedAt                               time.Time                   `json:"updated_at"`
 }
@@ -703,6 +684,7 @@ type AccountShareRecommendationUsageProfile struct {
 }
 
 type AccountShareRecommendationEstimate struct {
+	Assumption              string  `json:"assumption"`
 	BillingMode             string  `json:"billing_mode"`
 	BaseRequestCost         float64 `json:"base_request_cost"`
 	RequestCost             float64 `json:"request_cost"`
@@ -720,30 +702,17 @@ type AccountShareRecommendationEstimate struct {
 	OwnerSelfUse            bool    `json:"owner_self_use"`
 }
 
-type AccountShareRecommendationScoreBreakdown struct {
-	CostSavingScore   float64 `json:"cost_saving_score"`
-	StabilityScore    float64 `json:"stability_score"`
-	AvailabilityScore float64 `json:"availability_score"`
-	RiskControlScore  float64 `json:"risk_control_score"`
-	OverallScore      float64 `json:"overall_score"`
-}
-
 type AccountShareRecommendationCandidate struct {
-	Rank           int                                      `json:"rank"`
-	Listing        AccountShareListing                      `json:"listing"`
-	Estimate       AccountShareRecommendationEstimate       `json:"estimate"`
-	Score          float64                                  `json:"score"`
-	ScoreBreakdown AccountShareRecommendationScoreBreakdown `json:"score_breakdown"`
-	Tags           []string                                 `json:"tags"`
-	Reasons        []string                                 `json:"reasons"`
-	Warnings       []string                                 `json:"warnings,omitempty"`
+	Rank     int                                `json:"rank"`
+	Listing  AccountShareListing                `json:"listing"`
+	Estimate AccountShareRecommendationEstimate `json:"estimate"`
+	Warnings []string                           `json:"warnings,omitempty"`
 }
 
 type AccountShareRecommendationResult struct {
 	Input          AccountShareRecommendationUsage       `json:"input"`
 	CandidateCount int                                   `json:"candidate_count"`
 	Items          []AccountShareRecommendationCandidate `json:"items"`
-	Recommended    *AccountShareRecommendationCandidate  `json:"recommended,omitempty"`
 }
 
 type AccountShareListingProxy struct {
@@ -806,7 +775,6 @@ type AccountShareMembership struct {
 type AccountShareAPIKeyBindingStatus struct {
 	APIKeyID      int64                    `json:"api_key_id"`
 	ActiveCount   int                      `json:"active_count"`
-	QueuedCount   int                      `json:"queued_count"`
 	EndingCount   int                      `json:"ending_count"`
 	BlockingCount int                      `json:"blocking_count"`
 	Memberships   []AccountShareMembership `json:"memberships"`
@@ -998,17 +966,9 @@ type AccountShareReviewModerationResult struct {
 	URLSnapshot   string
 }
 
-type AccountShareEndMembershipToken struct {
-	MembershipID int64     `json:"membership_id"`
-	OperationID  string    `json:"operation_id"`
-	Token        string    `json:"token"`
-	ExpiresAt    time.Time `json:"expires_at"`
-}
-
 type CreateAccountShareJoinIntentInput struct {
 	APIKeyID           int64
 	IdleTimeoutMinutes int
-	AcceptQueue        bool
 }
 
 type CompleteAccountShareJoinInput struct {
@@ -1017,7 +977,6 @@ type CompleteAccountShareJoinInput struct {
 	IntentToken        string
 	ExpectedVersion    int64
 	ExpectedRevisionID int64
-	AcceptQueue        bool
 }
 
 type AccountShareJoinIntent struct {
@@ -1027,8 +986,6 @@ type AccountShareJoinIntent struct {
 	ExpiresAt          time.Time                         `json:"expires_at"`
 	ExpectedVersion    int64                             `json:"expected_version"`
 	ExpectedRevisionID int64                             `json:"expected_revision_id,omitempty"`
-	AcceptQueue        bool                              `json:"accept_queue"`
-	QueueMayBeRequired bool                              `json:"queue_may_be_required"`
 	Terms              *AccountShareListingTermsSnapshot `json:"terms"`
 }
 
@@ -1039,7 +996,6 @@ type AccountShareJoinRepositoryInput struct {
 	IdleTimeoutMinutes int
 	ExpectedVersion    int64
 	ExpectedRevisionID int64
-	AcceptQueue        bool
 	IntentIssuedAt     time.Time
 	IntentNonce        string
 	AcceptedTerms      *AccountShareListingTermsSnapshot
@@ -1053,21 +1009,10 @@ type accountShareJoinIntentTokenClaims struct {
 	IdleTimeoutMinutes int                              `json:"idle_timeout_minutes"`
 	ExpectedVersion    int64                            `json:"expected_version"`
 	ExpectedRevisionID int64                            `json:"expected_revision_id,omitempty"`
-	AcceptQueue        bool                             `json:"accept_queue"`
 	Terms              AccountShareListingTermsSnapshot `json:"terms"`
 	Nonce              string                           `json:"nonce"`
 	IssuedAt           int64                            `json:"issued_at"`
 	ExpiresAt          int64                            `json:"expires_at"`
-}
-
-type accountShareEndMembershipTokenClaims struct {
-	Action           string `json:"action"`
-	ConsumerID       int64  `json:"consumer_user_id"`
-	MembershipID     int64  `json:"membership_id"`
-	MembershipStatus string `json:"membership_status"`
-	OperationID      string `json:"operation_id"`
-	Nonce            string `json:"nonce"`
-	ExpiresAt        int64  `json:"expires_at"`
 }
 
 type BeginAccountShareMembershipEndInput struct {
@@ -1075,15 +1020,13 @@ type BeginAccountShareMembershipEndInput struct {
 	MembershipID             int64
 	ExpectedMembershipStatus string
 	OperationID              string
+	Reason                   string
 }
 
 type AccountShareEndingMembershipCandidate struct {
 	MembershipID      int64
 	OperationID       string
 	EndingRequestedAt time.Time
-	// LastRequestAt 是结束结算兜底的在途信号：在途请求的心跳会通过 DB 持续 touch
-	// last_request_at（与 Redis lease 无关），强制 finalize 前据此判断是否仍有请求在跑。
-	LastRequestAt time.Time
 }
 
 type AccountShareSeatBillingResult struct {
@@ -1208,17 +1151,10 @@ type UpdateAccountShareListingInput struct {
 	Anthropic5hLimitPercent *float64
 	Anthropic7dLimitPercent *float64
 	Concurrency             *int
-	EditSessionID           string
 	ForceActiveEdit         bool
 	ExpectedVersion         *int64
 	Reason                  string
 	Confirmed               bool
-}
-
-type BeginAccountShareListingEditInput struct {
-	SessionID string
-	Force     bool
-	Expires   time.Time
 }
 
 type AccountShareModeRepository interface {
@@ -1231,15 +1167,15 @@ type AccountShareModeRepository interface {
 	GetListingByAccountID(ctx context.Context, accountID int64) (*AccountShareListing, error)
 	ListListings(ctx context.Context, viewerUserID int64, filters AccountShareListingFilters, params pagination.PaginationParams) ([]AccountShareListing, *pagination.PaginationResult, error)
 	GetMySpendSummary(ctx context.Context, query AccountShareMySpendQuery) (*AccountShareMySpendSummary, error)
-	BeginListingEdit(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, input BeginAccountShareListingEditInput) (*AccountShareListing, error)
-	ReleaseListingEdit(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, sessionID string) (*AccountShareListing, error)
 	UpdateListing(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, input UpdateAccountShareListingInput) (*AccountShareListing, error)
 	EnsureListingRevisionTerms(ctx context.Context, listingID int64) (*AccountShareListingTermsSnapshot, error)
 	JoinListing(ctx context.Context, input AccountShareJoinRepositoryInput) (*AccountShareMembership, error)
+	FindMembershipByJoinIntent(ctx context.Context, consumerUserID, listingID, apiKeyID int64, nonce string) (*AccountShareMembership, error)
 	GetMembershipForEnd(ctx context.Context, consumerUserID int64, membershipID int64) (*AccountShareMembership, error)
 	BeginMembershipEnd(ctx context.Context, input BeginAccountShareMembershipEndInput) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
 	FinalizeMembershipEnd(ctx context.Context, membershipID int64, operationID string) (*AccountShareMembership, *AccountShareSeatBillingResult, bool, error)
-	ListEndingMembershipCandidates(ctx context.Context, limit int) ([]AccountShareEndingMembershipCandidate, error)
+	UpdateMembershipEndProgress(ctx context.Context, membershipID int64, operationID string, progress AccountShareMembershipEndProgress) error
+	ListEndingMembershipCandidates(ctx context.Context, afterID int64, limit int) ([]AccountShareEndingMembershipCandidate, error)
 	UpdateMembershipIdleTimeout(ctx context.Context, consumerUserID int64, membershipID int64, idleTimeoutMinutes int) (*AccountShareMembership, error)
 	SubmitReview(ctx context.Context, consumerUserID int64, membershipID int64, input SubmitAccountShareReviewInput) (*AccountShareReview, error)
 	ListListingReviews(ctx context.Context, viewerUserID int64, viewerIsAdmin bool, listingID int64, params pagination.PaginationParams) ([]AccountShareReview, *pagination.PaginationResult, error)
@@ -1248,15 +1184,14 @@ type AccountShareModeRepository interface {
 	BeginReviewModerationAttempt(ctx context.Context, reviewID int64, maxAttempts int) (bool, error)
 	CompleteReviewModeration(ctx context.Context, reviewID int64, result AccountShareReviewModerationResult) error
 	FailReviewModeration(ctx context.Context, reviewID int64, reason string, nextRetryAt time.Time, maxAttempts int) error
-	ListMembershipQueue(ctx context.Context, consumerUserID int64, apiKeyID int64) ([]AccountShareMembership, error)
 	ListAPIKeyBindingMemberships(ctx context.Context, consumerUserID int64, apiKeyID int64) ([]AccountShareMembership, error)
-	ReorderMembershipQueue(ctx context.Context, consumerUserID int64, apiKeyID int64, membershipIDs []int64) ([]AccountShareMembership, error)
 	TouchMembershipLastRequest(ctx context.Context, membershipID int64, at time.Time) error
 	ListIdleMembershipCandidates(ctx context.Context, now time.Time, filter AccountShareIdleMembershipFilter, limit int) ([]AccountShareIdleMembershipCandidate, error)
 	EndIdleMembership(ctx context.Context, membershipID int64, endedAt time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
 	ProcessUnavailableMemberships(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error)
 	ListRecoverableUnavailableMembershipIDs(ctx context.Context, now time.Time, limit int) ([]int64, error)
-	SuspendRecoverableUnavailableMembership(ctx context.Context, membershipID int64, unavailableAt time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
+	BeginUnavailableMembershipEnd(ctx context.Context, membershipID int64, unavailableAt time.Time) (*AccountShareMembership, *AccountShareSeatBillingResult, error)
+	GetMembershipRequestState(ctx context.Context, userID, apiKeyID, groupID int64, now time.Time) error
 	EndUnavailableAccountMemberships(ctx context.Context, accountID int64, endedAt time.Time, limit int) (*AccountShareSeatBillingResult, error)
 	DisablePermanentlyUnavailableListings(ctx context.Context, now time.Time, limit int) (*AccountShareListingMaintenanceResult, error)
 	ProcessSeatBilling(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error)
@@ -1266,7 +1201,6 @@ type AccountShareModeRepository interface {
 	ProcessSeatBillingForRequest(ctx context.Context, now time.Time, consumerUserID, apiKeyID int64) (*AccountShareSeatBillingResult, error)
 	GetActiveMembershipForAPIKey(ctx context.Context, apiKeyID int64) (*AccountShareMembership, *AccountShareListing, error)
 	GetActiveMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64) (*AccountShareMembership, *AccountShareListing, error)
-	ActivateNextQueuedMembershipForRequest(ctx context.Context, userID, apiKeyID, groupID int64, afterRank int, now time.Time) (*AccountShareMembership, *AccountShareListing, error)
 	ResolvePolicy(ctx context.Context) (*AccountSharePolicy, error)
 }
 
@@ -1391,6 +1325,8 @@ type AccountShareModeService struct {
 	seatWaiverLateUsageHWM time.Time
 	roomLifecycleCursorMu  sync.Mutex
 	roomLifecycleAfterID   int64
+	endingCursorMu         sync.Mutex
+	endingAfterID          int64
 	reviewCtx              context.Context
 	reviewCancel           context.CancelFunc
 	reviewStopCh           chan struct{}
@@ -1521,8 +1457,9 @@ func (s *AccountShareModeService) StartSeatBillingWorker() {
 		return
 	}
 	s.seatBillingStartOnce.Do(func() {
-		s.seatBillingWG.Add(5)
+		s.seatBillingWG.Add(6)
 		go s.runSeatBillingWorker()
+		go s.runMembershipEndingWorker()
 		go s.runSeatWaiverCompensationWorker()
 		go s.runRoomLifecycleFinalizerWorker()
 		go s.runRoomValidationWorker()
@@ -1566,6 +1503,22 @@ func (s *AccountShareModeService) runSeatBillingWorker() {
 	}
 }
 
+func (s *AccountShareModeService) runMembershipEndingWorker() {
+	defer s.seatBillingWG.Done()
+	ticker := time.NewTicker(AccountShareModeSeatBillingInterval)
+	defer ticker.Stop()
+
+	s.processMembershipEndingOnce()
+	for {
+		select {
+		case <-ticker.C:
+			s.processMembershipEndingOnce()
+		case <-s.seatBillingStopCh:
+			return
+		}
+	}
+}
+
 func (s *AccountShareModeService) runSeatWaiverCompensationWorker() {
 	defer s.seatBillingWG.Done()
 	ticker := time.NewTicker(AccountShareModeSeatWaiverCompensationInterval)
@@ -1587,11 +1540,11 @@ func (s *AccountShareModeService) runRoomLifecycleFinalizerWorker() {
 	ticker := time.NewTicker(AccountShareModeSeatBillingInterval)
 	defer ticker.Stop()
 
-	s.processRoomLifecycleFinalizationOnce()
+	_ = s.processRoomLifecycleFinalizationOnce() // The iteration logs its error; the worker retries on the next tick.
 	for {
 		select {
 		case <-ticker.C:
-			s.processRoomLifecycleFinalizationOnce()
+			_ = s.processRoomLifecycleFinalizationOnce() // The iteration logs its error; keep subsequent ticks running.
 		case <-s.seatBillingStopCh:
 			return
 		}
@@ -1734,72 +1687,60 @@ func (s *AccountShareModeService) processSeatBillingOnceLeased(ctx context.Conte
 	if err := guard.Check(ctx); err != nil {
 		return err
 	}
-	s.processEndingMembershipsOnce(ctx)
-	if err := guard.Check(ctx); err != nil {
-		return err
-	}
 	return nil
 }
 
-func (s *AccountShareModeService) processEndingMembershipsOnce(ctx context.Context) {
+func (s *AccountShareModeService) processMembershipEndingOnce() {
 	if s == nil || s.repo == nil {
 		return
 	}
-	candidates, err := s.repo.ListEndingMembershipCandidates(ctx, AccountShareModeSeatBillingBatchSize)
+	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), 5*time.Minute)
+	defer cancel()
+	_, err := s.taskExecutor.Run(ctx, accountShareMembershipEndingTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+		return s.processEndingMembershipsOnceLeased(taskCtx, guard)
+	})
 	if err != nil {
-		log.Printf("account_share_mode: list ending memberships failed: %v", err)
-		return
+		log.Printf("account_share_mode: membership ending lease failed: %v", err)
+	}
+}
+
+func (s *AccountShareModeService) processEndingMembershipsOnce(ctx context.Context) {
+	if err := s.processEndingMembershipsOnceLeased(ctx, nil); err != nil {
+		log.Printf("account_share_mode: process ending memberships failed: %v", err)
+	}
+}
+
+func (s *AccountShareModeService) processEndingMembershipsOnceLeased(ctx context.Context, guard *ClusterLeaseGuard) error {
+	if s == nil || s.repo == nil {
+		return nil
+	}
+	if err := guard.Check(ctx); err != nil {
+		return err
+	}
+	s.endingCursorMu.Lock()
+	defer s.endingCursorMu.Unlock()
+	candidates, err := s.repo.ListEndingMembershipCandidates(ctx, s.endingAfterID, AccountShareModeSeatBillingBatchSize)
+	if err == nil && len(candidates) == 0 && s.endingAfterID > 0 {
+		s.endingAfterID = 0
+		candidates, err = s.repo.ListEndingMembershipCandidates(ctx, 0, AccountShareModeSeatBillingBatchSize)
+	}
+	if err != nil {
+		return fmt.Errorf("list ending memberships: %w", err)
 	}
 	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := guard.Check(ctx); err != nil {
+			return err
+		}
+		s.endingAfterID = candidate.MembershipID
 		if candidate.MembershipID <= 0 || strings.TrimSpace(candidate.OperationID) == "" {
 			continue
 		}
-		hasLease, leaseErr := s.hasActiveMembershipLease(ctx, candidate.MembershipID)
-		if leaseErr != nil {
-			// Redis 是运行时并发租约权威，不可用时默认 fail-closed（避免在有在途请求时
-			// 中途结算）。但结束结算不能无限期停摆：当 ending 已持续超过阈值时，需要一条
-			// 有界兜底路径。这里用两个信号共同决定是否强行走 finalize：
-			//
-			//   1. ending 已超过阈值（AccountShareModeEndSettlementForceTimeout）；
-			//   2. 结束请求之后没有仍在 touch 的在途请求。在途请求的心跳与 Redis lease 无关，
-			//      会持续通过 DB 刷新 last_request_at；若 last_request_at 晚于结束请求时间，
-			//      说明确有请求在跑，本轮跳过（下一轮仍会重估，直到请求自然结束）。
-			//
-			// 二者同时满足才 finalize。这样 DB 侧检查（last_request_at 心跳）真正兜住了
-			// 「Redis 断连期间有长请求在跑」的边界——不再依赖已被删除的 billing intent 检查。
-			// 代价是：Redis 断连且请求真在跑时，结束结算会继续等待，但这是 fail-closed 应有的
-			// 行为（宁慢勿错），且请求结束后下一轮即可完成结算。
-			now := time.Now().UTC()
-			if !candidate.EndingRequestedAt.IsZero() &&
-				now.Sub(candidate.EndingRequestedAt) >= AccountShareModeEndSettlementForceTimeout &&
-				!candidate.LastRequestAt.After(candidate.EndingRequestedAt) {
-				log.Printf("account_share_mode: force finalize ending membership %d after %s despite lease unknown: %v",
-					candidate.MembershipID, AccountShareModeEndSettlementForceTimeout, leaseErr)
-				membership, billing, finalized, finalizeErr := s.repo.FinalizeMembershipEnd(ctx, candidate.MembershipID, candidate.OperationID)
-				if finalizeErr != nil {
-					log.Printf("account_share_mode: force finalize ending membership %d failed: %v", candidate.MembershipID, finalizeErr)
-					continue
-				}
-				if !finalized {
-					continue
-				}
-				s.invalidateMembershipEndCaches(ctx, membership, billing)
-			}
-			continue
-		}
-		if hasLease {
-			continue
-		}
-		membership, billing, finalized, finalizeErr := s.repo.FinalizeMembershipEnd(ctx, candidate.MembershipID, candidate.OperationID)
-		if finalizeErr != nil {
-			log.Printf("account_share_mode: finalize ending membership %d failed: %v", candidate.MembershipID, finalizeErr)
-			continue
-		}
-		if !finalized {
-			continue
-		}
-		s.invalidateMembershipEndCaches(ctx, membership, billing)
+		s.tryFinalizeMembershipEnd(ctx, candidate.MembershipID, candidate.OperationID)
 	}
+	return guard.Check(ctx)
 }
 
 func (s *AccountShareModeService) processSeatWaiverCompensationsOnce() {
@@ -1952,7 +1893,7 @@ func (s *AccountShareModeService) processRecoverableUnavailableMemberships(ctx c
 		if active {
 			continue
 		}
-		membership, billing, err := s.repo.SuspendRecoverableUnavailableMembership(ctx, membershipID, now)
+		membership, billing, err := s.repo.BeginUnavailableMembershipEnd(ctx, membershipID, now)
 		if err != nil {
 			if errors.Is(err, ErrAccountShareListingNotFound) {
 				continue
@@ -2128,8 +2069,8 @@ func (s *AccountShareModeService) GenerateAnthropicAuthURL(ctx context.Context, 
 	return s.oauthService.GenerateAuthURL(ctx, proxyID)
 }
 
-// ListAvailableProxies 按账号平台与等级返回用户可选的平台代理。
-// scope 为空平台时仅返回通用代理，空等级时仅返回所有等级可用的代理。
+// ListAvailableProxies 返回本人代理及符合账号平台、等级要求的平台代理。
+// 对平台代理，scope 为空平台时仅返回通用代理，空等级时仅返回所有等级可用的代理。
 func (s *AccountShareModeService) ListAvailableProxies(ctx context.Context, scope ProxyScope) ([]ProxyWithAccountCount, error) {
 	if s == nil || s.proxyRepo == nil {
 		return []ProxyWithAccountCount{}, nil
@@ -2961,9 +2902,6 @@ func (s *AccountShareModeService) RecommendListings(ctx context.Context, viewerU
 			if listing.ActiveSeats >= listing.SeatLimit && listing.OwnerUserID != viewerUserID {
 				continue
 			}
-			if listing.EditingExpiresAt != nil && now.Before(*listing.EditingExpiresAt) {
-				continue
-			}
 			if accountShareListingAccountUnavailableAt(&listing, now) {
 				continue
 			}
@@ -2971,16 +2909,10 @@ func (s *AccountShareModeService) RecommendListings(ctx context.Context, viewerU
 			if err != nil {
 				return nil, err
 			}
-			tags, reasons, warnings := buildAccountShareRecommendationMessages(listing, estimate)
-			scoreBreakdown := buildAccountShareRecommendationScoreBreakdown(listing, estimate, warnings)
 			candidate := AccountShareRecommendationCandidate{
-				Listing:        listing,
-				Estimate:       estimate,
-				Score:          scoreBreakdown.OverallScore,
-				ScoreBreakdown: scoreBreakdown,
-				Tags:           tags,
-				Reasons:        reasons,
-				Warnings:       warnings,
+				Listing:  listing,
+				Estimate: estimate,
+				Warnings: buildAccountShareEstimateWarnings(listing, estimate),
 			}
 			dedupeKey := accountShareRecommendationCandidateDedupeKey(listing)
 			if existing, ok := candidatesByAccount[dedupeKey]; ok && !accountShareRecommendationCandidateRanksBefore(candidate, existing) {
@@ -3005,27 +2937,18 @@ func (s *AccountShareModeService) RecommendListings(ctx context.Context, viewerU
 	sort.SliceStable(candidates, func(i, j int) bool {
 		return accountShareRecommendationCandidateRanksBefore(candidates[i], candidates[j])
 	})
-	candidates = accountShareRecommendationSelectCandidates(candidates, normalized.Limit)
-	applyAccountShareRecommendationSmartLabels(candidates)
+	if len(candidates) > normalized.Limit {
+		candidates = candidates[:normalized.Limit]
+	}
 	for i := range candidates {
 		candidates[i].Rank = i + 1
-		if i == 0 {
-			candidates[i].Tags = prependUniqueString(candidates[i].Tags, "最省额度")
-			candidates[i].Reasons = prependUniqueString(candidates[i].Reasons, "按当前测算预计每小时额度最低")
-		}
 		projectAccountShareListingForViewer(&candidates[i].Listing, viewerUserID, viewerIsAdmin)
 	}
 
-	var recommended *AccountShareRecommendationCandidate
-	if len(candidates) > 0 {
-		best := candidates[0]
-		recommended = &best
-	}
 	return &AccountShareRecommendationResult{
 		Input:          buildAccountShareRecommendationUsage(normalized),
 		CandidateCount: len(candidatesByAccount),
 		Items:          candidates,
-		Recommended:    recommended,
 	}, nil
 }
 
@@ -3197,6 +3120,7 @@ func (s *AccountShareModeService) estimateAccountShareRecommendationCost(ctx con
 		perRequestCost = cost.ActualCost / float64(input.RequestCount)
 	}
 	return AccountShareRecommendationEstimate{
+		Assumption:              "假定请求用量均匀分布在所填时长内；实际按加入后的每小时窗口分别判断低消减免，集中使用时占位费可能更高。",
 		BillingMode:             billingMode,
 		BaseRequestCost:         cost.TotalCost,
 		RequestCost:             cost.ActualCost,
@@ -3213,89 +3137,6 @@ func (s *AccountShareModeService) estimateAccountShareRecommendationCost(ctx con
 		EffectiveHourlyRate:     hourlyRate,
 		OwnerSelfUse:            ownerSelfUse,
 	}, nil
-}
-
-func (s *AccountShareModeService) BeginListingEdit(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, sessionID string, force bool) (*AccountShareListing, error) {
-	if actorUserID <= 0 {
-		return nil, ErrUserNotFound
-	}
-	if listingID <= 0 {
-		return nil, ErrAccountShareListingNotFound
-	}
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		sessionID = uuid.NewString()
-	}
-	if !actorIsAdmin && force {
-		return nil, ErrInsufficientPerms
-	}
-	if s == nil || s.repo == nil {
-		return nil, ErrServiceUnavailable
-	}
-	if !actorIsAdmin || !force {
-		state, err := s.GetRoomManagementState(ctx, actorUserID, actorIsAdmin, listingID)
-		if err != nil {
-			return nil, err
-		}
-		blockers := state.Blockers
-		// An existing edit lease is resolved atomically by BeginListingEdit:
-		// the same actor/session may renew it, while another session is rejected.
-		blockers.ValidEditSession = false
-		if blockers.ConflictingOperation {
-			return nil, ErrAccountShareRoomOperationConflict.WithMetadata(blockers.Metadata())
-		}
-		if blockers.Any() {
-			return nil, ErrAccountShareListingInUse.WithMetadata(blockers.Metadata())
-		}
-	}
-	listing, err := s.repo.BeginListingEdit(ctx, actorUserID, actorIsAdmin, listingID, BeginAccountShareListingEditInput{
-		SessionID: sessionID,
-		Force:     force,
-		Expires:   time.Now().UTC().Add(AccountShareModeEditSessionTTL),
-	})
-	if err != nil {
-		return nil, err
-	}
-	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
-	if err != nil {
-		return nil, err
-	}
-	normalizeAccountShareListingAccountLevelWithConfigs(listing, levelConfigs)
-	s.enrichListingRuntime(ctx, listing)
-	if err := s.attachListingEditProxy(ctx, listing); err != nil {
-		if _, releaseErr := s.repo.ReleaseListingEdit(ctx, actorUserID, actorIsAdmin, listingID, sessionID); releaseErr != nil {
-			log.Printf("[AccountShareMode] release edit session after proxy attach failure failed: listing_id=%d user_id=%d err=%v", listingID, actorUserID, releaseErr)
-		}
-		return nil, err
-	}
-	return listing, nil
-}
-
-func (s *AccountShareModeService) ReleaseListingEdit(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, sessionID string) (*AccountShareListing, error) {
-	if actorUserID <= 0 {
-		return nil, ErrUserNotFound
-	}
-	if listingID <= 0 {
-		return nil, ErrAccountShareListingNotFound
-	}
-	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return nil, ErrAccountShareEditSessionRequired
-	}
-	if s == nil || s.repo == nil {
-		return nil, ErrServiceUnavailable
-	}
-	listing, err := s.repo.ReleaseListingEdit(ctx, actorUserID, actorIsAdmin, listingID, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	levelConfigs, err := s.openAIAccountLevelConfigs(ctx)
-	if err != nil {
-		return nil, err
-	}
-	normalizeAccountShareListingAccountLevelWithConfigs(listing, levelConfigs)
-	s.enrichListingRuntime(ctx, listing)
-	return listing, nil
 }
 
 func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID int64, actorIsAdmin bool, listingID int64, input UpdateAccountShareListingInput) (*AccountShareListing, error) {
@@ -3319,7 +3160,6 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 		return nil, ErrAccountShareRoomNoChanges
 	}
 	input.Reason = strings.TrimSpace(input.Reason)
-	input.EditSessionID = strings.TrimSpace(input.EditSessionID)
 	if input.ForceActiveEdit && !actorIsAdmin {
 		return nil, ErrAccountShareForceAdminRequired
 	}
@@ -3354,11 +3194,7 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 	if !actorIsAdmin && !isAccountShareModeModelOnlyUpdate(input) && !isAccountShareModeOwnerConfigUpdate(input) {
 		return nil, ErrInsufficientPerms
 	}
-	// 这里刻意不再做「合约字段必须带 edit_session_id」的前置判定。
-	// 仓储层对同一批字段有更完整的裁决：没带编辑锁时会先算一遍
-	// accountShareListingUpdateProtectsConsumers（只降费 / 提并发 / 加模型 / 不伤现有席位
-	// 地减席位即放行），算不过才要求编辑锁。前置判定的条件与那条免锁分支的进入条件
-	// 逐字相同，等于把整条「消费者安全更新」堵死，房间一有人用就永远保存不了。
+	// 保存时在事务中复核版本、房间状态和成员条款保护，无需长时间占用编辑锁。
 	if input.SeatLimit != nil && (*input.SeatLimit < AccountShareModeMinSeats || *input.SeatLimit > AccountShareModeMaxSeats) {
 		return nil, ErrAccountShareModeInvalidSeats
 	}
@@ -4019,7 +3855,6 @@ func (s *AccountShareModeService) CreateJoinIntent(
 			"actual_version":   fmt.Sprintf("%d", preparation.listing.RowVersion),
 		})
 	}
-	listing := preparation.listing
 	now := preparation.now
 	expiresAt := now.Add(AccountShareModeJoinIntentTTL)
 	claims := accountShareJoinIntentTokenClaims{
@@ -4030,7 +3865,6 @@ func (s *AccountShareModeService) CreateJoinIntent(
 		IdleTimeoutMinutes: input.IdleTimeoutMinutes,
 		ExpectedVersion:    terms.RowVersion,
 		ExpectedRevisionID: terms.ListingRevisionID,
-		AcceptQueue:        input.AcceptQueue,
 		Terms:              *terms,
 		Nonce:              uuid.NewString(),
 		IssuedAt:           now.UnixNano(),
@@ -4040,26 +3874,6 @@ func (s *AccountShareModeService) CreateJoinIntent(
 	if err != nil {
 		return nil, err
 	}
-	queueMayBeRequired := !preparation.ownerSelfUse &&
-		listing.CurrentMembershipID == nil &&
-		(listing.QueueMembershipID != nil || listing.ActiveSeats >= listing.SeatLimit)
-	// 跨房 ending 强制排队：同一 key 上若存在「其它房间」的退出结算中 membership，
-	// 唯一索引 uq_account_share_memberships_live_api_key 会强制本次加入进入排队
-	// （repo JoinListing 的 hasLiveMembership 把 active+ending 都视为占用）。
-	// 这里把该情况提前纳入 queueMayBeRequired，让确认弹窗如实提示「需要预约队列」，
-	// 避免用户以为可直接加入、提交时才被后端拒绝。
-	if !preparation.ownerSelfUse && !queueMayBeRequired && listing.CurrentMembershipID == nil {
-		memberships, listErr := s.repo.ListAPIKeyBindingMemberships(ctx, consumerUserID, input.APIKeyID)
-		if listErr != nil {
-			return nil, listErr
-		}
-		for _, membership := range memberships {
-			if membership.Status == AccountShareMembershipStatusEnding && membership.ListingID != listingID {
-				queueMayBeRequired = true
-				break
-			}
-		}
-	}
 	return &AccountShareJoinIntent{
 		ListingID:          listingID,
 		APIKeyID:           input.APIKeyID,
@@ -4067,8 +3881,6 @@ func (s *AccountShareModeService) CreateJoinIntent(
 		ExpiresAt:          expiresAt,
 		ExpectedVersion:    terms.RowVersion,
 		ExpectedRevisionID: terms.ListingRevisionID,
-		AcceptQueue:        input.AcceptQueue,
-		QueueMayBeRequired: queueMayBeRequired,
 		Terms:              terms,
 	}, nil
 }
@@ -4112,8 +3924,26 @@ func (s *AccountShareModeService) CompleteJoinListing(
 		return nil, err
 	}
 	if input.ExpectedVersion != claims.ExpectedVersion ||
-		input.ExpectedRevisionID != claims.ExpectedRevisionID ||
-		input.AcceptQueue != claims.AcceptQueue {
+		input.ExpectedRevisionID != claims.ExpectedRevisionID {
+		return nil, ErrAccountShareJoinIntentInvalid
+	}
+	if s == nil || s.repo == nil {
+		return nil, ErrServiceUnavailable
+	}
+	replay := func() (*AccountShareMembership, error) {
+		membership, replayErr := s.repo.FindMembershipByJoinIntent(ctx, consumerUserID, listingID, input.APIKeyID, claims.Nonce)
+		if replayErr == nil && membership != nil {
+			s.invalidateSeatBillingCaches(&AccountShareSeatBillingResult{
+				DebitUserIDs: []int64{consumerUserID}, EndedConsumerUserIDs: []int64{consumerUserID},
+			})
+		}
+		return membership, replayErr
+	}
+	if membership, replayErr := replay(); membership != nil || replayErr != nil {
+		return membership, replayErr
+	}
+	// Expired signed intents may only replay an already committed membership.
+	if claims.ExpiresAt <= now.UnixNano() {
 		return nil, ErrAccountShareJoinIntentInvalid
 	}
 	preparation, err := s.prepareAccountShareJoin(
@@ -4124,9 +3954,16 @@ func (s *AccountShareModeService) CompleteJoinListing(
 		input.IdleTimeoutMinutes,
 	)
 	if err != nil {
+		// Another request may have committed this exact intent during preflight.
+		if membership, replayErr := replay(); membership != nil || replayErr != nil {
+			return membership, replayErr
+		}
 		return nil, err
 	}
 	if !accountShareListingMatchesJoinTerms(preparation.listing, claims.Terms) {
+		if membership, replayErr := replay(); membership != nil || replayErr != nil {
+			return membership, replayErr
+		}
 		return nil, ErrAccountShareJoinTermsChanged.WithMetadata(map[string]string{
 			"expected_version": fmt.Sprintf("%d", claims.ExpectedVersion),
 			"actual_version":   fmt.Sprintf("%d", preparation.listing.RowVersion),
@@ -4160,7 +3997,6 @@ func (s *AccountShareModeService) CompleteJoinListing(
 		IdleTimeoutMinutes: input.IdleTimeoutMinutes,
 		ExpectedVersion:    claims.ExpectedVersion,
 		ExpectedRevisionID: claims.ExpectedRevisionID,
-		AcceptQueue:        claims.AcceptQueue,
 		IntentIssuedAt:     issuedAt,
 		IntentNonce:        claims.Nonce,
 		AcceptedTerms:      &claims.Terms,
@@ -4228,6 +4064,15 @@ func (s *AccountShareModeService) prepareAccountShareJoin(
 	if listing.QueueStatus == AccountShareMembershipStatusEnding {
 		return nil, ErrAccountShareMembershipEnding
 	}
+	memberships, err := s.repo.ListAPIKeyBindingMemberships(ctx, consumerUserID, apiKeyID)
+	if err != nil {
+		return nil, err
+	}
+	for _, membership := range memberships {
+		if membership.Status == AccountShareMembershipStatusActive || membership.Status == AccountShareMembershipStatusEnding {
+			return nil, ErrAccountShareAPIKeyAlreadyBound
+		}
+	}
 	ownerSelfUse := IsAccountShareModeOwnerSelfUse(&AccountShareMembership{ConsumerUserID: consumerUserID}, listing)
 	if listing.Status != AccountShareListingStatusActive {
 		return nil, ErrAccountShareListingNotActive
@@ -4250,6 +4095,9 @@ func (s *AccountShareModeService) prepareAccountShareJoin(
 			accountShareLogTimePtr(listing.AnthropicQuotaProtectionResetAt),
 		)
 		return nil, ErrAccountShareAccountUnavailable
+	}
+	if !ownerSelfUse && listing.ActiveSeats >= listing.SeatLimit {
+		return nil, ErrAccountShareRoomFull
 	}
 	if !ownerSelfUse && user.Balance < listing.MinBalanceRequired {
 		return nil, ErrAccountShareBalanceBelowMinimum
@@ -4283,51 +4131,6 @@ func (s *AccountShareModeService) UpdateMembershipIdleTimeout(ctx context.Contex
 	return membership, nil
 }
 
-func (s *AccountShareModeService) ReorderMembershipQueue(ctx context.Context, consumerUserID, apiKeyID int64, membershipIDs []int64) ([]AccountShareMembership, error) {
-	if consumerUserID <= 0 {
-		return nil, ErrUserNotFound
-	}
-	if apiKeyID <= 0 {
-		return nil, ErrAPIKeyNotFound
-	}
-	if len(membershipIDs) == 0 || len(membershipIDs) > AccountShareModeQueueMaxItems {
-		return nil, ErrAccountShareQueueInvalid
-	}
-	seen := make(map[int64]struct{}, len(membershipIDs))
-	for _, id := range membershipIDs {
-		if id <= 0 {
-			return nil, ErrAccountShareQueueInvalid
-		}
-		if _, ok := seen[id]; ok {
-			return nil, ErrAccountShareQueueInvalid
-		}
-		seen[id] = struct{}{}
-	}
-	if s == nil || s.repo == nil || s.apiKeyRepo == nil {
-		return nil, ErrServiceUnavailable
-	}
-	if err := s.ensureAPIKeyOwnedByUser(ctx, consumerUserID, apiKeyID); err != nil {
-		return nil, err
-	}
-	return s.repo.ReorderMembershipQueue(ctx, consumerUserID, apiKeyID, membershipIDs)
-}
-
-func (s *AccountShareModeService) ListMembershipQueue(ctx context.Context, consumerUserID, apiKeyID int64) ([]AccountShareMembership, error) {
-	if consumerUserID <= 0 {
-		return nil, ErrUserNotFound
-	}
-	if apiKeyID <= 0 {
-		return nil, ErrAPIKeyNotFound
-	}
-	if s == nil || s.repo == nil || s.apiKeyRepo == nil {
-		return nil, ErrServiceUnavailable
-	}
-	if err := s.ensureAPIKeyOwnedByUser(ctx, consumerUserID, apiKeyID); err != nil {
-		return nil, err
-	}
-	return s.repo.ListMembershipQueue(ctx, consumerUserID, apiKeyID)
-}
-
 func (s *AccountShareModeService) GetAPIKeyBindingStatus(ctx context.Context, consumerUserID, apiKeyID int64) (*AccountShareAPIKeyBindingStatus, error) {
 	if consumerUserID <= 0 {
 		return nil, ErrUserNotFound
@@ -4354,8 +4157,6 @@ func (s *AccountShareModeService) GetAPIKeyBindingStatus(ctx context.Context, co
 		switch memberships[i].Status {
 		case AccountShareMembershipStatusActive:
 			status.ActiveCount++
-		case AccountShareMembershipStatusQueued:
-			status.QueuedCount++
 		case AccountShareMembershipStatusEnding:
 			status.EndingCount++
 		default:
@@ -4366,7 +4167,7 @@ func (s *AccountShareModeService) GetAPIKeyBindingStatus(ctx context.Context, co
 			)
 		}
 	}
-	status.BlockingCount = status.ActiveCount + status.QueuedCount + status.EndingCount
+	status.BlockingCount = status.ActiveCount + status.EndingCount
 	return status, nil
 }
 
@@ -4402,68 +4203,13 @@ func (s *AccountShareModeService) ensureAPIKeyMatchesListingPlatform(ctx context
 	return nil
 }
 
-func (s *AccountShareModeService) CreateEndMembershipToken(ctx context.Context, consumerUserID, membershipID int64) (*AccountShareEndMembershipToken, error) {
-	if consumerUserID <= 0 {
-		return nil, ErrUserNotFound
-	}
-	if membershipID <= 0 {
-		return nil, ErrAccountShareListingNotFound
-	}
-	if s == nil || s.repo == nil {
-		return nil, ErrServiceUnavailable
-	}
-	membership, err := s.repo.GetMembershipForEnd(ctx, consumerUserID, membershipID)
-	if err != nil {
-		return nil, err
-	}
-	if membership == nil || membership.ID != membershipID || membership.ConsumerUserID != consumerUserID {
-		return nil, ErrAccountShareMembershipNotFound
-	}
-	switch membership.Status {
-	case AccountShareMembershipStatusActive, AccountShareMembershipStatusQueued:
-	case AccountShareMembershipStatusEnding:
-		if strings.TrimSpace(membership.EndingOperationID) == "" {
-			return nil, ErrAccountShareEndStateConflict
-		}
-	default:
-		return nil, ErrAccountShareEndStateConflict
-	}
-	expiresAt := time.Now().UTC().Add(AccountShareModeEndMembershipTokenTTL)
-	operationID := strings.TrimSpace(membership.EndingOperationID)
-	if operationID == "" {
-		operationID = uuid.NewString()
-	}
-	claims := accountShareEndMembershipTokenClaims{
-		Action:           accountShareModeEndMembershipTokenAction,
-		ConsumerID:       consumerUserID,
-		MembershipID:     membershipID,
-		MembershipStatus: membership.Status,
-		OperationID:      operationID,
-		Nonce:            uuid.NewString(),
-		ExpiresAt:        expiresAt.Unix(),
-	}
-	token, err := s.signEndMembershipToken(claims)
-	if err != nil {
-		return nil, err
-	}
-	return &AccountShareEndMembershipToken{
-		MembershipID: membershipID,
-		OperationID:  operationID,
-		Token:        token,
-		ExpiresAt:    expiresAt,
-	}, nil
-}
-
-func (s *AccountShareModeService) EndMembership(ctx context.Context, consumerUserID, membershipID int64, confirmationToken string) (*AccountShareMembership, error) {
+func (s *AccountShareModeService) EndMembership(ctx context.Context, consumerUserID, membershipID int64) (*AccountShareMembership, error) {
 	if consumerUserID <= 0 {
 		return nil, ErrUserNotFound
 	}
 	if s == nil || s.repo == nil {
 		return nil, ErrServiceUnavailable
 	}
-	// 单阶段结束：confirmationToken 仅为旧前端兼容而保留，不再校验——
-	// 结束动作按成员当前状态幂等收口，没有任何"确认后状态变化"可冲突。
-	_ = confirmationToken
 	membership, billing, err := s.repo.BeginMembershipEnd(ctx, BeginAccountShareMembershipEndInput{
 		ConsumerUserID: consumerUserID,
 		MembershipID:   membershipID,
@@ -4486,39 +4232,72 @@ func (s *AccountShareModeService) EndMembership(ctx context.Context, consumerUse
 	if operationID == "" {
 		return nil, ErrAccountShareEndStateConflict
 	}
-	hasLease, leaseErr := s.hasActiveMembershipLease(ctx, membership.ID)
-	if leaseErr != nil || hasLease {
-		// Once the durable ending fence exists, an unavailable Redis lease
-		// check must never degrade to synchronous settlement.
-		return membership, nil
+	if updated := s.tryFinalizeMembershipEnd(ctx, membership.ID, operationID); updated != nil {
+		return updated, nil
 	}
-	finalizedMembership, finalizedBilling, finalized, err := s.repo.FinalizeMembershipEnd(ctx, membership.ID, operationID)
-	if err != nil {
-		return nil, err
-	}
-	if !finalized {
-		return finalizedMembership, nil
-	}
-	s.invalidateMembershipEndCaches(ctx, finalizedMembership, finalizedBilling)
-	return finalizedMembership, nil
+	// Begin 已提交停用与停费时间；本次尝试失败仍返回同一可恢复的退出操作。
+	return membership, nil
 }
 
-func (s *AccountShareModeService) hasActiveMembershipLease(ctx context.Context, membershipID int64) (bool, error) {
+func (s *AccountShareModeService) tryFinalizeMembershipEnd(ctx context.Context, membershipID int64, operationID string) *AccountShareMembership {
+	attemptCtx, cancel := context.WithTimeout(ctx, AccountShareModeMembershipEndAttemptTimeout)
+	defer cancel()
+	count, err := s.activeMembershipLeaseCount(attemptCtx, membershipID)
+	if err != nil {
+		log.Printf("account_share_mode: ending membership lease unavailable: membership_id=%d err=%v", membershipID, err)
+		s.recordMembershipEndProgress(ctx, membershipID, operationID, AccountShareMembershipEndProgress{
+			Code:         AccountShareMembershipEndBlockerRuntime,
+			ErrorMessage: "暂时无法确认在途请求状态，系统将自动重试",
+		})
+		return nil
+	}
+	if count > 0 {
+		s.recordMembershipEndProgress(ctx, membershipID, operationID, AccountShareMembershipEndProgress{
+			Code: AccountShareMembershipEndBlockerInFlight, InFlightRequestCount: count,
+		})
+		return nil
+	}
+	membership, billing, finalized, err := s.repo.FinalizeMembershipEnd(attemptCtx, membershipID, operationID)
+	if err != nil {
+		log.Printf("account_share_mode: finalize ending membership %d failed: %v", membershipID, err)
+		s.recordMembershipEndProgress(ctx, membershipID, operationID, AccountShareMembershipEndProgress{
+			Code:         AccountShareMembershipEndBlockerSettlement,
+			ErrorMessage: "结算暂未完成，系统将自动重试；持续异常时请联系管理员",
+		})
+		return nil
+	}
+	if finalized {
+		s.invalidateMembershipEndCaches(attemptCtx, membership, billing)
+	}
+	return membership
+}
+
+func (s *AccountShareModeService) recordMembershipEndProgress(ctx context.Context, membershipID int64, operationID string, progress AccountShareMembershipEndProgress) {
+	// 结算尝试可能已超时；诊断使用新的短预算，避免已取消的 ctx 丢失错误原因。
+	progressCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), AccountShareModeMembershipTouchTimeout)
+	defer cancel()
+	progress.CheckedAt = time.Now().UTC()
+	if err := s.repo.UpdateMembershipEndProgress(progressCtx, membershipID, operationID, progress); err != nil {
+		log.Printf("account_share_mode: record ending progress failed: membership_id=%d operation_id=%s code=%s err=%v", membershipID, operationID, progress.Code, err)
+	}
+}
+
+func (s *AccountShareModeService) activeMembershipLeaseCount(ctx context.Context, membershipID int64) (int, error) {
 	if s == nil || s.concurrencyService == nil || s.concurrencyService.cache == nil || membershipID <= 0 {
-		return false, ErrServiceUnavailable
+		return 0, ErrServiceUnavailable
 	}
 	cache, ok := s.concurrencyService.cache.(accountShareMembershipConcurrencyCache)
 	if !ok {
-		return false, ErrServiceUnavailable
+		return 0, ErrServiceUnavailable
 	}
 	count, err := cache.GetAccountShareMembershipConcurrency(ctx, membershipID)
 	if err != nil {
-		return false, err
+		return 0, err
 	}
 	if count < 0 {
-		return false, fmt.Errorf("invalid account share membership lease count: %d", count)
+		return 0, fmt.Errorf("invalid account share membership lease count: %d", count)
 	}
-	return count > 0, nil
+	return count, nil
 }
 
 func (s *AccountShareModeService) invalidateMembershipEndCaches(
@@ -4669,45 +4448,12 @@ func (s *AccountShareModeService) validateJoinIntentToken(
 		claims.Terms.ListingRevisionID != claims.ExpectedRevisionID ||
 		claims.IssuedAt <= 0 ||
 		claims.ExpiresAt <= claims.IssuedAt ||
-		claims.ExpiresAt <= now.UnixNano() ||
 		time.Duration(claims.ExpiresAt-claims.IssuedAt) > AccountShareModeJoinIntentTTL ||
 		claims.IssuedAt > now.Add(30*time.Second).UnixNano() {
 		return claims, ErrAccountShareJoinIntentInvalid
 	}
 	if _, err := uuid.Parse(claims.Nonce); err != nil {
 		return claims, ErrAccountShareJoinIntentInvalid
-	}
-	return claims, nil
-}
-
-func (s *AccountShareModeService) signEndMembershipToken(claims accountShareEndMembershipTokenClaims) (string, error) {
-	return s.signAccountShareActionToken(claims)
-}
-
-func (s *AccountShareModeService) validateEndMembershipToken(token string, consumerUserID, membershipID int64, now time.Time) (accountShareEndMembershipTokenClaims, error) {
-	var claims accountShareEndMembershipTokenClaims
-	token = strings.TrimSpace(token)
-	if token == "" {
-		return claims, ErrAccountShareEndTokenRequired
-	}
-	if err := s.decodeAccountShareActionToken(token, &claims, ErrAccountShareEndTokenInvalid); err != nil {
-		return claims, err
-	}
-	if claims.Action != accountShareModeEndMembershipTokenAction ||
-		claims.ConsumerID != consumerUserID ||
-		claims.MembershipID != membershipID ||
-		(claims.MembershipStatus != AccountShareMembershipStatusActive &&
-			claims.MembershipStatus != AccountShareMembershipStatusQueued &&
-			claims.MembershipStatus != AccountShareMembershipStatusEnding) ||
-		strings.TrimSpace(claims.Nonce) == "" ||
-		claims.ExpiresAt <= now.Unix() {
-		return claims, ErrAccountShareEndTokenInvalid
-	}
-	if _, err := uuid.Parse(claims.OperationID); err != nil {
-		return claims, ErrAccountShareEndTokenInvalid
-	}
-	if _, err := uuid.Parse(claims.Nonce); err != nil {
-		return claims, ErrAccountShareEndTokenInvalid
 	}
 	return claims, nil
 }
@@ -4742,7 +4488,7 @@ func validateAccountShareModeAPIKey(apiKey *APIKey) error {
 	return nil
 }
 
-func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Context, userID, apiKeyID, groupID int64) (*AccountShareMembership, *AccountShareListing, error) {
+func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Context, userID, apiKeyID, groupID int64) (resolvedMembership *AccountShareMembership, resolvedListing *AccountShareListing, resolvedErr error) {
 	if s == nil || s.repo == nil || groupID <= 0 {
 		return nil, nil, nil
 	}
@@ -4766,74 +4512,59 @@ func (s *AccountShareModeService) ResolveActiveBindingForRequest(ctx context.Con
 		}
 		return nil, nil, ErrAccountShareModeGroupUnbound
 	}
+	defer func() {
+		if requestCtx, ok := AccountShareModeRequestFromContext(ctx); ok && requestCtx.state != nil {
+			requestCtx.state.set(userID, apiKeyID, groupID, resolvedMembership, resolvedListing, resolvedErr)
+		}
+	}()
 	now := time.Now().UTC()
-	var afterRank int
-	var lastErr error
-	for attempt := 0; attempt < AccountShareModeQueueMaxItems; attempt++ {
-		membership, listing, err := s.resolveActiveOrActivateQueuedBinding(ctx, userID, apiKeyID, groupID, afterRank, now)
-		if err != nil {
-			lastErr = err
-			if errors.Is(err, ErrAccountShareListingNotFound) {
-				break
-			}
-			if errors.Is(err, ErrAccountShareModeRecovering) || errors.Is(err, ErrAccountShareMembershipIdleTimeout) {
-				if requestCtx, ok := AccountShareModeRequestFromContext(ctx); ok && requestCtx.state != nil {
-					requestCtx.state.set(userID, apiKeyID, groupID, nil, nil, err)
-				}
-			}
-			return nil, nil, err
+	membership, listing, err := s.resolveCurrentMembershipBinding(ctx, userID, apiKeyID, groupID, now)
+	if err != nil {
+		if errors.Is(err, ErrAccountShareListingNotFound) {
+			err = ErrAccountShareModeGroupUnbound
 		}
-		if membership == nil || listing == nil {
-			lastErr = ErrAccountShareModeGroupUnbound
-			break
+		return nil, nil, err
+	}
+	if membership == nil || listing == nil {
+		return nil, nil, ErrAccountShareModeGroupUnbound
+	}
+	if accountShareListingAccountUnavailableAt(listing, now) {
+		if retryAfterSeconds, recovering := accountShareListingShortRateLimitRecovery(listing, now); recovering {
+			return nil, nil, NewAccountShareModeRecoveringError(retryAfterSeconds)
 		}
-		if accountShareListingAccountUnavailableAt(listing, now) {
-			if retryAfterSeconds, recovering := accountShareListingShortRateLimitRecovery(listing, now); recovering {
-				recoveryErr := NewAccountShareModeRecoveringError(retryAfterSeconds)
-				if requestCtx, ok := AccountShareModeRequestFromContext(ctx); ok && requestCtx.state != nil {
-					requestCtx.state.set(userID, apiKeyID, groupID, nil, nil, recoveryErr)
-				}
-				return nil, nil, recoveryErr
-			}
-			rebound, err := s.rebindMembershipToHealthyRoomAccount(ctx, membership, now)
+		rebound, rebindErr := s.rebindMembershipToHealthyRoomAccount(ctx, membership, now)
+		if rebindErr != nil {
+			return nil, nil, rebindErr
+		}
+		if rebound {
+			membership, listing, err = s.repo.GetActiveMembershipForRequest(ctx, userID, apiKeyID, groupID)
 			if err != nil {
 				return nil, nil, err
 			}
-			if rebound {
-				continue
-			}
-			afterRank = membership.QueueRank
-			result, suspended, err := s.suspendRecoverableUnavailableMembership(ctx, membership, now)
-			if err != nil {
-				return nil, nil, err
-			}
-			if !suspended {
-				lastErr = NewAccountShareModeRecoveringError(AccountShareModeDefaultRecoveryRetryAfter)
-				break
+		}
+		if !rebound || accountShareListingAccountUnavailableAt(listing, now) {
+			result, ending, endErr := s.beginUnavailableMembershipEnd(ctx, membership, now)
+			if endErr != nil {
+				return nil, nil, endErr
 			}
 			s.invalidateSeatBillingCaches(result)
-			continue
+			if ending {
+				return nil, nil, ErrAccountShareMembershipEnding
+			}
+			return nil, nil, NewAccountShareModeRecoveringError(AccountShareModeDefaultRecoveryRetryAfter)
 		}
-		ended, err := s.endIdleMembershipForRequest(ctx, membership, now)
-		if err != nil {
-			return nil, nil, err
-		}
-		if ended {
-			lastErr = ErrAccountShareMembershipIdleTimeout
-			break
-		}
-		if requestCtx, ok := AccountShareModeRequestFromContext(ctx); ok && requestCtx.state != nil {
-			requestCtx.state.set(userID, apiKeyID, groupID, membership, listing, nil)
-		}
-		return membership, listing, nil
 	}
-	if lastErr == nil || errors.Is(lastErr, ErrAccountShareListingNotFound) {
-		lastErr = ErrAccountShareModeGroupUnbound
+	ended, err := s.endIdleMembershipForRequest(ctx, membership, now)
+	if err != nil {
+		return nil, nil, err
+	}
+	if ended {
+		return nil, nil, ErrAccountShareMembershipIdleTimeout
 	}
 	if requestCtx, ok := AccountShareModeRequestFromContext(ctx); ok && requestCtx.state != nil {
-		requestCtx.state.set(userID, apiKeyID, groupID, nil, nil, lastErr)
+		requestCtx.state.set(userID, apiKeyID, groupID, membership, listing, nil)
 	}
-	return nil, nil, lastErr
+	return membership, listing, nil
 }
 
 func (s *AccountShareModeService) rebindMembershipToHealthyRoomAccount(ctx context.Context, membership *AccountShareMembership, now time.Time) (bool, error) {
@@ -4854,7 +4585,7 @@ func (s *AccountShareModeService) rebindMembershipToHealthyRoomAccount(ctx conte
 	return roomRepo.RebindMembershipToHealthyRoomAccount(ctx, membership.ID, membership.AccountID, now)
 }
 
-func (s *AccountShareModeService) resolveActiveOrActivateQueuedBinding(ctx context.Context, userID, apiKeyID, groupID int64, afterRank int, now time.Time) (*AccountShareMembership, *AccountShareListing, error) {
+func (s *AccountShareModeService) resolveCurrentMembershipBinding(ctx context.Context, userID, apiKeyID, groupID int64, now time.Time) (*AccountShareMembership, *AccountShareListing, error) {
 	membership, listing, err := s.repo.GetActiveMembershipForRequest(ctx, userID, apiKeyID, groupID)
 	if err == nil && membership != nil && listing != nil {
 		return membership, listing, nil
@@ -4887,27 +4618,10 @@ func (s *AccountShareModeService) resolveActiveOrActivateQueuedBinding(ctx conte
 	if err != nil && !errors.Is(err, ErrAccountShareListingNotFound) {
 		return nil, nil, err
 	}
-	membership, listing, err = s.repo.ActivateNextQueuedMembershipForRequest(ctx, userID, apiKeyID, groupID, afterRank, now)
-	if err != nil {
-		activationErr := err
-		if !errors.Is(activationErr, ErrAccountShareAPIKeyAlreadyBound) &&
-			!errors.Is(activationErr, ErrAccountShareListingNotFound) &&
-			!errors.Is(activationErr, ErrAccountShareModeRecovering) {
-			return nil, nil, activationErr
-		}
-		membership, listing, err = s.repo.GetActiveMembershipForRequest(ctx, userID, apiKeyID, groupID)
-		if err == nil && membership != nil && listing != nil {
-			return membership, listing, nil
-		}
-		if err != nil && !errors.Is(err, ErrAccountShareListingNotFound) {
-			return nil, nil, err
-		}
-		return nil, nil, activationErr
-	}
-	return membership, listing, nil
+	return nil, nil, s.repo.GetMembershipRequestState(ctx, userID, apiKeyID, groupID, now)
 }
 
-func (s *AccountShareModeService) suspendRecoverableUnavailableMembership(ctx context.Context, membership *AccountShareMembership, now time.Time) (*AccountShareSeatBillingResult, bool, error) {
+func (s *AccountShareModeService) beginUnavailableMembershipEnd(ctx context.Context, membership *AccountShareMembership, now time.Time) (*AccountShareSeatBillingResult, bool, error) {
 	if s == nil || s.repo == nil || membership == nil || membership.ID <= 0 {
 		return &AccountShareSeatBillingResult{}, false, nil
 	}
@@ -4916,10 +4630,10 @@ func (s *AccountShareModeService) suspendRecoverableUnavailableMembership(ctx co
 		return nil, false, err
 	}
 	if active {
-		log.Printf("account_share_mode: dispatch suspension skipped for active membership: membership_id=%d", membership.ID)
+		log.Printf("account_share_mode: fault exit deferred for active membership: membership_id=%d", membership.ID)
 		return &AccountShareSeatBillingResult{}, false, nil
 	}
-	suspended, billing, err := s.repo.SuspendRecoverableUnavailableMembership(ctx, membership.ID, now)
+	suspended, billing, err := s.repo.BeginUnavailableMembershipEnd(ctx, membership.ID, now)
 	if err != nil {
 		return nil, false, err
 	}
@@ -5205,17 +4919,6 @@ func validateAccountShareListingConfig(seatLimit int, rateMultiplier float64, al
 	return nil
 }
 
-func AccountShareRoomQueueLimit(seatLimit int) int {
-	limit := seatLimit * AccountShareModeRoomQueuePerSeat
-	if limit < AccountShareModeRoomQueueMinimum {
-		return AccountShareModeRoomQueueMinimum
-	}
-	if limit > AccountShareModeRoomQueueMaximum {
-		return AccountShareModeRoomQueueMaximum
-	}
-	return limit
-}
-
 func validateAccountShareAccountName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -5234,28 +4937,6 @@ func compactAccountShareAccountName(name string) string {
 		return ""
 	}
 	return strings.Join(strings.Fields(name), "")
-}
-
-func (s *AccountShareModeService) attachListingEditProxy(ctx context.Context, listing *AccountShareListing) error {
-	if listing == nil || listing.ProxyID == nil || *listing.ProxyID <= 0 {
-		return nil
-	}
-	if listing.OwnerUserID <= 0 {
-		return ErrUserNotFound
-	}
-	if s == nil || s.proxyRepo == nil {
-		return ErrServiceUnavailable
-	}
-	// 展示既有房源的代理快照：附带遗留归属豁免，让老用户绑定的自有代理仍可见。
-	proxy, err := s.proxyRepo.GetVisibleByID(ctx, NewOwnedProxyScope(listing.Platform, listing.AccountLevel, listing.OwnerUserID), *listing.ProxyID)
-	if err != nil {
-		return err
-	}
-	if proxy == nil {
-		return ErrProxyNotFound
-	}
-	listing.Proxy = accountShareListingProxyFromService(proxy)
-	return nil
 }
 
 func accountShareListingProxyFromService(proxy *Proxy) *AccountShareListingProxy {
@@ -5811,272 +5492,18 @@ func accountShareListingSupportsRecommendationModel(listing AccountShareListing,
 	return accountShareListingAllowsModel(&listing, model)
 }
 
-func buildAccountShareRecommendationMessages(listing AccountShareListing, estimate AccountShareRecommendationEstimate) ([]string, []string, []string) {
-	tags := make([]string, 0, 5)
-	reasons := make([]string, 0, 5)
+func buildAccountShareEstimateWarnings(listing AccountShareListing, estimate AccountShareRecommendationEstimate) []string {
 	warnings := make([]string, 0, 3)
-	remainingSeats := listing.SeatLimit - listing.ActiveSeats
-	if estimate.OwnerSelfUse {
-		tags = append(tags, "自用低倍率")
-		reasons = append(reasons, "这是你自己上架的账号，按自用倍率测算且不收小时费")
-	}
-	if estimate.HourlyNetCost <= 0 {
-		tags = append(tags, "小时费低")
-		if estimate.WaiverEligible {
-			reasons = append(reasons, "预计请求消费已达到低消门槛，小时费可被抵免")
-		} else {
-			reasons = append(reasons, "该账号当前小时费为 0 或自用不收小时费")
-		}
-	}
-	if estimate.EffectiveRateMultiplier <= 1 {
-		tags = append(tags, "倍率友好")
-		reasons = append(reasons, "账号倍率不高于 1x，请求消费更容易控制")
-	}
-	if remainingSeats > 0 {
-		tags = append(tags, "有空位")
-		reasons = append(reasons, fmt.Sprintf("当前剩余 %d 个可用席位", remainingSeats))
-	}
-	if listing.RatingCount > 0 && listing.RatingAvg >= 8 {
-		tags = append(tags, "评分高")
-		reasons = append(reasons, fmt.Sprintf("已有 %d 条评分，平均 %.1f", listing.RatingCount, listing.RatingAvg))
-	}
-	if listing.PerUserConcurrency >= AccountShareModeDefaultPerUserConcurrency {
-		tags = append(tags, "并发稳定")
-		reasons = append(reasons, fmt.Sprintf("单用户并发上限 %d", listing.PerUserConcurrency))
-	}
-	if !estimate.OwnerSelfUse && estimate.EffectiveRateMultiplier > 2 {
-		warnings = append(warnings, fmt.Sprintf("倍率 %.2fx 偏高，请求消费会被明显放大", estimate.EffectiveRateMultiplier))
-	}
-	if !estimate.OwnerSelfUse && estimate.EffectiveHourlyRate > 0 && estimate.HourlyNetCost > estimate.RequestCost {
-		warnings = append(warnings, "当前测算中小时费高于请求消费，长时间占用需要谨慎")
+	if !estimate.OwnerSelfUse && estimate.HourlyNetCost > estimate.RequestCost {
+		warnings = append(warnings, "本次估算的占位费高于请求费用")
 	}
 	if !listing.RuntimeLoadKnown {
-		warnings = append(warnings, "实时并发状态暂不可用，推荐分数未计入并发余量")
+		warnings = append(warnings, "实时并发状态暂不可用")
 	}
-	if remainingSeats <= 0 && !estimate.OwnerSelfUse {
-		warnings = append(warnings, "当前没有空闲席位，可能需要排队等待")
+	if listing.SeatLimit-listing.ActiveSeats <= 0 && !estimate.OwnerSelfUse {
+		warnings = append(warnings, "当前没有空闲席位，暂时无法加入")
 	}
-	return tags, reasons, warnings
-}
-
-func buildAccountShareRecommendationScoreBreakdown(listing AccountShareListing, estimate AccountShareRecommendationEstimate, warnings []string) AccountShareRecommendationScoreBreakdown {
-	remainingSeats := listing.SeatLimit - listing.ActiveSeats
-	if remainingSeats < 0 {
-		remainingSeats = 0
-	}
-	accountConcurrency := listing.AccountConcurrency
-	if accountConcurrency <= 0 {
-		accountConcurrency = AccountShareModeDefaultAccountConcurrency
-	}
-	availableConcurrency := 0
-	if listing.RuntimeLoadKnown {
-		availableConcurrency = accountConcurrency - listing.CurrentConcurrency
-		if availableConcurrency < 0 {
-			availableConcurrency = 0
-		}
-	}
-
-	costSavingScore := 100.0
-	if estimate.TotalCost > 0 {
-		costSavingScore -= math.Min(estimate.TotalCost*120, 72)
-	}
-	if estimate.RequestCost > 0 {
-		hourlyShare := estimate.HourlyNetCost / math.Max(estimate.RequestCost+estimate.HourlyNetCost, 0.0000001)
-		costSavingScore -= math.Min(hourlyShare*20, 20)
-	}
-	if estimate.EffectiveRateMultiplier <= 1 {
-		costSavingScore += 8
-	}
-	if estimate.WaiverEligible {
-		costSavingScore += 7
-	}
-	if estimate.OwnerSelfUse {
-		costSavingScore += 12
-	}
-
-	stabilityScore := 55.0
-	stabilityScore += math.Min(float64(listing.PerUserConcurrency), 12) * 2.2
-	if listing.RuntimeLoadKnown {
-		stabilityScore += math.Min(float64(availableConcurrency), 30) * 0.75
-	}
-	if listing.RatingCount > 0 {
-		stabilityScore += math.Min(listing.RatingAvg, 10) * 1.7
-		stabilityScore += math.Min(float64(listing.RatingCount), 30) * 0.35
-	}
-	if listing.RateLimitedAt != nil || listing.OverloadUntil != nil || listing.TempUnschedulableUntil != nil {
-		stabilityScore -= 18
-	}
-
-	seatRatio := 0.0
-	if listing.SeatLimit > 0 {
-		seatRatio = float64(remainingSeats) / float64(listing.SeatLimit)
-	}
-	availabilityScore := 45.0 + seatRatio*35
-	if listing.RuntimeLoadKnown {
-		concurrencyRatio := float64(availableConcurrency) / math.Max(float64(accountConcurrency), 1)
-		availabilityScore += math.Min(concurrencyRatio, 1) * 20
-	}
-	if remainingSeats <= 0 && !estimate.OwnerSelfUse {
-		availabilityScore -= 28
-	}
-	if listing.CurrentMembershipID != nil || listing.QueueMembershipID != nil {
-		availabilityScore += 6
-	}
-	if estimate.OwnerSelfUse {
-		availabilityScore += 10
-	}
-
-	riskControlScore := 100.0
-	riskControlScore -= math.Min(math.Max(estimate.EffectiveRateMultiplier-1, 0)*12, 36)
-	if estimate.EffectiveHourlyRate > 0 && estimate.HourlyNetCost > estimate.RequestCost {
-		riskControlScore -= 18
-	}
-	riskControlScore -= math.Min(float64(len(warnings))*10, 30)
-	riskControlScore -= accountShareRecommendationQuotaRiskPenalty(listing)
-	if listing.MinBalanceRequired > 0 {
-		riskControlScore -= math.Min(listing.MinBalanceRequired*2, 12)
-	}
-	if estimate.OwnerSelfUse {
-		riskControlScore += 8
-	}
-
-	costSavingScore = clampAccountShareRecommendationScore(costSavingScore)
-	stabilityScore = clampAccountShareRecommendationScore(stabilityScore)
-	availabilityScore = clampAccountShareRecommendationScore(availabilityScore)
-	riskControlScore = clampAccountShareRecommendationScore(riskControlScore)
-	overall := costSavingScore*0.4 + stabilityScore*0.24 + availabilityScore*0.2 + riskControlScore*0.16
-
-	return AccountShareRecommendationScoreBreakdown{
-		CostSavingScore:   roundAccountShareRecommendationScore(costSavingScore),
-		StabilityScore:    roundAccountShareRecommendationScore(stabilityScore),
-		AvailabilityScore: roundAccountShareRecommendationScore(availabilityScore),
-		RiskControlScore:  roundAccountShareRecommendationScore(riskControlScore),
-		OverallScore:      roundAccountShareRecommendationScore(overall),
-	}
-}
-
-func applyAccountShareRecommendationSmartLabels(candidates []AccountShareRecommendationCandidate) {
-	if len(candidates) == 0 {
-		return
-	}
-	bestStable := -1
-	bestValue := -1
-	for i := range candidates {
-		if bestStable < 0 || candidates[i].ScoreBreakdown.StabilityScore > candidates[bestStable].ScoreBreakdown.StabilityScore ||
-			(candidates[i].ScoreBreakdown.StabilityScore == candidates[bestStable].ScoreBreakdown.StabilityScore && accountShareRecommendationCandidateRanksBefore(candidates[i], candidates[bestStable])) {
-			bestStable = i
-		}
-		if bestValue < 0 || candidates[i].ScoreBreakdown.OverallScore > candidates[bestValue].ScoreBreakdown.OverallScore ||
-			(candidates[i].ScoreBreakdown.OverallScore == candidates[bestValue].ScoreBreakdown.OverallScore && accountShareRecommendationCandidateRanksBefore(candidates[i], candidates[bestValue])) {
-			bestValue = i
-		}
-	}
-	if bestStable >= 0 {
-		candidates[bestStable].Tags = prependUniqueString(candidates[bestStable].Tags, "最稳妥")
-		candidates[bestStable].Reasons = prependUniqueString(candidates[bestStable].Reasons, "并发、席位、评分和风险控制综合更稳")
-	}
-	if bestValue >= 0 {
-		candidates[bestValue].Tags = prependUniqueString(candidates[bestValue].Tags, "性价比最高")
-		candidates[bestValue].Reasons = prependUniqueString(candidates[bestValue].Reasons, "省钱、稳定、可用和风险控制综合分最高")
-	}
-}
-
-func accountShareRecommendationSelectCandidates(candidates []AccountShareRecommendationCandidate, limit int) []AccountShareRecommendationCandidate {
-	if limit <= 0 || len(candidates) <= limit {
-		return candidates
-	}
-	selected := make([]AccountShareRecommendationCandidate, 0, limit)
-	seen := make(map[string]struct{}, limit)
-	add := func(candidate AccountShareRecommendationCandidate) {
-		if len(selected) >= limit {
-			return
-		}
-		key := accountShareRecommendationSelectionKey(candidate)
-		if _, ok := seen[key]; ok {
-			return
-		}
-		seen[key] = struct{}{}
-		selected = append(selected, candidate)
-	}
-
-	costSlots := accountShareRecommendationCostSlotCount(limit)
-	for _, candidate := range candidates {
-		if len(selected) >= costSlots {
-			break
-		}
-		add(candidate)
-	}
-
-	accountShareRecommendationAddBestCandidate(&selected, seen, candidates, limit, func(left, right AccountShareRecommendationCandidate) bool {
-		if left.ScoreBreakdown.OverallScore != right.ScoreBreakdown.OverallScore {
-			return left.ScoreBreakdown.OverallScore > right.ScoreBreakdown.OverallScore
-		}
-		return accountShareRecommendationCandidateRanksBefore(left, right)
-	})
-	accountShareRecommendationAddBestCandidate(&selected, seen, candidates, limit, func(left, right AccountShareRecommendationCandidate) bool {
-		if left.ScoreBreakdown.StabilityScore != right.ScoreBreakdown.StabilityScore {
-			return left.ScoreBreakdown.StabilityScore > right.ScoreBreakdown.StabilityScore
-		}
-		return accountShareRecommendationCandidateRanksBefore(left, right)
-	})
-	accountShareRecommendationAddBestCandidate(&selected, seen, candidates, limit, func(left, right AccountShareRecommendationCandidate) bool {
-		if left.ScoreBreakdown.AvailabilityScore != right.ScoreBreakdown.AvailabilityScore {
-			return left.ScoreBreakdown.AvailabilityScore > right.ScoreBreakdown.AvailabilityScore
-		}
-		return accountShareRecommendationCandidateRanksBefore(left, right)
-	})
-	accountShareRecommendationAddBestCandidate(&selected, seen, candidates, limit, func(left, right AccountShareRecommendationCandidate) bool {
-		if left.ScoreBreakdown.RiskControlScore != right.ScoreBreakdown.RiskControlScore {
-			return left.ScoreBreakdown.RiskControlScore > right.ScoreBreakdown.RiskControlScore
-		}
-		return accountShareRecommendationCandidateRanksBefore(left, right)
-	})
-
-	for _, candidate := range candidates {
-		if len(selected) >= limit {
-			break
-		}
-		add(candidate)
-	}
-	sort.SliceStable(selected, func(i, j int) bool {
-		return accountShareRecommendationCandidateRanksBefore(selected[i], selected[j])
-	})
-	return selected
-}
-
-func accountShareRecommendationCostSlotCount(limit int) int {
-	switch {
-	case limit >= 8:
-		return limit - 4
-	case limit >= 5:
-		return limit - 3
-	case limit >= 3:
-		return limit - 1
-	default:
-		return 1
-	}
-}
-
-func accountShareRecommendationAddBestCandidate(selected *[]AccountShareRecommendationCandidate, seen map[string]struct{}, candidates []AccountShareRecommendationCandidate, limit int, better func(AccountShareRecommendationCandidate, AccountShareRecommendationCandidate) bool) {
-	if limit <= 0 || len(*selected) >= limit || len(candidates) == 0 {
-		return
-	}
-	bestIndex := -1
-	for i, candidate := range candidates {
-		key := accountShareRecommendationSelectionKey(candidate)
-		if _, ok := seen[key]; ok {
-			continue
-		}
-		if bestIndex < 0 || better(candidate, candidates[bestIndex]) {
-			bestIndex = i
-		}
-	}
-	if bestIndex < 0 {
-		return
-	}
-	key := accountShareRecommendationSelectionKey(candidates[bestIndex])
-	seen[key] = struct{}{}
-	*selected = append(*selected, candidates[bestIndex])
+	return warnings
 }
 
 func accountShareRecommendationCandidateRanksBefore(left, right AccountShareRecommendationCandidate) bool {
@@ -6089,75 +5516,8 @@ func accountShareRecommendationCandidateRanksBefore(left, right AccountShareReco
 	if left.Estimate.HourlyNetCost != right.Estimate.HourlyNetCost {
 		return left.Estimate.HourlyNetCost < right.Estimate.HourlyNetCost
 	}
-	if left.Score != right.Score {
-		return left.Score > right.Score
-	}
-	if left.Listing.RatingAvg != right.Listing.RatingAvg {
-		return left.Listing.RatingAvg > right.Listing.RatingAvg
-	}
 	return left.Listing.ID < right.Listing.ID
 }
-
-func accountShareRecommendationSelectionKey(candidate AccountShareRecommendationCandidate) string {
-	return accountShareRecommendationCandidateDedupeKey(candidate.Listing)
-}
-
-func accountShareRecommendationQuotaRiskPenalty(listing AccountShareListing) float64 {
-	utilizations := make([]float64, 0, 4)
-	if listing.QuotaSummary != nil {
-		if listing.QuotaSummary.Window5h.MaxUtilization != nil {
-			utilizations = append(utilizations, *listing.QuotaSummary.Window5h.MaxUtilization)
-		}
-		if listing.QuotaSummary.Window7d.MaxUtilization != nil {
-			utilizations = append(utilizations, *listing.QuotaSummary.Window7d.MaxUtilization)
-		}
-	} else {
-		progresses := []*UsageProgress{
-			listing.Codex5hUsage,
-			listing.Codex7dUsage,
-			listing.Anthropic5hUsage,
-			listing.Anthropic7dUsage,
-			listing.Opencode5hUsage,
-			listing.Opencode7dUsage,
-			listing.Opencode30dUsage,
-		}
-		for _, progress := range progresses {
-			if progress != nil {
-				utilizations = append(utilizations, progress.Utilization)
-			}
-		}
-	}
-
-	penalty := 0.0
-	for _, utilization := range utilizations {
-		if math.IsNaN(utilization) || math.IsInf(utilization, 0) {
-			continue
-		}
-		if utilization <= 70 {
-			continue
-		}
-		penalty += math.Min((utilization-70)*0.45, 18)
-	}
-	return math.Min(penalty, 30)
-}
-
-func clampAccountShareRecommendationScore(value float64) float64 {
-	if math.IsNaN(value) || math.IsInf(value, 0) {
-		return 0
-	}
-	if value < 0 {
-		return 0
-	}
-	if value > 100 {
-		return 100
-	}
-	return value
-}
-
-func roundAccountShareRecommendationScore(value float64) float64 {
-	return math.Round(value*10) / 10
-}
-
 func accountShareRecommendationCandidateDedupeKey(listing AccountShareListing) string {
 	if listing.AccountIdentityID != nil && *listing.AccountIdentityID > 0 {
 		return fmt.Sprintf("identity:%d", *listing.AccountIdentityID)
@@ -6166,19 +5526,6 @@ func accountShareRecommendationCandidateDedupeKey(listing AccountShareListing) s
 		return fmt.Sprintf("account:%d", listing.AccountID)
 	}
 	return fmt.Sprintf("listing:%d", listing.ID)
-}
-
-func prependUniqueString(values []string, value string) []string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return values
-	}
-	for _, existing := range values {
-		if existing == value {
-			return values
-		}
-	}
-	return append([]string{value}, values...)
 }
 
 func NormalizeAccountShareListingSeatLimits(values []int) []int {

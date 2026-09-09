@@ -37,7 +37,7 @@
       >
         <Icon name="checkCircle" size="sm" class="mt-0.5 flex-shrink-0" />
         <div>
-          <strong>房间已软删除</strong>
+          <strong>房间已删除</strong>
           <p>房间不会再出现在可用列表中，历史消费、结算和评价记录仍会保留。</p>
         </div>
       </div>
@@ -67,10 +67,6 @@
               <strong>{{ roomLifecycleState.active_seats }}/{{ roomLifecycleState.seat_limit }}</strong>
             </div>
             <div>
-              <span>排队成员</span>
-              <strong>{{ roomLifecycleState.queued_membership_count }}</strong>
-            </div>
-            <div>
               <span>房间账号</span>
               <strong>{{ roomLifecycleState.room_account_count }}</strong>
             </div>
@@ -97,16 +93,26 @@
               <strong>{{ roomLifecycleOperationLabel(roomLifecycleOperation) }}</strong>
               <p>{{ roomLifecycleOperationStatusDescription(roomLifecycleOperation) }}</p>
               <code>{{ roomLifecycleOperation.id }}</code>
+              <small class="mt-1 block">{{ accountShareOperationWaitDuration(roomLifecycleOperation.created_at, props.nowMs) }}</small>
             </div>
           </div>
         </section>
+
+        <p v-if="roomLifecycleLastQueryAt" class="text-xs text-gray-500 dark:text-dark-300" data-testid="room-operation-query-observation">
+          最近查询{{ roomLifecycleQueryFailed ? '失败' : '成功' }}：{{ new Date(roomLifecycleLastQueryAt).toLocaleTimeString() }}
+          <span v-if="roomLifecycleQueryFailed && roomLifecycleLastSuccessAt"> · 最近成功查询：{{ new Date(roomLifecycleLastSuccessAt).toLocaleTimeString() }}</span>
+          <span v-if="roomLifecycleQueryFailed && roomLifecyclePolling"> · 系统会继续重试</span>
+        </p>
+        <p v-if="roomLifecycleQueryStopped" class="text-sm text-amber-700 dark:text-amber-300" role="status" data-testid="room-operation-query-stopped">
+          已达到本轮 10 分钟自动查询期限，后台处理仍可能继续；点击“继续查询”重新核对状态。
+        </p>
 
         <template v-if="!roomLifecycleHasPendingOperation">
           <section v-if="roomLifecycleAction === null" class="space-y-3">
             <div>
               <span class="room-lifecycle-eyebrow">可用操作</span>
               <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-dark-300">
-                下架后停止新增用户，现有消费者与预约保持不变；需要恢复招募时可重新上架。
+                下架后停止新增用户，现有消费者保持不变；需要恢复招募时可重新上架。
               </p>
             </div>
             <div class="room-lifecycle-action-grid">
@@ -201,8 +207,8 @@
             data-testid="room-delete-confirm"
           >
             <span class="room-lifecycle-eyebrow">删除校验</span>
-            <h4>软删除房间</h4>
-            <p>系统会先检查使用中成员、请求、结算、编辑会话和其他房间操作，全部清零后才签发两分钟有效的确认令牌。</p>
+            <h4>删除房间</h4>
+            <p>系统会先检查使用中成员、请求、结算和其他房间操作，全部清零后才签发两分钟有效的确认令牌。</p>
 
             <label v-if="authStore.isAdmin" class="field">
               <span>管理员删除原因</span>
@@ -382,6 +388,7 @@ import {
 import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
+import { accountShareOperationWaitReason, accountShareOperationWaitDuration } from '@/utils/accountShareOperation'
 import {
   createSecureRequestID,
   isCanceledRequest,
@@ -428,7 +435,7 @@ const appStore = useAppStore()
 const authStore = useAuthStore()
 
 const ROOM_LIFECYCLE_OPERATION_POLL_INTERVAL_MS = 1500
-// 排空清退在下架请求内同步完成，仅剩进行中请求需要等待；后端另有 30 分钟强制收口。
+// 下架需要等待进行中的请求和结算，前端仅跟踪后端操作状态。
 // 前端轮询 10 分钟后停止并提示手动刷新，避免对着永不推进的状态无限轮询。
 const ROOM_LIFECYCLE_OPERATION_POLL_MAX_MS = 10 * 60 * 1000
 
@@ -445,6 +452,10 @@ const roomLifecyclePolling = ref(false)
 const roomLifecycleDeleted = ref(false)
 const roomLifecycleError = ref('')
 const roomLifecycleErrorCode = ref('')
+const roomLifecycleLastQueryAt = ref<number | null>(null)
+const roomLifecycleLastSuccessAt = ref<number | null>(null)
+const roomLifecycleQueryFailed = ref(false)
+const roomLifecycleQueryStopped = ref(false)
 
 let roomLifecycleStateController: AbortController | null = null
 let roomLifecycleOperationController: AbortController | null = null
@@ -487,7 +498,6 @@ const roomLifecycleBlockerItems = computed<RoomLifecycleBlockerItem[]>(() => {
     if (value > 0) items.push({ key, label, value: String(value) })
   }
   appendCount('active_membership_count', '正在使用的成员', blockers.active_membership_count)
-  appendCount('queued_membership_count', '排队中的成员', blockers.queued_membership_count)
   appendCount('ending_membership_count', '正在退出或结算的成员', blockers.ending_membership_count)
   appendCount('in_flight_request_count', '进行中的请求', blockers.in_flight_request_count)
   appendCount('pending_billing_intent_count', '待处理计费意图', blockers.pending_billing_intent_count)
@@ -496,9 +506,6 @@ const roomLifecycleBlockerItems = computed<RoomLifecycleBlockerItem[]>(() => {
     '同步结算任务',
     blockers.synchronous_billing_pending_count
   )
-  if (blockers.valid_edit_session) {
-    items.push({ key: 'valid_edit_session', label: '房间编辑会话', value: '仍在占用' })
-  }
   if (blockers.conflicting_operation) {
     items.push({
       key: 'conflicting_operation',
@@ -545,7 +552,7 @@ const roomLifecycleSubmitLabel = computed(() => {
     case 'suspend':
       return '确认紧急停用'
     case 'delete':
-      return roomDeleteIntentExpired.value ? '确认已过期' : '确认软删除'
+      return roomDeleteIntentExpired.value ? '确认已过期' : '确认删除'
     default:
       return '确认操作'
   }
@@ -556,11 +563,11 @@ function roomLifecycleStatusLabel(status: AccountShareRoomLifecycleStatus): stri
     case 'active':
       return '开放使用'
     case 'paused':
-      return '已暂停'
+      return '已下架'
     case 'validating':
-      return '恢复校验中'
+      return '上架校验中'
     case 'draining':
-      return '安全排空中'
+      return '下架处理中'
     case 'suspended':
       return '管理员暂停'
   }
@@ -610,7 +617,7 @@ function roomLifecycleActionTitle(action: Exclude<AccountShareRoomLifecycleActio
 function roomLifecycleActionDescription(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '房间将立即停止接收新成员，并清退全部现有成员：预约成员直接释放，使用中的成员按已用时长结算并退还未用预付款。等待进行中的请求结束后房间自动转为“已暂停”，随时可重新上架。'
+      return '房间将立即停止接收新成员，并结束现有成员的使用。等待进行中的请求完成后，系统按停费时间结算并退还未用预付款；全部处理完成后，房间转为“已下架”，可重新上架。'
     case 'activate':
       return '系统会校验房间主账号的连通性和可用状态；只有校验通过才会重新开放。'
     case 'suspend':
@@ -621,16 +628,16 @@ function roomLifecycleActionDescription(action: Exclude<AccountShareRoomLifecycl
 function roomLifecycleActionImpact(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '下架会立即清退全部成员并完成结算退款，通常在几分钟内自动转为“已暂停”；不会删除房间或历史记录。'
+      return '下架会立即停止新请求，等待在途请求完成后结算退款；全部处理完成后显示“已下架”，历史记录继续保留。'
     case 'activate':
-      return '恢复校验失败时房间仍保持暂停，并展示失败原因，不会带病开放。'
+      return '上架校验失败时房间保持下架，并展示失败原因。'
     case 'suspend':
       return '紧急停用不会删除房间或历史记录，操作原因会被审计。'
   }
 }
 
 function roomLifecycleOperationLabel(operation: AccountShareRoomOperation): string {
-  const actionLabel = operation.action === 'delete_room' ? '软删除房间' : '房间排空'
+  const actionLabel = operation.action === 'delete_room' ? '删除房间' : '房间下架处理'
   switch (operation.status) {
     case 'succeeded':
       return `${actionLabel}已完成`
@@ -648,7 +655,8 @@ function roomLifecycleOperationLabel(operation: AccountShareRoomOperation): stri
 }
 
 function roomLifecycleOperationStatusDescription(operation: AccountShareRoomOperation): string {
-  if (operation.error_message) return operation.error_message
+  const reason = accountShareOperationWaitReason(operation)
+  if (reason) return reason
   switch (operation.status) {
     case 'succeeded':
       return '服务端已完成全部状态与历史快照写入。'
@@ -744,6 +752,10 @@ function beginRoomLifecycleSession(): void {
   roomDeleteNameConfirmation.value = ''
   roomLifecycleReason.value = ''
   roomLifecycleDeleted.value = false
+  roomLifecycleLastQueryAt.value = null
+  roomLifecycleLastSuccessAt.value = null
+  roomLifecycleQueryFailed.value = false
+  roomLifecycleQueryStopped.value = false
   roomLifecycleLoading.value = false
   roomDeleteIntentLoading.value = false
   roomLifecycleSubmitting.value = false
@@ -929,7 +941,7 @@ async function submitRoomLifecycleAction(): Promise<void> {
         await handleRoomLifecycleTerminalOperation(operation)
       } else {
         startRoomLifecycleOperationPolling(operation.id)
-        appStore.showSuccess('软删除请求已受理，正在安全收口房间数据')
+        appStore.showSuccess('删除请求已受理，正在等待处理完成')
       }
       return
     }
@@ -959,7 +971,7 @@ async function submitRoomLifecycleAction(): Promise<void> {
     if (refreshedListing) emit('update:listing', refreshedListing)
     if (updatedState.pending_operation_id) {
       startRoomLifecycleOperationPolling(updatedState.pending_operation_id)
-      appStore.showSuccess('房间正在排空收口')
+      appStore.showSuccess('房间正在处理下架')
     } else {
       appStore.showSuccess(
         action === 'activate'
@@ -983,6 +995,7 @@ function startRoomLifecycleOperationPolling(operationID: string): void {
   stopRoomLifecycleOperationPolling()
   const pollSeq = roomLifecycleOperationPollSeq
   roomLifecycleOperationPollStartedAt = Date.now()
+  roomLifecycleQueryStopped.value = false
   roomLifecyclePolling.value = true
   void pollRoomLifecycleOperation(normalizedOperationID, pollSeq)
 }
@@ -998,6 +1011,19 @@ function pollRoomLifecycleOperationNow(): void {
   }
   clearRoomLifecycleError()
   startRoomLifecycleOperationPolling(operationID)
+}
+
+function scheduleRoomLifecycleOperationPoll(operationID: string, pollSeq: number): void {
+  if (Date.now() - roomLifecycleOperationPollStartedAt >= ROOM_LIFECYCLE_OPERATION_POLL_MAX_MS) {
+    roomLifecyclePolling.value = false
+    roomLifecycleQueryStopped.value = true
+    return
+  }
+  roomLifecyclePolling.value = true
+  roomLifecycleOperationPollTimer = window.setTimeout(() => {
+    roomLifecycleOperationPollTimer = null
+    void pollRoomLifecycleOperation(operationID, pollSeq)
+  }, ROOM_LIFECYCLE_OPERATION_POLL_INTERVAL_MS)
 }
 
 async function pollRoomLifecycleOperation(
@@ -1025,22 +1051,17 @@ async function pollRoomLifecycleOperation(
       return
     }
     roomLifecycleOperation.value = operation
+    roomLifecycleLastQueryAt.value = Date.now()
+    roomLifecycleLastSuccessAt.value = Date.now()
+    roomLifecycleQueryFailed.value = false
+    clearRoomLifecycleError()
     if (ROOM_LIFECYCLE_TERMINAL_OPERATION_STATUSES.has(operation.status)) {
       roomLifecyclePolling.value = false
       roomLifecycleOperationController = null
       await handleRoomLifecycleTerminalOperation(operation)
       return
     }
-    if (Date.now() - roomLifecycleOperationPollStartedAt > ROOM_LIFECYCLE_OPERATION_POLL_MAX_MS) {
-      roomLifecyclePolling.value = false
-      roomLifecycleOperationController = null
-      appStore.showWarning('排空仍在进行，已停止自动查询；可点击“立即查询”手动刷新状态。')
-      return
-    }
-    roomLifecycleOperationPollTimer = window.setTimeout(() => {
-      roomLifecycleOperationPollTimer = null
-      void pollRoomLifecycleOperation(operationID, pollSeq)
-    }, ROOM_LIFECYCLE_OPERATION_POLL_INTERVAL_MS)
+    scheduleRoomLifecycleOperationPoll(operationID, pollSeq)
   } catch (error: unknown) {
     if (
       pollSeq !== roomLifecycleOperationPollSeq ||
@@ -1048,8 +1069,10 @@ async function pollRoomLifecycleOperation(
     ) {
       return
     }
-    roomLifecyclePolling.value = false
-    setRoomLifecycleError(error, '查询房间操作进度失败；你可以点击“继续查询”重试。')
+    roomLifecycleLastQueryAt.value = Date.now()
+    roomLifecycleQueryFailed.value = true
+    setRoomLifecycleError(error, '查询房间操作进度失败，系统会继续重试。')
+    scheduleRoomLifecycleOperationPoll(operationID, pollSeq)
   } finally {
     if (roomLifecycleOperationController === controller) {
       roomLifecycleOperationController = null
@@ -1078,11 +1101,11 @@ async function handleRoomLifecycleTerminalOperation(
     roomDeleteNameConfirmation.value = ''
     roomLifecycleReason.value = ''
     await Promise.all([props.reloadListings(), props.reloadCapabilities()])
-    appStore.showSuccess('房间已软删除，历史消费、结算和评价记录继续保留')
+    appStore.showSuccess('房间已删除，历史消费、结算和评价记录继续保留')
     return
   }
 
-  appStore.showSuccess('房间已完成排空并暂停')
+  appStore.showSuccess('房间已完成下架')
   await Promise.all([props.reloadListings(), refreshRoomLifecycleState()])
   const refreshedListing = props.findListing(operation.listing_id)
   if (refreshedListing) emit('update:listing', refreshedListing)

@@ -116,14 +116,14 @@ func TestExtractContentModerationInputBoundsImageDigestMetadata(t *testing.T) {
 
 	const imageCount = maxModerationImageDigestEntries + 257
 	var body strings.Builder
-	body.WriteString(`{"messages":[{"role":"user","content":[`)
+	_, _ = body.WriteString(`{"messages":[{"role":"user","content":[`)
 	for i := 0; i < imageCount; i++ {
 		if i > 0 {
-			body.WriteByte(',')
+			_ = body.WriteByte(',')
 		}
 		_, _ = fmt.Fprintf(&body, `{"type":"image_url","image_url":{"url":"https://example.test/%d.png"}}`, i)
 	}
-	body.WriteString(`]}]}`)
+	_, _ = body.WriteString(`]}]}`)
 
 	content := ExtractContentModerationInput(ContentModerationProtocolOpenAIChat, []byte(body.String()))
 	if got := len(content.allImageDigests); got != maxModerationImageDigestEntries {

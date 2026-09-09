@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"testing"
 	"time"
 
@@ -25,6 +26,47 @@ func TestSplitAccountShareCreditsCapsRoundedInviteAtRemainingBalance(t *testing.
 	require.True(t, invite.IsZero())
 	require.True(t, platform.IsZero())
 	require.True(t, owner.Add(invite).Add(platform).Equal(total))
+}
+
+func TestAccountShareBillingResolvesLostCommitWithoutApplyingTwice(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &usageBillingRepository{db: db}
+	cmd := newUsageBillingRetryTestCommand()
+	cmd.UserID = 12
+	cmd.BalanceCost = 2
+	cmd.AccountShareModeSettlement = &service.AccountShareModeBillingSnapshot{MembershipID: 23, ListingID: 45, AccountID: 67, OwnerUserID: 89, ConsumerUserID: 12, APIKeyID: cmd.APIKeyID}
+	cmd.Normalize()
+	mock.ExpectBegin()
+	expectUsageBillingClaimAndArchiveMiss(mock, cmd)
+	mock.ExpectQuery(`SELECT m.id, m.listing_id, m.account_id, l.owner_user_id, m.consumer_user_id, m.api_key_id`).
+		WithArgs(int64(23)).WillReturnRows(sqlmock.NewRows([]string{"id", "listing_id", "account_id", "owner_user_id", "consumer_user_id", "api_key_id"}).AddRow(23, 45, 67, 89, 12, cmd.APIKeyID))
+	mock.ExpectQuery(`UPDATE users\s+SET balance = balance - \$1`).
+		WithArgs(float64(2), int64(12)).WillReturnRows(sqlmock.NewRows([]string{"balance"}).AddRow(float64(8)))
+	mock.ExpectExec(`INSERT INTO user_balance_ledger`).
+		WithArgs(int64(12), "debit", "2.0000000000", "usage_charge", "usage_log", nil, "8.0000000000", sqlmock.AnyArg()).
+		WillReturnResult(sqlmock.NewResult(1, 1))
+	mock.ExpectCommit().WillReturnError(io.EOF)
+	mock.ExpectBegin()
+	mock.ExpectQuery(`INSERT INTO usage_billing_dedup`).WithArgs(cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+	mock.ExpectQuery(`SELECT request_fingerprint\s+FROM usage_billing_dedup`).WithArgs(cmd.RequestID, cmd.APIKeyID).
+		WillReturnRows(sqlmock.NewRows([]string{"request_fingerprint"}).AddRow(cmd.RequestFingerprint))
+	mock.ExpectQuery(`(?s)SELECT credited_invites\.inviter_user_id\s+FROM.*account_share_mode_settlement_entries.*UNION ALL.*account_share_settlement_entries`).
+		WithArgs(cmd.RequestID, cmd.APIKeyID).WillReturnRows(sqlmock.NewRows([]string{"inviter_user_id"}))
+	mock.ExpectRollback()
+	result, err := repo.Apply(context.Background(), cmd)
+	require.NoError(t, err)
+	require.False(t, result.Applied, "the committed transaction must only be observed, not repeated")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestAccountShareBillingTransientErrorClassification(t *testing.T) {
+	for _, err := range []error{io.EOF, io.ErrUnexpectedEOF, &pq.Error{Code: "40001"}, &pq.Error{Code: "08006"}, &pq.Error{Code: "57P01"}} {
+		require.True(t, isUsageBillingTransientError(fmt.Errorf("database: %w", err)))
+	}
+	for _, err := range []error{nil, context.Canceled, context.DeadlineExceeded, service.ErrAccountShareBillingSnapshotMismatch, service.ErrUsageBillingRequestConflict, &pq.Error{Code: "23505"}} {
+		require.False(t, isUsageBillingTransientError(err))
+	}
 }
 
 func TestUsageBillingRepositoryApplyRetriesDeadlockWithFreshTransaction(t *testing.T) {

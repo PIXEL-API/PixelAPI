@@ -324,7 +324,7 @@ routeLoop:
 				if sessionErr := h.gatewayService.RegisterAccountSessionAfterWait(c.Request.Context(), account, sessionHash); sessionErr != nil {
 					if accountReleaseFunc != nil {
 						accountReleaseFunc()
-						accountReleaseFunc = nil
+						accountReleaseFunc = nil //nolint:ineffassign // Drop the released slot closure before retrying or returning.
 					}
 					if failoverClientGone(c) {
 						return

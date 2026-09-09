@@ -92,22 +92,15 @@ type accountShareListingUpdateRequest struct {
 	Anthropic5hLimitPercent *float64  `json:"anthropic_5h_limit_percent"`
 	Anthropic7dLimitPercent *float64  `json:"anthropic_7d_limit_percent"`
 	Concurrency             *int      `json:"concurrency"`
-	EditSessionID           string    `json:"edit_session_id"`
 	ForceActiveEdit         bool      `json:"force_active_edit"`
 	ExpectedVersion         *int64    `json:"expected_version"`
 	Reason                  string    `json:"reason"`
 	Confirmed               bool      `json:"confirmed"`
 }
 
-type accountShareListingEditSessionRequest struct {
-	SessionID string `json:"session_id"`
-	Force     bool   `json:"force"`
-}
-
 type accountShareJoinIntentRequest struct {
 	APIKeyID           int64 `json:"api_key_id" binding:"required"`
 	IdleTimeoutMinutes int   `json:"idle_timeout_minutes"`
-	AcceptQueue        bool  `json:"accept_queue"`
 }
 
 type accountShareJoinRequest struct {
@@ -116,11 +109,6 @@ type accountShareJoinRequest struct {
 	IntentToken        string `json:"intent_token" binding:"required"`
 	ExpectedVersion    int64  `json:"expected_version" binding:"required,min=1"`
 	ExpectedRevisionID int64  `json:"expected_revision_id" binding:"required,min=1"`
-	AcceptQueue        bool   `json:"accept_queue"`
-}
-
-type accountShareEndRequest struct {
-	Token string `json:"token" binding:"required"`
 }
 
 type accountShareReviewSubmitRequest struct {
@@ -130,11 +118,6 @@ type accountShareReviewSubmitRequest struct {
 
 type accountShareIdleTimeoutUpdateRequest struct {
 	IdleTimeoutMinutes int `json:"idle_timeout_minutes"`
-}
-
-type accountShareQueueReorderRequest struct {
-	APIKeyID      int64   `json:"api_key_id" binding:"required"`
-	MembershipIDs []int64 `json:"membership_ids" binding:"required"`
 }
 
 type accountShareRoomCreateRequest struct {
@@ -389,7 +372,15 @@ func (h *AccountShareModeHandler) ListListings(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
-	response.Paginated(c, listings, result.Total, result.Page, result.PageSize)
+	response.Success(c, gin.H{
+		"items":       listings,
+		"total":       result.Total,
+		"page":        result.Page,
+		"page_size":   result.PageSize,
+		"pages":       result.Pages,
+		"total_exact": !result.Approximate,
+		"has_more":    result.HasMore,
+	})
 }
 
 func (h *AccountShareModeHandler) ListMembershipHistory(c *gin.Context) {
@@ -458,14 +449,8 @@ func (h *AccountShareModeHandler) GetRecommendationUsageProfile(c *gin.Context) 
 	response.Success(c, profile)
 }
 
-// ListAvailableProxies 按用户即将分享的账号平台与等级返回可选的平台代理。
-// 用户不再拥有代理，只能选择平台代理；platform / account_level 查询参数决定筛选范围。
-//
-// 这里必须带上调用者自己的遗留归属豁免：更新前用户可以自行上传代理，迁移 256 明确
-// 保留了这些代理的 owner_user_id。不带豁免的话，老用户账号上已经绑定的自有代理不会
-// 出现在列表里，选择器只能显示成「请选择」，重新授权时又会被 scope 校验拒绝。
-// 创建侧的事务内守卫（account_repo.ensureOwnedProxyCapacityForCreateInTx）本来就允许
-// owner_user_id = 调用者，这里放开只是让选择器与它保持一致。
+// ListAvailableProxies 返回本人代理，以及符合账号平台和等级要求的平台代理。
+// 归属范围与账号创建、改绑及 OAuth 校验保持一致，不包含其他用户的专属代理。
 func (h *AccountShareModeHandler) ListAvailableProxies(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -689,7 +674,6 @@ func (h *AccountShareModeHandler) UpdateListing(c *gin.Context) {
 		Anthropic5hLimitPercent: req.Anthropic5hLimitPercent,
 		Anthropic7dLimitPercent: req.Anthropic7dLimitPercent,
 		Concurrency:             req.Concurrency,
-		EditSessionID:           req.EditSessionID,
 		ForceActiveEdit:         req.ForceActiveEdit,
 		ExpectedVersion:         req.ExpectedVersion,
 		Reason:                  req.Reason,
@@ -702,64 +686,6 @@ func (h *AccountShareModeHandler) UpdateListing(c *gin.Context) {
 		service.DefaultWriteIdempotencyTTL(),
 		func(ctx context.Context, _ string) (any, error) {
 			return h.service.UpdateListing(ctx, subject.UserID, role == service.RoleAdmin, listingID, input)
-		},
-		nil,
-	)
-}
-
-func (h *AccountShareModeHandler) BeginListingEdit(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
-	if !ok {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-	role, _ := middleware2.GetUserRoleFromContext(c)
-	listingID, err := parseInt64Param(c, "id")
-	if err != nil {
-		response.BadRequest(c, "Invalid listing ID")
-		return
-	}
-	var req accountShareListingEditSessionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-	executeUserRequiredIdempotentJSON(
-		c,
-		"account_share_listing_edit_begin",
-		map[string]any{"listing_id": listingID, "body": req},
-		service.DefaultWriteIdempotencyTTL(),
-		func(ctx context.Context, _ string) (any, error) {
-			return h.service.BeginListingEdit(ctx, subject.UserID, role == service.RoleAdmin, listingID, req.SessionID, req.Force)
-		},
-		nil,
-	)
-}
-
-func (h *AccountShareModeHandler) ReleaseListingEdit(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
-	if !ok {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-	role, _ := middleware2.GetUserRoleFromContext(c)
-	listingID, err := parseInt64Param(c, "id")
-	if err != nil {
-		response.BadRequest(c, "Invalid listing ID")
-		return
-	}
-	var req accountShareListingEditSessionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-	executeUserRequiredIdempotentJSON(
-		c,
-		"account_share_listing_edit_release",
-		map[string]any{"listing_id": listingID, "body": req},
-		service.DefaultWriteIdempotencyTTL(),
-		func(ctx context.Context, _ string) (any, error) {
-			return h.service.ReleaseListingEdit(ctx, subject.UserID, role == service.RoleAdmin, listingID, req.SessionID)
 		},
 		nil,
 	)
@@ -787,7 +713,6 @@ func (h *AccountShareModeHandler) JoinListing(c *gin.Context) {
 		IntentToken:        req.IntentToken,
 		ExpectedVersion:    req.ExpectedVersion,
 		ExpectedRevisionID: req.ExpectedRevisionID,
-		AcceptQueue:        req.AcceptQueue,
 	})
 	if err != nil {
 		logger.FromContext(c.Request.Context()).Warn("account share join failed",
@@ -824,7 +749,6 @@ func (h *AccountShareModeHandler) CreateJoinIntent(c *gin.Context) {
 	intent, err := h.service.CreateJoinIntent(c.Request.Context(), subject.UserID, listingID, service.CreateAccountShareJoinIntentInput{
 		APIKeyID:           req.APIKeyID,
 		IdleTimeoutMinutes: req.IdleTimeoutMinutes,
-		AcceptQueue:        req.AcceptQueue,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -857,25 +781,6 @@ func (h *AccountShareModeHandler) UpdateMembershipIdleTimeout(c *gin.Context) {
 	response.Success(c, membership)
 }
 
-func (h *AccountShareModeHandler) ListMembershipQueue(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
-	if !ok {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-	apiKeyID, err := parseInt64Param(c, "apiKeyID")
-	if err != nil {
-		response.BadRequest(c, "Invalid API key ID")
-		return
-	}
-	memberships, err := h.service.ListMembershipQueue(c.Request.Context(), subject.UserID, apiKeyID)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, memberships)
-}
-
 func (h *AccountShareModeHandler) GetAPIKeyBindingStatus(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -895,52 +800,6 @@ func (h *AccountShareModeHandler) GetAPIKeyBindingStatus(c *gin.Context) {
 	response.Success(c, status)
 }
 
-func (h *AccountShareModeHandler) ReorderMembershipQueue(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
-	if !ok {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-	var req accountShareQueueReorderRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		response.BadRequest(c, "Invalid request: "+err.Error())
-		return
-	}
-	memberships, err := h.service.ReorderMembershipQueue(c.Request.Context(), subject.UserID, req.APIKeyID, req.MembershipIDs)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	response.Success(c, memberships)
-}
-
-func (h *AccountShareModeHandler) CreateEndMembershipIntent(c *gin.Context) {
-	subject, ok := middleware2.GetAuthSubjectFromContext(c)
-	if !ok {
-		response.Unauthorized(c, "User not authenticated")
-		return
-	}
-	membershipID, err := parseInt64Param(c, "id")
-	if err != nil {
-		response.BadRequest(c, "Invalid membership ID")
-		return
-	}
-	intent, err := h.service.CreateEndMembershipToken(c.Request.Context(), subject.UserID, membershipID)
-	if err != nil {
-		response.ErrorFrom(c, err)
-		return
-	}
-	logger.FromContext(c.Request.Context()).Info("account share end intent created",
-		zap.String("component", "account_share.audit"),
-		zap.Int64("user_id", subject.UserID),
-		zap.Int64("membership_id", membershipID),
-		zap.String("client_ip", c.ClientIP()),
-		zap.String("user_agent", c.Request.UserAgent()),
-		zap.String("referer", c.Request.Referer()),
-	)
-	response.Success(c, intent)
-}
-
 func (h *AccountShareModeHandler) EndMembership(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -952,10 +811,7 @@ func (h *AccountShareModeHandler) EndMembership(c *gin.Context) {
 		response.BadRequest(c, "Invalid membership ID")
 		return
 	}
-	// 单阶段结束：token 仅为旧前端兼容，缺省或无效均可直接结束
-	var req accountShareEndRequest
-	_ = c.ShouldBindJSON(&req)
-	membership, err := h.service.EndMembership(c.Request.Context(), subject.UserID, membershipID, req.Token)
+	membership, err := h.service.EndMembership(c.Request.Context(), subject.UserID, membershipID)
 	if err != nil {
 		logger.FromContext(c.Request.Context()).Warn("account share end failed",
 			zap.String("component", "account_share.audit"),

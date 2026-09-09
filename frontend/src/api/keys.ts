@@ -3,6 +3,7 @@
  * Handles CRUD operations for user API keys
  */
 
+import axios from 'axios'
 import { apiClient } from './client'
 import type { ApiKey, ApiKeyGroupRoute, CreateApiKeyRequest, UpdateApiKeyRequest, PaginatedResponse } from '@/types'
 
@@ -43,6 +44,22 @@ export async function list(
 export async function getById(id: number): Promise<ApiKey> {
   const { data } = await apiClient.get<ApiKey>(`/keys/${id}`)
   return data
+}
+
+/** Query the gateway with the selected API key, independently of the console's JWT. */
+export async function getImageModels(
+  apiBaseUrl: string,
+  apiKey: string,
+  options?: { signal?: AbortSignal }
+): Promise<string[]> {
+  const baseUrl = apiBaseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/, '')
+  const { data } = await axios.get<{ data: Array<{ id: string }> }>(`${baseUrl}/v1/models`, {
+    params: { capability: 'image' },
+    headers: { Authorization: `Bearer ${apiKey}` },
+    signal: options?.signal,
+    timeout: 30_000
+  })
+  return data.data.map((model) => model.id)
 }
 
 /**
@@ -144,6 +161,7 @@ export async function toggleStatus(id: number, status: 'active' | 'inactive'): P
 export const keysAPI = {
   list,
   getById,
+  getImageModels,
   create,
   update,
   delete: deleteKey,

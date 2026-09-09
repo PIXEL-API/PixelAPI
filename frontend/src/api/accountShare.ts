@@ -6,6 +6,7 @@ import type {
   AccountStatus,
   PaginatedResponse,
   Proxy,
+  ProxyProtocol,
   UsageProgress
 } from '@/types'
 
@@ -70,12 +71,10 @@ export type AccountShareRoomOperationStatus =
 
 export interface AccountShareRoomBlockers {
   active_membership_count: number
-  queued_membership_count: number
   ending_membership_count: number
   in_flight_request_count: number
   pending_billing_intent_count: number
   synchronous_billing_pending_count: number
-  valid_edit_session: boolean
   conflicting_operation: boolean
   conflicting_operation_id?: string
   runtime_dependency_unavailable: boolean
@@ -93,7 +92,6 @@ export interface AccountShareRoomManagementState {
   active_seats: number
   ending_seats: number
   admission_remaining_seats: number
-  queued_membership_count: number
   room_account_count: number
   configured_total_concurrency: number
   eligible_total_concurrency: number
@@ -327,11 +325,6 @@ export interface AccountShareListing {
   queue_dispatch_cooldown_until?: string
   last_used_membership_id?: number
   last_used_at?: string
-  editing_by_user_id?: number
-  editing_by_username?: string
-  editing_expires_at?: string
-  editing_mine: boolean
-  edit_session_id?: string
   created_at: string
   updated_at: string
 }
@@ -547,6 +540,7 @@ export interface AccountShareRecommendationUsage {
 }
 
 export interface AccountShareRecommendationEstimate {
+  assumption: string
   billing_mode: 'token' | 'per_request' | 'image' | string
   base_request_cost: number
   request_cost: number
@@ -564,22 +558,10 @@ export interface AccountShareRecommendationEstimate {
   owner_self_use: boolean
 }
 
-export interface AccountShareRecommendationScoreBreakdown {
-  cost_saving_score: number
-  stability_score: number
-  availability_score: number
-  risk_control_score: number
-  overall_score: number
-}
-
 export interface AccountShareRecommendationCandidate {
   rank: number
   listing: AccountShareListing
   estimate: AccountShareRecommendationEstimate
-  score: number
-  score_breakdown: AccountShareRecommendationScoreBreakdown
-  tags: string[]
-  reasons: string[]
   warnings?: string[]
 }
 
@@ -587,7 +569,6 @@ export interface AccountShareRecommendationResult {
   input: AccountShareRecommendationUsage
   candidate_count: number
   items: AccountShareRecommendationCandidate[]
-  recommended?: AccountShareRecommendationCandidate
 }
 
 export interface AccountShareMembership {
@@ -622,7 +603,6 @@ export interface AccountShareMembership {
 export interface AccountShareAPIKeyBindingStatus {
   api_key_id: number
   active_count: number
-  queued_count: number
   ending_count: number
   blocking_count: number
   memberships: AccountShareMembership[]
@@ -635,8 +615,6 @@ export interface AccountShareJoinIntent {
   expires_at: string
   expected_version: number
   expected_revision_id: number
-  accept_queue: boolean
-  queue_may_be_required: boolean
   terms: AccountShareListingTermsSnapshot
 }
 
@@ -792,16 +770,11 @@ export interface UpdateAccountShareListingRequest {
   anthropic_5h_limit_percent?: number
   anthropic_7d_limit_percent?: number
   concurrency?: number
-  edit_session_id?: string
   force_active_edit?: boolean
   reason?: string
   confirmed?: boolean
 }
 
-export interface AccountShareListingEditSessionRequest {
-  session_id?: string
-  force?: boolean
-}
 
 export interface AccountShareListingFilters {
   tab?: AccountShareListingTab
@@ -826,19 +799,13 @@ export interface JoinAccountShareListingRequest {
   intent_token: string
   expected_version: number
   expected_revision_id: number
-  accept_queue: boolean
 }
 
 export interface CreateAccountShareJoinIntentRequest {
   api_key_id: number
   idle_timeout_minutes: number
-  accept_queue: boolean
 }
 
-export interface ReorderAccountShareQueueRequest {
-  api_key_id: number
-  membership_ids: number[]
-}
 
 export async function generateOpenAIAuthURL(payload: {
   proxy_id: number
@@ -879,12 +846,17 @@ export async function exchangeAnthropicCode(
   return data
 }
 
+export interface AccountShareListingPage extends PaginatedResponse<AccountShareListing> {
+  total_exact: boolean
+  has_more: boolean
+}
+
 export async function listListings(
   page = 1,
   pageSize = 20,
   filters?: AccountShareListingFilters,
   options: { signal?: AbortSignal } = {}
-): Promise<PaginatedResponse<AccountShareListing>> {
+): Promise<AccountShareListingPage> {
   const params: Record<string, unknown> = {
     page,
     page_size: pageSize
@@ -899,7 +871,7 @@ export async function listListings(
       params[key] = value
     }
   }
-  const { data } = await apiClient.get<PaginatedResponse<AccountShareListing>>('/account-share/listings', {
+  const { data } = await apiClient.get<AccountShareListingPage>('/account-share/listings', {
     params,
     signal: options.signal
   })
@@ -951,8 +923,7 @@ export async function getRecommendationUsageProfile(
   return data
 }
 
-// 用户不再上传/管理代理，只能选择平台代理。
-// 传入即将分享的账号平台与等级，后端据此返回该账号可用的平台代理（外加用户名下的遗留自有代理）。
+// 按账号平台与等级返回可使用的平台代理和当前用户自己的代理。
 export interface ListProxiesScope {
   platform?: string
   account_level?: string
@@ -970,8 +941,46 @@ export async function listProxies(scope: ListProxiesScope = {}): Promise<Proxy[]
   return data
 }
 
-export async function getListing(id: number): Promise<AccountShareListing> {
-  const { data } = await apiClient.get<AccountShareListing>(`/account-share/listings/${id}`)
+export type UserProxy = Omit<Proxy, 'password'>
+export type UserManagedProxy = UserProxy & { account_count: number }
+
+export interface CreateUserProxyRequest {
+  name: string
+  protocol: ProxyProtocol
+  host: string
+  port: number
+  username?: string
+  password?: string
+  max_accounts?: number
+}
+
+export type UpdateUserProxyRequest = Partial<CreateUserProxyRequest> & {
+  status?: 'active' | 'inactive'
+}
+
+export async function listMyProxies(): Promise<UserManagedProxy[]> {
+  const { data } = await apiClient.get<UserManagedProxy[]>('/account-share/proxies/mine')
+  return data
+}
+
+export async function createProxy(payload: CreateUserProxyRequest): Promise<UserProxy> {
+  const { data } = await apiClient.post<UserProxy>('/account-share/proxies', payload)
+  return data
+}
+
+export async function updateProxy(id: number, payload: UpdateUserProxyRequest): Promise<UserProxy> {
+  const { data } = await apiClient.put<UserProxy>(`/account-share/proxies/${id}`, payload)
+  return data
+}
+
+export async function deleteProxy(id: number): Promise<void> {
+  await apiClient.delete(`/account-share/proxies/${id}`)
+}
+
+export async function getListing(id: number, options: AccountShareRequestOptions = {}): Promise<AccountShareListing> {
+  const { data } = await apiClient.get<AccountShareListing>(`/account-share/listings/${id}`, {
+    signal: options.signal
+  })
   return data
 }
 
@@ -1111,35 +1120,7 @@ export async function updateListing(
   return data
 }
 
-export async function beginListingEdit(
-  id: number,
-  payload: AccountShareListingEditSessionRequest,
-  idempotencyKey: string,
-  options: AccountShareRequestOptions = {}
-): Promise<AccountShareListing> {
-  const { data } = await apiClient.post<AccountShareListing>(
-    `/account-share/listings/${id}/edit-session`,
-    payload,
-    {
-      ...idempotencyRequestConfig(idempotencyKey),
-      signal: options.signal
-    }
-  )
-  return data
-}
 
-export async function releaseListingEdit(
-  id: number,
-  sessionID: string,
-  idempotencyKey: string
-): Promise<AccountShareListing> {
-  const { data } = await apiClient.post<AccountShareListing>(
-    `/account-share/listings/${id}/edit-session/release`,
-    { session_id: sessionID },
-    idempotencyRequestConfig(idempotencyKey)
-  )
-  return data
-}
 
 export async function createJoinIntent(
   id: number,
@@ -1164,15 +1145,6 @@ export async function updateMembershipIdleTimeout(id: number, idleTimeoutMinutes
   return data
 }
 
-export async function listMembershipQueue(
-  apiKeyID: number,
-  options: { signal?: AbortSignal } = {}
-): Promise<AccountShareMembership[]> {
-  const { data } = await apiClient.get<AccountShareMembership[]>(`/account-share/queue/${apiKeyID}`, {
-    signal: options.signal
-  })
-  return data
-}
 
 export async function getAPIKeyBindingStatus(
   apiKeyID: number,
@@ -1185,10 +1157,6 @@ export async function getAPIKeyBindingStatus(
   return data
 }
 
-export async function reorderMembershipQueue(payload: ReorderAccountShareQueueRequest): Promise<AccountShareMembership[]> {
-  const { data } = await apiClient.patch<AccountShareMembership[]>('/account-share/queue', payload)
-  return data
-}
 
 export async function endMembership(id: number): Promise<AccountShareMembership> {
   const { data } = await apiClient.post<AccountShareMembership>(`/account-share/memberships/${id}/end`, {})
@@ -1211,13 +1179,15 @@ export async function submitReview(
 export async function listListingReviews(
   listingID: number,
   page = 1,
-  pageSize = 20
+  pageSize = 20,
+  options: AccountShareRequestOptions = {}
 ): Promise<PaginatedResponse<AccountShareReview>> {
   const { data } = await apiClient.get<PaginatedResponse<AccountShareReview>>(`/account-share/listings/${listingID}/reviews`, {
     params: {
       page,
       page_size: pageSize
-    }
+    },
+    signal: options.signal
   })
   return data
 }
@@ -1300,6 +1270,10 @@ export const accountShareAPI = {
   generateAnthropicAuthURL,
   exchangeAnthropicCode,
   listProxies,
+  listMyProxies,
+  createProxy,
+  updateProxy,
+  deleteProxy,
   listListings,
   listMembershipHistory,
   recommendListings,
@@ -1307,14 +1281,10 @@ export const accountShareAPI = {
   getListing,
   getMySpendSummary,
   updateListing,
-  beginListingEdit,
-  releaseListingEdit,
   createJoinIntent,
   joinListing,
   updateMembershipIdleTimeout,
-  listMembershipQueue,
   getAPIKeyBindingStatus,
-  reorderMembershipQueue,
   endMembership,
   submitReview,
   listListingReviews,

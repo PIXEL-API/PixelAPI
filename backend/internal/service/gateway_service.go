@@ -38,6 +38,7 @@ import (
 	gocache "github.com/patrickmn/go-cache"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/gin-gonic/gin"
@@ -6669,6 +6670,21 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthroughWithMo
 	var billingUsage billingUsageObservation
 	var firstTokenMs *int
 	clientDisconnected := false
+	var clientDone <-chan struct{}
+	if c.Request != nil {
+		clientDone = c.Request.Context().Done()
+	}
+	var cancelDisconnectedDrain context.CancelFunc
+	startDisconnectedDrain := func() {
+		if cancelDisconnectedDrain == nil {
+			cancelDisconnectedDrain = s.startDisconnectedStreamDrainDeadline(ctx, resp.Body, resp.Header.Get("x-request-id"))
+		}
+	}
+	defer func() {
+		if cancelDisconnectedDrain != nil {
+			cancelDisconnectedDrain()
+		}
+	}()
 	sawTerminalEvent := false
 	terminalEventPending := false
 	terminalEventLines := make([]string, 0, 3)
@@ -6687,13 +6703,13 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthroughWithMo
 		restored := string(reverseToolNamesIfPresent(c, []byte(line)))
 		if _, err := io.WriteString(w, restored); err != nil {
 			clientDisconnected = true
-			s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+			startDisconnectedDrain()
 			s.legacyLogClientDisconnectDrainDecision(ctx, "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
 			return
 		}
 		if _, err := io.WriteString(w, "\n"); err != nil {
 			clientDisconnected = true
-			s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+			startDisconnectedDrain()
 			s.legacyLogClientDisconnectDrainDecision(ctx, "[Anthropic passthrough] Client disconnected during streaming, continue draining upstream for usage: account=%d", account.ID)
 			return
 		}
@@ -6856,6 +6872,11 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthroughWithMo
 				continue
 			}
 			writePassthroughLine(line)
+
+		case <-clientDone:
+			clientDone = nil
+			clientDisconnected = true
+			startDisconnectedDrain()
 
 		case <-intervalCh:
 			lastRead := time.Unix(0, atomic.LoadInt64(&lastReadAt))
@@ -8984,6 +9005,21 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 	needModelReplace := originalModel != mappedModel
 	clientDisconnected := false // 客户端断开标志，断开后继续读取上游以获取完整usage
+	var clientDone <-chan struct{}
+	if c.Request != nil {
+		clientDone = c.Request.Context().Done()
+	}
+	var cancelDisconnectedDrain context.CancelFunc
+	startDisconnectedDrain := func() {
+		if cancelDisconnectedDrain == nil {
+			cancelDisconnectedDrain = s.startDisconnectedStreamDrainDeadline(ctx, resp.Body, resp.Header.Get("x-request-id"))
+		}
+	}
+	defer func() {
+		if cancelDisconnectedDrain != nil {
+			cancelDisconnectedDrain()
+		}
+	}()
 	sawTerminalEvent := false
 
 	pendingEventLines := make([]string, 0, 4)
@@ -9142,7 +9178,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					restored := reverseToolNamesIfPresent(c, []byte(block))
 					if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
 						clientDisconnected = true
-						s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+						startDisconnectedDrain()
 						s.legacyLogClientDisconnectDrainDecision(ctx, "Client disconnected during streaming, continuing to drain upstream for billing")
 						break
 					}
@@ -9160,6 +9196,11 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 
 	for {
 		select {
+		case <-clientDone:
+			clientDone = nil
+			clientDisconnected = true
+			startDisconnectedDrain()
+
 		case ev, ok := <-events:
 			if !ok {
 				if err := flushPendingEvent(true); err != nil {
@@ -9299,7 +9340,7 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			// 同时保持连接活跃防止 Cloudflare Tunnel 等代理断开
 			if _, werr := fmt.Fprint(w, "event: ping\ndata: {\"type\": \"ping\"}\n\n"); werr != nil {
 				clientDisconnected = true
-				s.stopUpstreamOnClientDisconnect(ctx, resp.Body)
+				startDisconnectedDrain()
 				s.legacyLogClientDisconnectDrainDecision(ctx, "Client disconnected during keepalive ping, continuing to drain upstream for billing")
 				continue
 			}
@@ -10048,6 +10089,24 @@ func applyUsageBilling(ctx context.Context, requestID string, usageLog *UsageLog
 	}
 
 	if result == nil || !result.Applied {
+		if result != nil && cmd.AccountShareModeSettlement != nil {
+			// The first attempt may have committed before its response was lost.
+			// Re-read caches instead of applying a second balance/rate-limit delta.
+			if deps.billingCacheService != nil {
+				for _, userID := range durableUsageBillingBalanceCacheUserIDs(cmd, result) {
+					_ = deps.billingCacheService.InvalidateUserBalance(billingCtx, userID)
+				}
+				if cmd.SubscriptionCost > 0 && cmd.GroupID != nil {
+					_ = deps.billingCacheService.InvalidateSubscription(billingCtx, cmd.UserID, *cmd.GroupID)
+				}
+				if cmd.APIKeyRateLimitCost > 0 {
+					_ = deps.billingCacheService.InvalidateAPIKeyRateLimit(billingCtx, cmd.APIKeyID)
+				}
+			}
+			if invalidator, ok := p.APIKeyService.(apiKeyAuthCacheUserInvalidator); ok {
+				invalidator.InvalidateAuthCacheByUserID(billingCtx, cmd.UserID)
+			}
+		}
 		deps.deferredService.ScheduleLastUsedUpdate(p.Account.ID)
 		return false, nil
 	}
@@ -10247,6 +10306,45 @@ func (s *GatewayService) stopUpstreamOnClientDisconnect(ctx context.Context, bod
 		return
 	}
 	_ = body.Close()
+}
+
+func detachedStreamDrainTimeout(timeout time.Duration) time.Duration {
+	if timeout <= 0 || timeout > defaultDetachedStreamDrainTimeout {
+		return defaultDetachedStreamDrainTimeout
+	}
+	return timeout
+}
+
+// startDisconnectedStreamDrainDeadline bounds total draining after a confirmed
+// downstream disconnect, even when upstream heartbeats keep the idle timer alive.
+func startDisconnectedStreamDrainDeadline(body io.Closer, requestID string, timeout time.Duration) context.CancelFunc {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	go func() {
+		<-ctx.Done()
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			logger.L().Warn("upstream stream drain deadline exceeded after client disconnect",
+				zap.String("request_id", requestID),
+				zap.Duration("timeout", timeout),
+			)
+			_ = body.Close()
+		}
+	}()
+	return cancel
+}
+
+func (s *GatewayService) startDisconnectedStreamDrainDeadline(ctx context.Context, body io.Closer, requestID string) context.CancelFunc {
+	if body == nil {
+		return func() {}
+	}
+	if !s.detachedUsageDrainEnabled(ctx) {
+		_ = body.Close()
+		return func() {}
+	}
+	var timeout time.Duration
+	if s != nil && s.cfg != nil {
+		timeout = time.Duration(s.cfg.Gateway.StreamDataIntervalTimeout) * time.Second
+	}
+	return startDisconnectedStreamDrainDeadline(body, requestID, detachedStreamDrainTimeout(timeout))
 }
 
 func (s *GatewayService) clientDisconnectIncompleteUsageError(ctx context.Context) error {

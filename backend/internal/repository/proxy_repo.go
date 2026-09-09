@@ -32,6 +32,7 @@ type proxyRepository struct {
 }
 
 var _ service.ProxyDeletionRepository = (*proxyRepository)(nil)
+var _ service.OwnedProxyRepository = (*proxyRepository)(nil)
 
 func NewProxyRepository(client *dbent.Client, sqlDB *sql.DB) service.ProxyRepository {
 	return newProxyRepositoryWithSQL(client, sqlDB)
@@ -189,12 +190,20 @@ func (r *proxyRepository) ListByIDs(ctx context.Context, ids []int64) ([]service
 }
 
 func (r *proxyRepository) Update(ctx context.Context, proxyIn *service.Proxy) error {
-	return r.updateAtomically(ctx, proxyIn, false)
+	return r.updateAtomically(ctx, proxyIn, false, 0)
 }
 
 // UpdateWithOwnerAssignment 在通用原子更新守卫之外额外校验代理归属冲突。
 func (r *proxyRepository) UpdateWithOwnerAssignment(ctx context.Context, proxyIn *service.Proxy) error {
-	return r.updateAtomically(ctx, proxyIn, true)
+	return r.updateAtomically(ctx, proxyIn, true, 0)
+}
+
+// UpdateOwned 在持有代理行锁后重新核验归属，用户不能变更代理归属。
+func (r *proxyRepository) UpdateOwned(ctx context.Context, ownerUserID int64, proxyIn *service.Proxy) error {
+	if ownerUserID <= 0 || proxyIn == nil || proxyOwnerID(proxyIn.OwnerUserID) != ownerUserID {
+		return service.ErrProxyNotFound
+	}
+	return r.updateAtomically(ctx, proxyIn, false, ownerUserID)
 }
 
 // updateAtomically 统一代理更新的最终一致性守卫。所有写入口都先锁定 live proxy，
@@ -202,7 +211,7 @@ func (r *proxyRepository) UpdateWithOwnerAssignment(ctx context.Context, proxyIn
 // 因而降低 max_accounts 与并发新增绑定无法交叉产生超配状态。
 //
 // 已有 Ent 事务由调用方拥有，本方法只复用其 client/executor，不嵌套开启或提交事务。
-func (r *proxyRepository) updateAtomically(ctx context.Context, proxyIn *service.Proxy, checkOwnerAssignment bool) error {
+func (r *proxyRepository) updateAtomically(ctx context.Context, proxyIn *service.Proxy, checkOwnerAssignment bool, expectedOwnerID int64) error {
 	if proxyIn == nil {
 		return service.ErrProxyNotFound
 	}
@@ -211,7 +220,7 @@ func (r *proxyRepository) updateAtomically(ctx context.Context, proxyIn *service
 		txClient *dbent.Client,
 		exec sqlQueryExecutor,
 	) error {
-		return r.updateLocked(txCtx, txClient, exec, proxyIn, checkOwnerAssignment)
+		return r.updateLocked(txCtx, txClient, exec, proxyIn, checkOwnerAssignment, expectedOwnerID)
 	})
 }
 
@@ -296,6 +305,7 @@ func (r *proxyRepository) updateLocked(
 	exec sqlQueryExecutor,
 	proxyIn *service.Proxy,
 	checkOwnerAssignment bool,
+	expectedOwnerID int64,
 ) error {
 	if err := service.ValidateProxyLifecycleFields(proxyIn); err != nil {
 		return err
@@ -310,6 +320,9 @@ func (r *proxyRepository) updateLocked(
 	}
 	source, ok := locked[proxyIn.ID]
 	if !ok {
+		return service.ErrProxyNotFound
+	}
+	if expectedOwnerID > 0 && proxyOwnerID(source.ownerUserID) != expectedOwnerID {
 		return service.ErrProxyNotFound
 	}
 	if proxyIn.UpdatedAt.IsZero() || !source.updatedAt.Equal(proxyIn.UpdatedAt) {
@@ -469,6 +482,18 @@ func (r *proxyRepository) Delete(ctx context.Context, id int64) error {
 // 所有账号绑定路径使用同一代理行锁后，删除与绑定只能串行生效，避免 live account
 // 最终指向已软删除代理。不存在或已删除的代理保持既有幂等删除语义。
 func (r *proxyRepository) DeleteIfUnused(ctx context.Context, id int64) error {
+	return r.deleteIfUnused(ctx, id, 0)
+}
+
+// DeleteOwnedIfUnused 只允许删除当前仍归属该用户且没有引用的代理。
+func (r *proxyRepository) DeleteOwnedIfUnused(ctx context.Context, ownerUserID, id int64) error {
+	if ownerUserID <= 0 {
+		return service.ErrProxyNotFound
+	}
+	return r.deleteIfUnused(ctx, id, ownerUserID)
+}
+
+func (r *proxyRepository) deleteIfUnused(ctx context.Context, id, expectedOwnerID int64) error {
 	if r == nil || r.client == nil {
 		return fmt.Errorf("proxy deletion repository client is unavailable")
 	}
@@ -478,7 +503,7 @@ func (r *proxyRepository) DeleteIfUnused(ctx context.Context, id int64) error {
 		if exec == nil {
 			return fmt.Errorf("proxy deletion transaction SQL executor is unavailable")
 		}
-		_, err := deleteProxyIfUnusedLocked(ctx, exec, id)
+		_, err := deleteProxyIfUnusedLocked(ctx, exec, id, expectedOwnerID)
 		return err
 	}
 
@@ -492,7 +517,7 @@ func (r *proxyRepository) DeleteIfUnused(ctx context.Context, id int64) error {
 	if exec == nil {
 		return fmt.Errorf("proxy deletion transaction SQL executor is unavailable")
 	}
-	deleted, err := deleteProxyIfUnusedLocked(txCtx, exec, id)
+	deleted, err := deleteProxyIfUnusedLocked(txCtx, exec, id, expectedOwnerID)
 	if err != nil {
 		return err
 	}
@@ -504,15 +529,24 @@ func (r *proxyRepository) DeleteIfUnused(ctx context.Context, id int64) error {
 	return tx.Commit()
 }
 
-func deleteProxyIfUnusedLocked(ctx context.Context, exec sqlQueryExecutor, id int64) (bool, error) {
+func deleteProxyIfUnusedLocked(ctx context.Context, exec sqlQueryExecutor, id, expectedOwnerID int64) (bool, error) {
 	var lockedID int64
-	err := scanSingleRow(ctx, exec, `
+	query := `
 		SELECT id
 		FROM proxies
 		WHERE id = $1 AND deleted_at IS NULL
-		FOR UPDATE
-	`, []any{id}, &lockedID)
+	`
+	args := []any{id}
+	if expectedOwnerID > 0 {
+		query += " AND owner_user_id = $2"
+		args = append(args, expectedOwnerID)
+	}
+	query += " FOR UPDATE"
+	err := scanSingleRow(ctx, exec, query, args, &lockedID)
 	if errors.Is(err, sql.ErrNoRows) {
+		if expectedOwnerID > 0 {
+			return false, service.ErrProxyNotFound
+		}
 		return false, nil
 	}
 	if err != nil {
@@ -790,6 +824,39 @@ func (r *proxyRepository) ListActiveVisibleWithAccountCount(ctx context.Context,
 	return result, nil
 }
 
+// ListOwnedWithAccountCount 包含用户全部专属代理，停用代理仍可管理。
+func (r *proxyRepository) ListOwnedWithAccountCount(ctx context.Context, ownerUserID int64) ([]service.ProxyWithAccountCount, error) {
+	if ownerUserID <= 0 {
+		return nil, service.ErrProxyNotFound
+	}
+	proxies, err := r.client.Proxy.Query().
+		Where(proxy.OwnerUserIDEQ(ownerUserID)).
+		Order(dbent.Desc(proxy.FieldCreatedAt), dbent.Desc(proxy.FieldID)).
+		All(ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make([]service.ProxyWithAccountCount, 0, len(proxies))
+	if len(proxies) == 0 {
+		return result, nil
+	}
+	ids := make([]int64, 0, len(proxies))
+	for _, item := range proxies {
+		ids = append(ids, item.ID)
+	}
+	counts, err := r.getAccountCountsForProxies(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	for _, item := range proxies {
+		result = append(result, service.ProxyWithAccountCount{
+			Proxy:        *proxyEntityToService(item),
+			AccountCount: counts[item.ID],
+		})
+	}
+	return result, nil
+}
+
 func (r *proxyRepository) GetVisibleByID(ctx context.Context, scope service.ProxyScope, id int64) (*service.Proxy, error) {
 	m, err := r.client.Proxy.Query().
 		Where(proxy.IDEQ(id), visibleProxyPredicate(scope)).
@@ -970,8 +1037,19 @@ func (r *proxyRepository) ListAccountSummariesByProxyID(ctx context.Context, pro
 }
 
 // GetAccountCountsForProxies returns a map of proxy ID to account count for all proxies
-func (r *proxyRepository) GetAccountCountsForProxies(ctx context.Context) (counts map[int64]int64, err error) {
-	rows, err := r.sql.QueryContext(ctx, "SELECT proxy_id, COUNT(*) AS count FROM accounts WHERE proxy_id IS NOT NULL AND deleted_at IS NULL GROUP BY proxy_id")
+func (r *proxyRepository) GetAccountCountsForProxies(ctx context.Context) (map[int64]int64, error) {
+	return r.getAccountCountsForProxies(ctx, nil)
+}
+
+func (r *proxyRepository) getAccountCountsForProxies(ctx context.Context, ids []int64) (counts map[int64]int64, err error) {
+	query := "SELECT proxy_id, COUNT(*) AS count FROM accounts WHERE proxy_id IS NOT NULL AND deleted_at IS NULL"
+	var args []any
+	if len(ids) > 0 {
+		query += " AND proxy_id = ANY($1)"
+		args = append(args, pq.Array(ids))
+	}
+	query += " GROUP BY proxy_id"
+	rows, err := r.sql.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

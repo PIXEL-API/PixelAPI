@@ -192,8 +192,12 @@ func RegisterUserRoutes(
 			accountShare.POST("/openai/exchange-code", h.AccountShareMode.ExchangeOpenAICode)
 			accountShare.POST("/anthropic/auth-url", h.AccountShareMode.GenerateAnthropicAuthURL)
 			accountShare.POST("/anthropic/exchange-code", h.AccountShareMode.ExchangeAnthropicCode)
-			// 用户不再上传/管理代理，只能选择平台代理；仅保留只读的可选代理列表。
+			// 可选列表包含平台代理和本人代理；管理入口只允许操作归属于当前用户的代理。
 			accountShare.GET("/proxies", h.AccountShareMode.ListAvailableProxies)
+			accountShare.GET("/proxies/mine", h.AccountShareMode.ListOwnedProxies)
+			accountShare.POST("/proxies", h.AccountShareMode.CreateOwnedProxy)
+			accountShare.PUT("/proxies/:id", h.AccountShareMode.UpdateOwnedProxy)
+			accountShare.DELETE("/proxies/:id", h.AccountShareMode.DeleteOwnedProxy)
 			accountShare.POST("/rooms", h.AccountShareMode.CreateRoom)
 			accountShare.GET("/listings", h.AccountShareMode.ListListings)
 			accountShare.GET("/history/memberships", h.AccountShareMode.ListMembershipHistory)
@@ -207,8 +211,6 @@ func RegisterUserRoutes(
 			accountShare.GET("/listings/:id/my-spend", h.AccountShareMode.GetMySpendSummary)
 			accountShare.GET("/listings/:id/reviews", h.AccountShareMode.ListListingReviews)
 			accountShare.GET("/owners/:owner_id/reviews", h.AccountShareMode.ListOwnerReviews)
-			accountShare.POST("/listings/:id/edit-session", h.AccountShareMode.BeginListingEdit)
-			accountShare.POST("/listings/:id/edit-session/release", h.AccountShareMode.ReleaseListingEdit)
 			accountShare.PATCH("/listings/:id", h.AccountShareMode.UpdateListing)
 			accountShare.POST("/listings/:id/drain", h.AccountShareMode.DrainRoom)
 			accountShare.POST("/listings/:id/activate", h.AccountShareMode.ActivateRoom)
@@ -219,10 +221,7 @@ func RegisterUserRoutes(
 			accountShare.POST("/listings/:id/join", h.AccountShareMode.JoinListing)
 			accountShare.GET("/room-operations/:operation_id", h.AccountShareMode.GetRoomOperation)
 			accountShare.GET("/api-key-bindings/:apiKeyID/status", h.AccountShareMode.GetAPIKeyBindingStatus)
-			accountShare.GET("/queue/:apiKeyID", h.AccountShareMode.ListMembershipQueue)
-			accountShare.PATCH("/queue", h.AccountShareMode.ReorderMembershipQueue)
 			accountShare.PATCH("/memberships/:id/idle-timeout", h.AccountShareMode.UpdateMembershipIdleTimeout)
-			accountShare.POST("/memberships/:id/end-intent", h.AccountShareMode.CreateEndMembershipIntent)
 			accountShare.POST("/memberships/:id/end", h.AccountShareMode.EndMembership)
 			accountShare.POST("/memberships/:id/review", h.AccountShareMode.SubmitReview)
 		}

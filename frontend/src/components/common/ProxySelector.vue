@@ -64,6 +64,24 @@
           </button>
         </div>
 
+        <div v-if="userScope" class="flex gap-1 border-b border-gray-100 p-2 dark:border-dark-700" :aria-label="t('userAccounts.proxySource')" role="group">
+          <button
+            v-for="source in sourceOptions"
+            :key="source.value"
+            type="button"
+            :aria-pressed="sourceFilter === source.value"
+            :class="[
+              'min-h-11 min-w-0 flex-1 rounded-lg px-2 text-sm transition-colors',
+              sourceFilter === source.value
+                ? 'bg-primary-50 text-primary-700 dark:bg-primary-900/20 dark:text-primary-300'
+                : 'text-gray-600 hover:bg-gray-50 dark:text-gray-300 dark:hover:bg-dark-700'
+            ]"
+            @click.stop="sourceFilter = source.value"
+          >
+            {{ source.label }}
+          </button>
+        </div>
+
         <!-- Options list -->
         <div class="select-options">
           <!-- No Proxy option -->
@@ -92,8 +110,8 @@
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
                 <span class="truncate font-medium">{{ proxy.name }}</span>
-                <span v-if="proxy.owner_user_id" class="proxy-owner-badge">
-                  {{ t('admin.proxies.userOwned') }}
+                <span v-if="userScope || proxy.owner_user_id" class="proxy-owner-badge">
+                  {{ userScope ? proxySourceLabel(proxy) : t('admin.proxies.userOwned') }}
                 </span>
                 <!-- Test result badges -->
                 <template v-if="testResults[proxy.id]">
@@ -172,7 +190,7 @@
           </div>
 
           <!-- Empty state -->
-          <div v-if="filteredProxies.length === 0 && searchQuery" class="select-empty">
+          <div v-if="filteredProxies.length === 0 && (searchQuery || userScope)" class="select-empty">
             {{ t('common.noOptionsFound') }}
           </div>
         </div>
@@ -213,6 +231,7 @@ interface Props {
   canTest?: boolean
   hideEndpoint?: boolean
   disableFull?: boolean
+  userScope?: boolean
 }
 
 const props = withDefaults(defineProps<Props>(), {
@@ -220,7 +239,8 @@ const props = withDefaults(defineProps<Props>(), {
   allowEmpty: true,
   canTest: true,
   hideEndpoint: false,
-  disableFull: false
+  disableFull: false,
+  userScope: false
 })
 
 const emit = defineEmits<{
@@ -229,6 +249,15 @@ const emit = defineEmits<{
 
 const isOpen = ref(false)
 const searchQuery = ref('')
+const sourceFilter = ref<'all' | 'mine' | 'platform'>('all')
+const sourceOptions = computed(() => [
+  { value: 'all' as const, label: t('userAccounts.proxySourceAll') },
+  { value: 'mine' as const, label: t('userAccounts.proxySourceMine') },
+  { value: 'platform' as const, label: t('userAccounts.proxySourcePlatform') }
+])
+const proxySourceLabel = (proxy: Proxy): string => t(
+  proxy.owner_user_id ? 'userAccounts.proxySourceMine' : 'userAccounts.proxySourcePlatform'
+)
 const containerRef = ref<HTMLElement | null>(null)
 const searchInputRef = ref<HTMLInputElement | null>(null)
 
@@ -247,8 +276,9 @@ const selectedLabel = computed(() => {
     return props.allowEmpty ? t('admin.accounts.noProxy') : t('common.selectOption')
   }
   const proxy = selectedProxy.value
+  const name = props.userScope ? `${proxy.name} · ${proxySourceLabel(proxy)}` : proxy.name
   const usage = proxy.account_count !== undefined ? ` · ${formatProxyUsage(proxy)}` : ''
-  return props.hideEndpoint ? `${proxy.name}${usage}` : `${proxy.name} (${formatProxyEndpoint(proxy)}${usage})`
+  return props.hideEndpoint ? `${name}${usage}` : `${name} (${formatProxyEndpoint(proxy)}${usage})`
 })
 
 const isProxyOptionDisabled = (proxy: Proxy): boolean =>
@@ -300,11 +330,15 @@ const proxyUsageBadgeClass = (proxy: Proxy): string => {
 }
 
 const filteredProxies = computed(() => {
+  const proxies = props.proxies.filter((proxy) => {
+    if (!props.userScope || sourceFilter.value === 'all') return true
+    return sourceFilter.value === 'mine' ? Boolean(proxy.owner_user_id) : !proxy.owner_user_id
+  })
   if (!searchQuery.value) {
-    return props.proxies
+    return proxies
   }
   const query = searchQuery.value.toLowerCase()
-  return props.proxies.filter((proxy) => {
+  return proxies.filter((proxy) => {
     const name = proxy.name.toLowerCase()
     if (name.includes(query)) return true
     // 隐藏端点时也不能按 host 过滤，否则搜索框就成了探测代理 IP 的旁路。

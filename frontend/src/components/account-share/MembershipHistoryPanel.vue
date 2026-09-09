@@ -377,6 +377,8 @@ function endedReasonLabel(reason?: string): string {
       return '账号不可用'
     case 'queue_expired':
       return '预约过期'
+    case 'queue_removed':
+      return '预约功能已取消'
     case 'room_draining':
       return '房间停止接入'
     default:

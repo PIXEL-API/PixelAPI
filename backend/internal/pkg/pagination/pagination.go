@@ -22,6 +22,9 @@ type PaginationResult struct {
 	Page     int
 	PageSize int
 	Pages    int
+	// Approximate indicates that Total is a pagination hint, not an exact count.
+	Approximate bool
+	HasMore     bool
 }
 
 // DefaultPagination 默认分页参数

@@ -1389,7 +1389,9 @@ func TestFilterCodexInput_PreservesRequiredAndOutputItemIDs(t *testing.T) {
 	for index, raw := range filtered {
 		item, ok := raw.(map[string]any)
 		require.True(t, ok)
-		require.Equal(t, input[index].(map[string]any)["id"], item["id"])
+		original, ok := input[index].(map[string]any)
+		require.True(t, ok)
+		require.Equal(t, original["id"], item["id"])
 	}
 	localShell, ok := filtered[0].(map[string]any)
 	require.True(t, ok)

@@ -11,8 +11,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
-
-	"github.com/redis/go-redis/v9"
 )
 
 const (
@@ -235,7 +233,7 @@ func (s *defaultOpenAIWSStateStore) GetResponseOwnerStrict(
 	storedValue, err := s.cache.GetSessionString(cacheCtx, 0, openAIWSResponseOwnerCacheKey(apiKeyID, id))
 	cancel()
 	if err != nil {
-		if errors.Is(err, ErrGatewaySessionStringNotFound) || errors.Is(err, redis.Nil) {
+		if errors.Is(err, ErrGatewaySessionStringNotFound) {
 			return OpenAIWSResponseOwner{}, false, nil
 		}
 		return OpenAIWSResponseOwner{}, false, err
@@ -326,7 +324,7 @@ func (s *defaultOpenAIWSStateStore) GetResponseAccountStrict(ctx context.Context
 	defer cancel()
 	accountID, err := s.cache.GetSessionAccountID(cacheCtx, groupID, cacheKey)
 	if err != nil {
-		if errors.Is(err, redis.Nil) {
+		if errors.Is(err, ErrGatewaySessionStringNotFound) {
 			return 0, nil
 		}
 		return 0, err

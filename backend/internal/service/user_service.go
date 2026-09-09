@@ -30,21 +30,22 @@ import (
 )
 
 var (
-	ErrUserNotFound             = infraerrors.NotFound("USER_NOT_FOUND", "user not found")
-	ErrPasswordIncorrect        = infraerrors.BadRequest("PASSWORD_INCORRECT", "current password is incorrect")
-	ErrInsufficientPerms        = infraerrors.Forbidden("INSUFFICIENT_PERMISSIONS", "insufficient permissions")
-	ErrUserConcurrencyRange     = infraerrors.BadRequest("USER_CONCURRENCY_INVALID", fmt.Sprintf("user concurrency must be at least %d", UserMinConcurrency))
-	ErrAdminConcurrencyRange    = infraerrors.BadRequest("ADMIN_CONCURRENCY_INVALID", "admin concurrency must be at least 0")
-	ErrUserRoleInvalid          = infraerrors.BadRequest("USER_ROLE_INVALID", "user role must be user or admin")
-	ErrLastAdminDemotion        = infraerrors.BadRequest("LAST_ADMIN_DEMOTION_FORBIDDEN", "cannot demote the last active administrator")
-	ErrAdminDisableForbidden    = infraerrors.BadRequest("ADMIN_DISABLE_FORBIDDEN", "cannot disable admin user")
-	ErrNotifyCodeUserRateLimit  = infraerrors.TooManyRequests("NOTIFY_CODE_USER_RATE_LIMIT", "too many verification codes requested, please try again later")
-	ErrAvatarInvalid            = infraerrors.BadRequest("AVATAR_INVALID", "avatar must be a valid image data URL or http(s) URL")
-	ErrAvatarTooLarge           = infraerrors.BadRequest("AVATAR_TOO_LARGE", "avatar image must be 100KB or smaller")
-	ErrAvatarNotImage           = infraerrors.BadRequest("AVATAR_NOT_IMAGE", "avatar content must be an image")
-	ErrIdentityProviderInvalid  = infraerrors.BadRequest("IDENTITY_PROVIDER_INVALID", "identity provider is invalid")
-	ErrIdentityRedirectInvalid  = infraerrors.BadRequest("IDENTITY_REDIRECT_INVALID", "identity redirect path is invalid")
-	ErrIdentityUnbindLastMethod = infraerrors.Conflict(
+	ErrUserAccountShareUnsettled = infraerrors.Conflict("USER_ACCOUNT_SHARE_UNSETTLED", "该用户仍有关联的账号广场使用或结算记录，请结束使用并完成结算后再删除")
+	ErrUserNotFound              = infraerrors.NotFound("USER_NOT_FOUND", "user not found")
+	ErrPasswordIncorrect         = infraerrors.BadRequest("PASSWORD_INCORRECT", "current password is incorrect")
+	ErrInsufficientPerms         = infraerrors.Forbidden("INSUFFICIENT_PERMISSIONS", "insufficient permissions")
+	ErrUserConcurrencyRange      = infraerrors.BadRequest("USER_CONCURRENCY_INVALID", fmt.Sprintf("user concurrency must be at least %d", UserMinConcurrency))
+	ErrAdminConcurrencyRange     = infraerrors.BadRequest("ADMIN_CONCURRENCY_INVALID", "admin concurrency must be at least 0")
+	ErrUserRoleInvalid           = infraerrors.BadRequest("USER_ROLE_INVALID", "user role must be user or admin")
+	ErrLastAdminDemotion         = infraerrors.BadRequest("LAST_ADMIN_DEMOTION_FORBIDDEN", "cannot demote the last active administrator")
+	ErrAdminDisableForbidden     = infraerrors.BadRequest("ADMIN_DISABLE_FORBIDDEN", "cannot disable admin user")
+	ErrNotifyCodeUserRateLimit   = infraerrors.TooManyRequests("NOTIFY_CODE_USER_RATE_LIMIT", "too many verification codes requested, please try again later")
+	ErrAvatarInvalid             = infraerrors.BadRequest("AVATAR_INVALID", "avatar must be a valid image data URL or http(s) URL")
+	ErrAvatarTooLarge            = infraerrors.BadRequest("AVATAR_TOO_LARGE", "avatar image must be 100KB or smaller")
+	ErrAvatarNotImage            = infraerrors.BadRequest("AVATAR_NOT_IMAGE", "avatar content must be an image")
+	ErrIdentityProviderInvalid   = infraerrors.BadRequest("IDENTITY_PROVIDER_INVALID", "identity provider is invalid")
+	ErrIdentityRedirectInvalid   = infraerrors.BadRequest("IDENTITY_REDIRECT_INVALID", "identity redirect path is invalid")
+	ErrIdentityUnbindLastMethod  = infraerrors.Conflict(
 		"IDENTITY_UNBIND_LAST_METHOD",
 		"bind another sign-in method before unbinding this provider",
 	)

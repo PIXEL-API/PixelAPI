@@ -634,21 +634,19 @@ func TestLockAndHydrateAccountMutationRoomsLoadsPersistentSafetyState(t *testing
 			"row_version",
 			"current_revision_id",
 			"status",
-			"valid_edit_session",
 			"conflicting_operation",
 			"pending_operation_id",
-		}).AddRow(int64(11), int64(4), int64(91), service.AccountShareListingStatusPaused, false, false, ""))
+		}).AddRow(int64(11), int64(4), int64(91), service.AccountShareListingStatusPaused, false, ""))
 	mock.ExpectQuery(`(?s)WITH membership_blockers AS.*billing_blockers AS.*binding_blockers AS.*ORDER BY listing.id`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"listing_id",
 			"active_count",
-			"queued_count",
 			"ending_count",
 			"settlement_count",
 			"pending_count",
 			"open_count",
-		}).AddRow(int64(11), 0, 0, 0, 0, 0, 0))
+		}).AddRow(int64(11), 0, 0, 0, 0, 0))
 
 	bindings := []accountMutationRoomBinding{{accountID: 7, listingID: 11}}
 	err = lockAndHydrateAccountMutationRooms(context.Background(), db, bindings)
@@ -675,10 +673,9 @@ func TestLockAndHydrateAccountMutationRoomsFailsClosedWhenBlockerQueryFails(t *t
 			"row_version",
 			"current_revision_id",
 			"status",
-			"valid_edit_session",
 			"conflicting_operation",
 			"pending_operation_id",
-		}).AddRow(int64(11), int64(4), nil, service.AccountShareListingStatusPaused, false, false, ""))
+		}).AddRow(int64(11), int64(4), nil, service.AccountShareListingStatusPaused, false, ""))
 	mock.ExpectQuery(`(?s)WITH membership_blockers AS.*billing_blockers AS.*binding_blockers AS`).
 		WithArgs(sqlmock.AnyArg()).
 		WillReturnError(errors.New("blocker query unavailable"))
@@ -924,11 +921,6 @@ func TestAuthorizeAccountMutationOwnerRejectsPausedRoomPersistentBlockers(t *tes
 			metadataKey: "active_membership_count",
 		},
 		{
-			name:        "queued membership",
-			blockers:    service.AccountShareRoomBlockers{QueuedMembershipCount: 1},
-			metadataKey: "queued_membership_count",
-		},
-		{
 			name:        "ending membership",
 			blockers:    service.AccountShareRoomBlockers{EndingMembershipCount: 1},
 			metadataKey: "ending_membership_count",
@@ -947,11 +939,6 @@ func TestAuthorizeAccountMutationOwnerRejectsPausedRoomPersistentBlockers(t *tes
 			name:             "open dispatch binding",
 			openBindingCount: 1,
 			metadataKey:      "open_binding_count",
-		},
-		{
-			name:        "valid edit session",
-			blockers:    service.AccountShareRoomBlockers{ValidEditSession: true},
-			metadataKey: "valid_edit_session",
 		},
 		{
 			name: "conflicting operation",

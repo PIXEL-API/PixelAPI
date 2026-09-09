@@ -63,17 +63,17 @@ type userAvailableGroup struct {
 
 // userSupportedModelPricing 用户可见的定价字段白名单。
 type userSupportedModelPricing struct {
-	BillingMode                    string                   `json:"billing_mode"`
-	InputPrice                     *float64                 `json:"input_price"`
-	OutputPrice                    *float64                 `json:"output_price"`
-	CacheWritePrice                *float64                 `json:"cache_write_price"`
-	CacheReadPrice                 *float64                 `json:"cache_read_price"`
-	ImageInputPrice                *float64                 `json:"image_input_price"`
-	ImageCacheReadPrice            *float64                 `json:"image_cache_read_price"`
-	ImageOutputPrice               *float64                 `json:"image_output_price"`
-	PerRequestPrice                *float64                 `json:"per_request_price"`
-	LongContextPricingEnabled      *bool                    `json:"long_context_pricing_enabled"`
-	LongContextInputTokenThreshold *int                     `json:"long_context_input_token_threshold"`
+	BillingMode                    string                    `json:"billing_mode"`
+	InputPrice                     *float64                  `json:"input_price"`
+	OutputPrice                    *float64                  `json:"output_price"`
+	CacheWritePrice                *float64                  `json:"cache_write_price"`
+	CacheReadPrice                 *float64                  `json:"cache_read_price"`
+	ImageInputPrice                *float64                  `json:"image_input_price"`
+	ImageCacheReadPrice            *float64                  `json:"image_cache_read_price"`
+	ImageOutputPrice               *float64                  `json:"image_output_price"`
+	PerRequestPrice                *float64                  `json:"per_request_price"`
+	LongContextPricingEnabled      *bool                     `json:"long_context_pricing_enabled"`
+	LongContextInputTokenThreshold *int                      `json:"long_context_input_token_threshold"`
 	Intervals                      []userPricingIntervalDTO  `json:"intervals"`
 	TimeRanges                     []userPricingTimeRangeDTO `json:"time_ranges"`
 }
