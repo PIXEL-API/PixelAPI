@@ -155,6 +155,34 @@ func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnDisabled() {
 	s.Require().Equal(service.StatusDisabled, cacheRecorder.setAccounts[0].Status)
 }
 
+func (s *AccountRepoSuite) TestUpdateStatusAndError_ErrorSinceLifecycle() {
+	client := testEntClient(s.T())
+	repo := newAccountRepositoryWithSQL(client, integrationDB, nil)
+	account := mustCreateAccount(s.T(), client, &service.Account{Name: uniqueTestValue(s.T(), "status-error-since"), Status: service.StatusActive})
+	s.T().Cleanup(func() { cleanupPersistentTestAccounts(s.T(), account.ID) })
+	ctx := context.Background()
+
+	s.Require().NoError(repo.UpdateStatusAndError(ctx, account.ID, service.StatusError, "first error"))
+	first, err := repo.GetByID(ctx, account.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(service.StatusError, first.Status)
+	s.Require().Equal("first error", first.ErrorMessage)
+	s.Require().NotNil(first.ErrorSince)
+
+	s.Require().NoError(repo.UpdateStatusAndError(ctx, account.ID, service.StatusError, "repeated error"))
+	repeated, err := repo.GetByID(ctx, account.ID)
+	s.Require().NoError(err)
+	s.Require().Equal("repeated error", repeated.ErrorMessage)
+	s.Require().Equal(first.ErrorSince, repeated.ErrorSince, "repeated errors retain their original start time")
+
+	s.Require().NoError(repo.UpdateStatusAndError(ctx, account.ID, service.StatusActive, ""))
+	recovered, err := repo.GetByID(ctx, account.ID)
+	s.Require().NoError(err)
+	s.Require().Equal(service.StatusActive, recovered.Status)
+	s.Require().Empty(recovered.ErrorMessage)
+	s.Require().Nil(recovered.ErrorSince, "recovery clears the error start time")
+}
+
 func (s *AccountRepoSuite) TestUpdate_SyncSchedulerSnapshotOnCredentialsChange() {
 	client := testEntClient(s.T())
 	repo := newAccountRepositoryWithSQL(client, integrationDB, nil)

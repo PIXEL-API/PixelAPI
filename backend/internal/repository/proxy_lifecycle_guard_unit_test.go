@@ -90,10 +90,15 @@ func expectProxyUpdateGuardLockAndCount(
 		WillReturnRows(sqlmock.NewRows([]string{"count"}).AddRow(currentAccounts))
 }
 
-func expectProxyUpdateGuardSave(mock sqlmock.Sqlmock, candidate *service.Proxy) {
-	now := time.Date(2026, time.August, 31, 12, 0, 0, 0, time.UTC)
+func expectProxyUpdateGuardSave(mock sqlmock.Sqlmock, candidate *service.Proxy) time.Time {
+	now := time.Date(2026, time.August, 31, 12, 0, 0, 123456000, time.UTC)
 	mock.ExpectExec(`(?s)UPDATE "proxies" SET .*WHERE "id" = \$[0-9]+ AND \("proxies"\."updated_at" = \$[0-9]+ AND "proxies"\."deleted_at" IS NULL\)`).
 		WillReturnResult(sqlmock.NewResult(0, 1))
+	expectProxyStoredRead(mock, candidate, now)
+	return now
+}
+
+func expectProxyStoredRead(mock sqlmock.Sqlmock, candidate *service.Proxy, storedAt time.Time) {
 	mock.ExpectQuery(`(?s)SELECT .*FROM "proxies".*WHERE .*"id" = \$1`).
 		WithArgs(candidate.ID).
 		WillReturnRows(sqlmock.NewRows([]string{
@@ -101,7 +106,7 @@ func expectProxyUpdateGuardSave(mock sqlmock.Sqlmock, candidate *service.Proxy) 
 			"username", "password", "owner_user_id", "platform", "required_account_level", "status",
 			"max_accounts", "expires_at", "fallback_mode", "backup_proxy_id", "expiry_warn_days",
 		}).AddRow(
-			candidate.ID, now, now, nil, candidate.Name, candidate.Protocol, candidate.Host, candidate.Port,
+			candidate.ID, storedAt, storedAt, nil, candidate.Name, candidate.Protocol, candidate.Host, candidate.Port,
 			nil, nil, candidate.OwnerUserID, candidate.Platform, candidate.RequiredAccountLevel, candidate.Status,
 			candidate.MaxAccounts, nil, candidate.FallbackMode, candidate.BackupProxyID, candidate.ExpiryWarnDays,
 		))
@@ -121,9 +126,14 @@ func proxyCreateGuardCandidate(backupID int64) *service.Proxy {
 	}
 }
 
-func expectProxyCreateSave(mock sqlmock.Sqlmock, createdID int64) {
+func expectProxyCreateSave(mock sqlmock.Sqlmock, createdID int64, candidate *service.Proxy) time.Time {
 	mock.ExpectQuery(`(?s)INSERT INTO "proxies".*RETURNING "id"`).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(createdID))
+	stored := *candidate
+	stored.ID = createdID
+	storedAt := time.Date(2026, time.August, 31, 12, 0, 0, 123456000, time.UTC)
+	expectProxyStoredRead(mock, &stored, storedAt)
+	return storedAt
 }
 
 func expectLiveProxyBackupReferenceCount(mock sqlmock.Sqlmock, proxyID, count int64) {
@@ -143,7 +153,7 @@ func TestProxyRepositoryCreateLocksBackupAndPublishesAfterCommit(t *testing.T) {
 		id:        backupID,
 		updatedAt: version,
 	})
-	expectProxyCreateSave(mock, 77)
+	storedAt := expectProxyCreateSave(mock, 77, candidate)
 	mock.ExpectCommit()
 
 	err := repo.Create(context.Background(), candidate)
@@ -152,6 +162,29 @@ func TestProxyRepositoryCreateLocksBackupAndPublishesAfterCommit(t *testing.T) {
 	require.Equal(t, int64(77), candidate.ID)
 	require.False(t, candidate.CreatedAt.IsZero())
 	require.False(t, candidate.UpdatedAt.IsZero())
+	require.Equal(t, storedAt, candidate.CreatedAt, "create must publish the stored timestamps")
+	require.Equal(t, storedAt, candidate.UpdatedAt, "create must publish a usable optimistic-lock token")
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+func TestProxyRepositoryCreateReadFailureDoesNotPublishPhantomState(t *testing.T) {
+	repo, mock := newProxyLifecycleGuardSQLMock(t)
+	candidate := proxyUpdateGuardCandidate(0, 5)
+	before := *candidate
+	readErr := errors.New("read created proxy failed")
+
+	mock.ExpectBegin()
+	mock.ExpectQuery(`(?s)INSERT INTO "proxies".*RETURNING "id"`).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(77)))
+	mock.ExpectQuery(`(?s)SELECT .*FROM "proxies".*WHERE .*"id" = \$1`).
+		WithArgs(int64(77)).
+		WillReturnError(readErr)
+	mock.ExpectRollback()
+
+	err := repo.Create(context.Background(), candidate)
+
+	require.ErrorIs(t, err, readErr)
+	require.Equal(t, before, *candidate, "read failure must not publish generated proxy fields")
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -167,7 +200,7 @@ func TestProxyRepositoryCreateCommitFailureDoesNotPublishPhantomState(t *testing
 		id:        backupID,
 		updatedAt: time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC),
 	})
-	expectProxyCreateSave(mock, 78)
+	expectProxyCreateSave(mock, 78, candidate)
 	mock.ExpectCommit().WillReturnError(commitErr)
 
 	err := repo.Create(context.Background(), candidate)
@@ -227,7 +260,7 @@ func TestProxyRepositoryCreateReusesOuterTransactionWithoutOwningCommit(t *testi
 		id:        backupID,
 		updatedAt: time.Date(2026, time.August, 31, 10, 0, 0, 0, time.UTC),
 	})
-	expectProxyCreateSave(mock, 79)
+	expectProxyCreateSave(mock, 79, staged)
 
 	require.NoError(t, repo.Create(outerCtx, staged))
 	require.Equal(t, int64(79), staged.ID, "outer UoW needs the staged ID for dependent writes")
@@ -268,12 +301,13 @@ func TestProxyRepositoryUpdateAllowsUnlimitedAndExactCurrentLimit(t *testing.T) 
 
 			mock.ExpectBegin()
 			expectProxyUpdateGuardLockAndCount(mock, candidate, tt.currentAccounts)
-			expectProxyUpdateGuardSave(mock, candidate)
+			storedAt := expectProxyUpdateGuardSave(mock, candidate)
 			mock.ExpectCommit()
 
 			err := repo.Update(context.Background(), candidate)
 
 			require.NoError(t, err)
+			require.Equal(t, storedAt, candidate.UpdatedAt, "update must publish the stored optimistic-lock token")
 			require.NoError(t, mock.ExpectationsWereMet())
 		})
 	}

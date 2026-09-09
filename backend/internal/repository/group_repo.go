@@ -519,6 +519,13 @@ func groupListOrder(params pagination.PaginationParams) []func(*entsql.Selector)
 	return []func(*entsql.Selector){dbent.Asc(field), dbent.Asc(tieField)}
 }
 
+// ListActiveIDs avoids loading group configuration when only membership is needed.
+func (r *groupRepository) ListActiveIDs(ctx context.Context) ([]int64, error) {
+	return r.client.Group.Query().
+		Where(group.StatusEQ(service.StatusActive)).
+		IDs(ctx)
+}
+
 func (r *groupRepository) ListActive(ctx context.Context) ([]service.Group, error) {
 	groups, err := r.client.Group.Query().
 		Where(group.StatusEQ(service.StatusActive)).
