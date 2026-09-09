@@ -2109,6 +2109,7 @@ export default {
       timeRanges: "时间段价格（峰谷价）",
       unitPerMillion: "/ 1M token",
       unitPerRequest: "/ 次",
+      unitPerImage: "/ 张",
     },
   },
 
@@ -4362,6 +4363,7 @@ export default {
         intervals: "阶梯定价",
         unitPerMillion: "/ 1M token",
         unitPerRequest: "/ 次",
+        unitPerImage: "/ 张",
       },
     },
 

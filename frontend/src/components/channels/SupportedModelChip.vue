@@ -127,11 +127,11 @@
             <PricingRow
               v-if="
                 model.pricing.billing_mode === BILLING_MODE_IMAGE &&
-                model.pricing.image_output_price != null
+                model.pricing.per_request_price != null
               "
               :label="t(prefixKey('imageOutputPrice'))"
-              :value="model.pricing.image_output_price"
-              :unit="t(prefixKey('unitPerRequest'))"
+              :value="model.pricing.per_request_price"
+              :unit="t(prefixKey('unitPerImage'))"
               :scale="1"
             />
 
@@ -247,7 +247,12 @@ function formatRange(min: number, max: number | null): string {
 }
 
 function formatInterval(iv: UserPricingInterval, mode: BillingMode): string {
-  if (mode === BILLING_MODE_PER_REQUEST || mode === BILLING_MODE_IMAGE) {
+  if (mode === BILLING_MODE_IMAGE) {
+    return iv.per_request_price == null
+      ? '-'
+      : `${formatScaled(iv.per_request_price, 1)} ${t(prefixKey('unitPerImage'))}`
+  }
+  if (mode === BILLING_MODE_PER_REQUEST) {
     return formatScaled(iv.per_request_price, 1)
   }
   const input = formatScaled(iv.input_price, perMillionScale)

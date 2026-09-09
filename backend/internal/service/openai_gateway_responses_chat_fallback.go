@@ -160,6 +160,7 @@ func (s *OpenAIGatewayService) forwardResponsesViaRawChatCompletions(
 		upstreamReq.Header.Set("user-agent", customUA)
 	}
 	account.ApplyHeaderOverrides(upstreamReq.Header)
+	ensureOpencodeSessionHeader(c, account, upstreamReq, body)
 
 	proxyURL := ""
 	if account.Proxy != nil {
@@ -273,13 +274,13 @@ func (s *OpenAIGatewayService) bufferChatCompletionsAsResponses(
 	observer := upstreamResponseModelObserverFromContext(c)
 	observer.ObserveOpenAI(respBody, strings.TrimSpace(gjson.GetBytes(respBody, "type").String()))
 	observer.MarkBillingEligible()
-	responsesResp := ChatCompletionsResponseToResponses(&ccResp, originalModel, customTools, toolSearch, namespaceTools)
-
 	usage := OpenAIUsage{}
 	usageComplete := openAIChatCompletionsBillingUsageComplete(respBody)
 	if parsed, ok := extractOpenAIUsageFromJSONBytes(respBody); ok {
 		usage = parsed
+		ccResp.Usage = normalizedChatUsage(ccResp.Usage, usage)
 	}
+	responsesResp := ChatCompletionsResponseToResponses(&ccResp, originalModel, customTools, toolSearch, namespaceTools)
 
 	result := updateOpenAIForwardResultBillingState(ctx, openAIForwardResultSnapshot{
 		requestID:            requestID,
@@ -416,9 +417,7 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		upstreamResponseModelObserverFromContext(c).ObserveOpenAI([]byte(payload), strings.TrimSpace(gjson.Get(payload, "type").String()))
 		billingUsageObservation.observePayload([]byte(payload))
 
-		if u := extractOpenAIChatStreamUsage(payload); u != nil {
-			usage = *u
-		}
+		usageUpdated := mergeOpenAIChatUsage(&usage, payload)
 
 		var chunk apicompat.ChatCompletionsChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
@@ -431,6 +430,11 @@ func (s *OpenAIGatewayService) streamChatCompletionsAsResponses(
 		if firstTokenMs == nil && !isOpenAIChatUsageOnlyStreamChunk(payload) && chatChunkStartsResponsesOutput(&chunk) {
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
+		}
+		if usageUpdated {
+			chunk.Usage = normalizedChatUsage(chunk.Usage, usage)
+		} else {
+			chunk.Usage = nil
 		}
 		writeEvents(ChatCompletionsChunkToResponsesEvents(&chunk, state))
 	}

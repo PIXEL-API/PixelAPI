@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 )
@@ -23,6 +24,45 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	}
 	if apiKey.Group.Platform != service.PlatformOpenAI {
 		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Codex models manifest is only available for OpenAI groups")
+		return
+	}
+	roomModels, err := h.gatewayService.GetAccountShareModels(c.Request.Context(), apiKey)
+	if err != nil {
+		if c.Request.Context().Err() != nil {
+			return
+		}
+		if h.handleAccountShareModeSelectionError(c, err, false) {
+			return
+		}
+		logger.LegacyPrintf("handler.openai_codex_models", "resolve account share models failed: %v", err)
+		h.errorResponse(c, http.StatusServiceUnavailable, "upstream_error", "Unable to load account share models")
+		return
+	}
+	if roomModels != nil {
+		c.Header("Cache-Control", "private, no-cache")
+		// The client ETag belongs to the filtered response, not the upstream
+		// manifest. Fetch a body before applying the current room permissions.
+		manifest := &service.CodexModelsManifest{Body: []byte(`{"models":[]}`)}
+		if len(roomModels.Models) > 0 {
+			manifest, err = h.gatewayService.FetchCodexModelsManifest(c.Request.Context(), roomModels.Account, c.Query("client_version"), "")
+		}
+		if c.Request.Context().Err() != nil {
+			return
+		}
+		if err != nil {
+			h.errorResponse(c, infraerrors.Code(err), "upstream_error", infraerrors.Message(err))
+			return
+		}
+		manifest, err = service.FilterAccountShareCodexModelsManifest(manifest, roomModels.Models, c.GetHeader("If-None-Match"))
+		if c.Request.Context().Err() != nil {
+			return
+		}
+		if err != nil {
+			logger.LegacyPrintf("handler.openai_codex_models", "filter account share models manifest failed: %v", err)
+			h.errorResponse(c, http.StatusBadGateway, "upstream_error", "Unable to load account share Codex models")
+			return
+		}
+		writeCodexModelsManifest(c, manifest)
 		return
 	}
 
@@ -67,14 +107,18 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 			return
 		}
 
-		if manifest.ETag != "" {
-			c.Header("ETag", manifest.ETag)
-		}
-		if manifest.NotModified {
-			c.Status(http.StatusNotModified)
-			return
-		}
-		c.Data(http.StatusOK, "application/json", manifest.Body)
+		writeCodexModelsManifest(c, manifest)
 		return
 	}
+}
+
+func writeCodexModelsManifest(c *gin.Context, manifest *service.CodexModelsManifest) {
+	if manifest.ETag != "" {
+		c.Header("ETag", manifest.ETag)
+	}
+	if manifest.NotModified {
+		c.Status(http.StatusNotModified)
+		return
+	}
+	c.Data(http.StatusOK, "application/json", manifest.Body)
 }

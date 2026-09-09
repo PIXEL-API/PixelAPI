@@ -9,6 +9,7 @@ import {
   BILLING_MODE_IMAGE,
   BILLING_MODE_PER_REQUEST,
   BILLING_MODE_TOKEN,
+  type BillingMode,
 } from '@/constants/channel'
 import { formatScaled } from '@/utils/pricing'
 
@@ -26,8 +27,16 @@ function pricingKey(prefix: string, key: string): string {
   return `${prefix}.${key}`
 }
 
-export function availablePriceUnit(scale: number, translate: Translate, prefix: string): string {
-  return translate(pricingKey(prefix, scale === TOKEN_PRICE_SCALE ? 'unitPerMillion' : 'unitPerRequest'))
+export function availablePriceUnit(
+  scale: number,
+  translate: Translate,
+  prefix: string,
+  billingMode?: BillingMode,
+): string {
+  const unitKey = scale === TOKEN_PRICE_SCALE
+    ? 'unitPerMillion'
+    : billingMode === BILLING_MODE_IMAGE ? 'unitPerImage' : 'unitPerRequest'
+  return translate(pricingKey(prefix, unitKey))
 }
 
 export function formatAvailablePrice(
@@ -35,9 +44,10 @@ export function formatAvailablePrice(
   scale: number,
   translate: Translate,
   prefix: string,
+  billingMode?: BillingMode,
 ): string {
   if (value == null) return '-'
-  return `${formatScaled(value, scale)} ${availablePriceUnit(scale, translate, prefix)}`
+  return `${formatScaled(value, scale)} ${availablePriceUnit(scale, translate, prefix, billingMode)}`
 }
 
 export function billingModeLabel(
@@ -79,7 +89,7 @@ export function availablePricingItems(
     items.push({
       key,
       label: translate(pricingKey(prefix, labelKey)),
-      value: formatAvailablePrice(value * multiplier, scale, translate, prefix),
+      value: formatAvailablePrice(value * multiplier, scale, translate, prefix, pricing.billing_mode),
     })
   }
 
@@ -94,7 +104,7 @@ export function availablePricingItems(
   } else if (pricing.billing_mode === BILLING_MODE_PER_REQUEST) {
     addPrice('perRequest', 'perRequestPrice', pricing.per_request_price, 1)
   } else if (pricing.billing_mode === BILLING_MODE_IMAGE) {
-    addPrice('imageOutput', 'imageOutputPrice', pricing.image_output_price, 1)
+    addPrice('imageOutput', 'imageOutputPrice', pricing.per_request_price, 1)
   }
 
   return items
@@ -120,8 +130,8 @@ export function availableModelPriceSummary(
     return `${translate(pricingKey(prefix, 'perRequestPrice'))} ${formatScaled(price, 1)}`
   }
   if (pricing.billing_mode === BILLING_MODE_IMAGE) {
-    const price = pricing.image_output_price == null ? null : pricing.image_output_price * multiplier
-    return `${translate(pricingKey(prefix, 'imageOutputPrice'))} ${formatScaled(price, 1)}`
+    const price = pricing.per_request_price == null ? null : pricing.per_request_price * multiplier
+    return `${translate(pricingKey(prefix, 'imageOutputPrice'))} ${formatAvailablePrice(price, 1, translate, prefix, pricing.billing_mode)}`
   }
   return billingModeLabel(pricing, translate, prefix)
 }
@@ -187,7 +197,7 @@ export function effectiveGroupPriceSummary(
 
   const rate = effectiveGroupRate(group, userGroupRates)
   const effectivePrice = (value: number | null, scale: number) =>
-    formatAvailablePrice(value == null ? null : value * rate, scale, translate, prefix)
+    formatAvailablePrice(value == null ? null : value * rate, scale, translate, prefix, pricing.billing_mode)
 
   if (pricing.billing_mode === BILLING_MODE_TOKEN) {
     const entries = [
@@ -213,7 +223,7 @@ export function effectiveGroupPriceSummary(
     return `${translate(pricingKey(prefix, 'perRequestPrice'))} ${effectivePrice(pricing.per_request_price, 1)}`
   }
   if (pricing.billing_mode === BILLING_MODE_IMAGE) {
-    return `${translate(pricingKey(prefix, 'imageOutputPrice'))} ${effectivePrice(pricing.image_output_price, 1)}`
+    return `${translate(pricingKey(prefix, 'imageOutputPrice'))} ${effectivePrice(pricing.per_request_price, 1)}`
   }
   return '-'
 }

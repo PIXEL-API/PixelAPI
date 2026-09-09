@@ -97,6 +97,7 @@ func (s *OpenAIGatewayService) forwardAsRawAnthropicMessages(
 		upstreamReq.Header.Set("user-agent", userAgent)
 	}
 	account.ApplyHeaderOverrides(upstreamReq.Header)
+	ensureOpencodeSessionHeader(c, account, upstreamReq, body)
 
 	proxyURL := ""
 	if account.Proxy != nil {
