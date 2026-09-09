@@ -202,7 +202,6 @@ describe('user KeysView accessibility interactions', () => {
     getAPIKeyBindingStatus.mockReset().mockResolvedValue({
       api_key_id: apiKey.id,
       active_count: 0,
-      queued_count: 0,
       ending_count: 0,
       blocking_count: 0,
       memberships: [],
@@ -341,7 +340,6 @@ describe('user KeysView accessibility interactions', () => {
     getAPIKeyBindingStatus.mockResolvedValue({
       api_key_id: apiKey.id,
       active_count: 0,
-      queued_count: 0,
       ending_count: 1,
       blocking_count: 1,
       memberships: [{ status: 'ending' }],
@@ -357,7 +355,6 @@ describe('user KeysView accessibility interactions', () => {
     expect(setupState.accountShareConflict).toMatchObject({
       show: true,
       activeCount: 0,
-      queuedCount: 0,
       endingCount: 1,
     })
     expect(wrapper.getComponent({ name: 'ApiKeyAccountShareConflictDialog' }).props('endingCount')).toBe(1)
@@ -409,7 +406,6 @@ describe('user KeysView accessibility interactions', () => {
     getAPIKeyBindingStatus.mockResolvedValue({
       api_key_id: editableApiKey.id,
       active_count: 0,
-      queued_count: 0,
       ending_count: 1,
       blocking_count: 1,
       memberships: [{ status: 'ending' }],

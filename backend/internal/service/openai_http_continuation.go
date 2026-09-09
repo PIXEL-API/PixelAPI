@@ -12,7 +12,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -138,7 +137,7 @@ func (s *defaultOpenAIWSStateStore) GetHTTPResponseOwnerStrict(
 	storedValue, err := s.cache.GetSessionString(cacheCtx, groupID, openAIHTTPResponseOwnerCacheKey(id))
 	cancel()
 	if err != nil {
-		if errors.Is(err, ErrGatewaySessionStringNotFound) || errors.Is(err, redis.Nil) {
+		if errors.Is(err, ErrGatewaySessionStringNotFound) {
 			return OpenAIHTTPResponseOwner{}, false, nil
 		}
 		return OpenAIHTTPResponseOwner{}, false, err
@@ -282,7 +281,7 @@ func (s *OpenAIGatewayService) bindHTTPResponseAccount(ctx context.Context, c *g
 	if responseID == "" || c == nil {
 		return
 	}
-	rawOwner, ok := c.Get(openAIHTTPResponseOwnerContextKey)
+	rawOwner, _ := c.Get(openAIHTTPResponseOwnerContextKey)
 	owner, ok := rawOwner.(openAIHTTPResponseRequestOwner)
 	if !ok || owner.userID <= 0 || owner.apiKeyID <= 0 {
 		return

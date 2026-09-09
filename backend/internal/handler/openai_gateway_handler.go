@@ -516,8 +516,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 	// The session hash and clean-relay lookup inputs are now self-contained.
 	// Drop the pre-normalization body before entering the long-lived retry loop.
-	sessionAnalysis = nil
-	sessionHashBody = nil
+	sessionAnalysis = nil //nolint:ineffassign // Release the parsed request reference before the long-lived retry loop.
+	sessionHashBody = nil //nolint:ineffassign // Release the pre-normalization body before the long-lived retry loop.
 	requireCompact := isOpenAIRemoteCompactPath(c)
 	routeCursor, candidateGroupIDs, routeErr := newAPIKeyGroupRouteCursorWithModeIsolation(
 		c.Request.Context(),
@@ -2927,10 +2927,8 @@ dispatchSelectionLoop:
 					}
 				}
 				if turnSelection.AccountShareMode {
-					// A paired account-share lease cannot be reacquired for the
-					// next turn until this turn's durable intent reaches ready.
-					// Waiting here keeps the release barrier and the WebSocket
-					// turn boundary atomic from the client's perspective.
+					// Keep the paired lease until this turn's billing completes,
+					// before the next turn can resolve or rebind the membership.
 					taskCtx, cancelTask := context.WithTimeout(context.Background(), 10*time.Second)
 					// This synchronous path bypasses submitUsageRecordTask, so
 					// preserve the turn's resolved binding and billing identity here.
@@ -3133,6 +3131,11 @@ func (h *OpenAIGatewayHandler) submitUsageRecordTask(requestCtx context.Context,
 		return
 	}
 	task = detachUsageRecordTask(requestCtx, task)
+	if service.IsAccountShareModeBillingRequest(requestCtx) {
+		// Keep the membership lease until the billing transaction finishes.
+		runUsageRecordTaskSync(task, "handler.openai_gateway.responses", "openai.usage_record_task_panic_recovered")
+		return
+	}
 	if h.usageRecordWorkerPool != nil {
 		mode := h.usageRecordWorkerPool.Submit(task)
 		if mode != service.UsageRecordSubmitModeDropped {

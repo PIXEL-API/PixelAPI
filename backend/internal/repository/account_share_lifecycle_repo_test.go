@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"reflect"
 	"testing"
@@ -12,6 +13,65 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/lib/pq"
 )
+
+func TestAccountShareModeRepositoryUpdateMembershipEndProgressAndRecovery(t *testing.T) {
+	repo, mock := newAccountShareLifecycleSQLMock(t)
+	const operationID = "ed53caee-30f4-4274-8f86-4f38f433b20e"
+	checkedAt := time.Date(2026, 9, 10, 10, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		code     string
+		count    int
+		message  string
+		status   string
+		affected int64
+	}{
+		{service.AccountShareMembershipEndBlockerRuntime, 0, "暂时无法确认在途请求状态", "needs_attention", 1},
+		{service.AccountShareMembershipEndBlockerInFlight, 2, "", "pending", 1},
+		{service.AccountShareMembershipEndBlockerSettlement, 0, "结算暂未完成", "needs_attention", 1},
+		// A concurrent finalizer may have completed first; the progress update is a no-op.
+		{service.AccountShareMembershipEndBlockerRuntime, 0, "暂时无法确认在途请求状态", "needs_attention", 0},
+	} {
+		blocker := map[string]any{"code": tc.code, "checked_at": checkedAt.Format(time.RFC3339Nano)}
+		if tc.count > 0 {
+			blocker["in_flight_request_count"] = tc.count
+		}
+		payload, err := json.Marshal(blocker)
+		if err != nil {
+			t.Fatal(err)
+		}
+		errorCode := tc.code
+		if tc.status == "pending" {
+			errorCode = ""
+		}
+		mock.ExpectExec("(?s)UPDATE account_share_room_operations operation.*SET status = \\$1,.*blocker = \\$2::jsonb,.*error_code = NULLIF\\(\\$3, ''\\),.*error_message = NULLIF\\(\\$4, ''\\),.*updated_at = NOW\\(\\),.*operation.id = \\$5::uuid.*operation.action = 'end_membership'.*operation.membership_id = \\$6.*operation.status IN \\('pending', 'running', 'needs_attention'\\).*EXISTS.*membership.status = 'ending'.*membership.ending_operation_id = operation.id.*membership.deleted_at IS NULL").
+			WithArgs(tc.status, string(payload), errorCode, tc.message, operationID, int64(42)).
+			WillReturnResult(sqlmock.NewResult(0, tc.affected))
+		if err := repo.UpdateMembershipEndProgress(context.Background(), 42, operationID, service.AccountShareMembershipEndProgress{
+			Code: tc.code, InFlightRequestCount: tc.count, ErrorMessage: tc.message, CheckedAt: checkedAt,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		checkedAt = checkedAt.Add(15 * time.Second)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAccountShareModeRepositoryUpdateMembershipEndProgressPropagatesWriteFailure(t *testing.T) {
+	repo, mock := newAccountShareLifecycleSQLMock(t)
+	writeErr := errors.New("operation update failed")
+	mock.ExpectExec("UPDATE account_share_room_operations operation").WillReturnError(writeErr)
+	err := repo.UpdateMembershipEndProgress(context.Background(), 42, "ed53caee-30f4-4274-8f86-4f38f433b20e", service.AccountShareMembershipEndProgress{
+		Code: service.AccountShareMembershipEndBlockerRuntime, ErrorMessage: "暂时不可用", CheckedAt: time.Now().UTC(),
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("got %v, want write failure", err)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestAccountShareModeRepositoryGetRoomManagementStatePermissionsAndScan(t *testing.T) {
 	const (
@@ -65,7 +125,6 @@ func TestAccountShareModeRepositoryGetRoomManagementStatePermissionsAndScan(t *t
 					3,
 					2,
 					10,
-					1,
 					2,
 					12,
 					8,
@@ -73,7 +132,6 @@ func TestAccountShareModeRepositoryGetRoomManagementStatePermissionsAndScan(t *t
 					5,
 					4,
 					3,
-					true,
 					true,
 					"operation-7",
 					"{701,702}",
@@ -117,7 +175,6 @@ func TestAccountShareModeRepositoryGetRoomManagementStatePermissionsAndScan(t *t
 				state.ActiveSeats != 3 ||
 				state.EndingSeats != 2 ||
 				state.AdmissionRemainingSeats != 10 ||
-				state.QueuedMembershipCount != 1 ||
 				state.RoomAccountCount != 2 ||
 				state.ConfiguredTotalConcurrency != 12 ||
 				state.EligibleTotalConcurrency != 8 ||
@@ -125,11 +182,9 @@ func TestAccountShareModeRepositoryGetRoomManagementStatePermissionsAndScan(t *t
 				t.Fatalf("unexpected management capacity fields: %#v", state)
 			}
 			if state.Blockers.ActiveMembershipCount != 4 ||
-				state.Blockers.QueuedMembershipCount != 1 ||
 				state.Blockers.EndingMembershipCount != 3 ||
 				state.Blockers.PendingBillingIntentCount != 4 ||
 				state.Blockers.SynchronousBillingPendingCount != 5 ||
-				!state.Blockers.ValidEditSession ||
 				!state.Blockers.ConflictingOperation ||
 				state.Blockers.ConflictingOperationID != "operation-7" ||
 				state.PendingOperationID != "operation-7" {
@@ -210,6 +265,12 @@ func TestAccountShareModeRepositoryRoomLifecycleOwnerDrainCommitsRevision(t *tes
 		"listing.delisted",
 		operationID,
 	)
+	mock.ExpectQuery("SELECT draining_at FROM account_share_listings").
+		WithArgs(listingID).
+		WillReturnRows(sqlmock.NewRows([]string{"draining_at"}).AddRow(time.Date(2026, 9, 10, 0, 0, 0, 0, time.UTC)))
+	mock.ExpectQuery("(?s)SELECT\\s+id\\s+FROM account_share_memberships.*status = 'active'.*FOR UPDATE").
+		WithArgs(listingID).
+		WillReturnRows(sqlmock.NewRows([]string{"id"}))
 	mock.ExpectCommit()
 	mock.ExpectQuery("SELECT\\s+l\\.id").
 		WithArgs(ownerID, listingID).
@@ -217,8 +278,6 @@ func TestAccountShareModeRepositoryRoomLifecycleOwnerDrainCommitsRevision(t *tes
 			listingID,
 			accountID,
 			ownerID,
-			"",
-			time.Time{},
 			func(row *accountShareListingRowData) {
 				row.RowVersion = newVersion
 				row.CurrentRevisionID = revisionID
@@ -252,49 +311,9 @@ func TestAccountShareModeRepositoryRoomLifecycleOwnerDrainCommitsRevision(t *tes
 	}
 }
 
-func TestEndQueuedMembershipsForRoomDrainUsesSupportedLifecycleReason(t *testing.T) {
-	const (
-		listingID    = int64(7)
-		membershipID = int64(51)
-		actorUserID  = int64(42)
-	)
-	repo, mock := newAccountShareLifecycleSQLMock(t)
-
-	mock.ExpectBegin()
-	tx, err := repo.db.BeginTx(context.Background(), nil)
-	if err != nil {
-		t.Fatalf("BeginTx: %v", err)
-	}
-	mock.ExpectQuery("SELECT id\\s+FROM account_share_memberships\\s+WHERE listing_id = \\$1\\s+AND status = 'queued'").
-		WithArgs(listingID).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(membershipID))
-	mock.ExpectExec("UPDATE account_share_membership_account_bindings").
-		WithArgs(actorUserID, "owner", sqlmock.AnyArg()).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectExec("UPDATE account_share_memberships\\s+SET status = 'ended'").
-		WithArgs(
-			sqlmock.AnyArg(),
-			service.AccountShareMembershipEndReasonRoomDraining,
-		).
-		WillReturnResult(sqlmock.NewResult(0, 1))
-
-	if err := endQueuedMembershipsForRoomDrainInTx(
-		context.Background(),
-		tx,
-		listingID,
-		actorUserID,
-		"owner",
-	); err != nil {
-		t.Fatalf("endQueuedMembershipsForRoomDrainInTx: %v", err)
-	}
-	mock.ExpectRollback()
-	if err := tx.Rollback(); err != nil {
-		t.Fatalf("Rollback: %v", err)
-	}
-}
-
-func TestEndLiveMembershipsForRoomDrainLocksMembershipsBeforeWalletUsers(t *testing.T) {
+func TestAccountShareRoomDrainLeavesBillingAndBindingsUntilFinalization(t *testing.T) {
 	const listingID = int64(7)
+	drainingAt := time.Now().UTC().Add(-5 * time.Minute)
 	repo, mock := newAccountShareLifecycleSQLMock(t)
 
 	mock.ExpectBegin()
@@ -302,33 +321,26 @@ func TestEndLiveMembershipsForRoomDrainLocksMembershipsBeforeWalletUsers(t *test
 	if err != nil {
 		t.Fatalf("BeginTx: %v", err)
 	}
-	// The queued and active membership rows must be locked before the wallet
-	// pre-lock. SQLMock's ordered expectations make the lock-order contract
-	// explicit without requiring a live PostgreSQL instance.
-	mock.ExpectQuery("(?s)SELECT\\s+consumer_user_id\\s+FROM account_share_memberships.*status = 'queued'.*FOR UPDATE").
-		WithArgs(listingID).
-		WillReturnRows(sqlmock.NewRows([]string{"consumer_user_id"}))
+	// Starting a drain only fences dispatch. No wallet or binding mutation is
+	// allowed before the ending finalizer observes that request leases drained.
 	mock.ExpectQuery("(?s)SELECT\\s+id\\s+FROM account_share_memberships.*status = 'active'.*FOR UPDATE").
 		WithArgs(listingID).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}))
-	mock.ExpectQuery("(?s)SELECT\\s+id\\s+FROM users.*ORDER BY id ASC\\s+FOR UPDATE").
-		WithArgs(listingID).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}))
-	// The queued-membership helper re-reads the rows before applying its
-	// terminal update; keep that query in the expected sequence as well.
-	mock.ExpectQuery("(?s)SELECT\\s+id\\s+FROM account_share_memberships.*status = 'queued'.*FOR UPDATE").
-		WithArgs(listingID).
-		WillReturnRows(sqlmock.NewRows([]string{"id"}))
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(70)))
+	row := accountShareEndMembershipRow(70, listingID, int64(99), 42, 20, 30, service.AccountShareMembershipStatusActive, drainingAt.Add(-time.Minute), drainingAt)
+	mock.ExpectQuery("SELECT\\s+m\\.id, m\\.listing_id").
+		WithArgs(int64(70), service.AccountShareMembershipStatusActive).
+		WillReturnRows(sqlmock.NewRows(accountShareMembershipColumns()).AddRow(row...))
+	expectAccountShareAutomaticEnding(mock, 70, listingID, 20, drainingAt, service.AccountShareMembershipEndReasonRoomDraining)
 
 	result, err := repo.endLiveMembershipsForRoomDrainInTx(
-		context.Background(), tx, listingID, 42, "owner",
+		context.Background(), tx, listingID, drainingAt,
 	)
 	if err != nil {
 		_ = tx.Rollback()
 		t.Fatalf("endLiveMembershipsForRoomDrainInTx: %v", err)
 	}
-	if result == nil || result.Processed != 0 {
-		t.Fatalf("result = %#v, want an empty drain result", result)
+	if result == nil || result.Processed != 1 {
+		t.Fatalf("result = %#v, want one fenced membership", result)
 	}
 	mock.ExpectRollback()
 	if err := tx.Rollback(); err != nil {
@@ -493,7 +505,7 @@ func TestAccountShareModeRepositoryRoomDeletionSoftDeleteBlockedRollsBack(t *tes
 			5,
 		),
 	)
-	expectLifecycleDatabaseBlockers(mock, listingID, 1, 0, 0, 0)
+	expectLifecycleDatabaseBlockers(mock, listingID, 1, 0, 0)
 	mock.ExpectRollback()
 
 	operation, err := repo.SoftDeleteRoom(
@@ -649,7 +661,7 @@ func TestAccountShareModeRepositoryRoomDeletionSoftDeleteTxACommitsClaimOnly(t *
 			oldVersion,
 		),
 	)
-	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0, 0)
+	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0)
 	mock.ExpectExec("INSERT INTO account_share_room_operations").
 		WithArgs(
 			operationID,
@@ -762,7 +774,7 @@ func TestAccountShareModeRepositoryRoomDeletionFinalizeLiveMembershipBlocked(t *
 	mock.ExpectQuery("SELECT id\\s+FROM account_share_memberships\\s+WHERE listing_id = \\$1\\s+AND status IN").
 		WithArgs(listingID).
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(901)))
-	expectLifecycleDatabaseBlockers(mock, listingID, 1, 0, 0, 0)
+	expectLifecycleDatabaseBlockers(mock, listingID, 1, 0, 0)
 	mock.ExpectRollback()
 
 	operation, err := repo.FinalizeRoomDeletion(context.Background(), listingID, operationID)
@@ -827,7 +839,7 @@ func TestAccountShareModeRepositoryRoomDeletionFinalizeClosesProjectionInOrder(t
 		WillReturnRows(sqlmock.NewRows([]string{"id"}).
 			AddRow(bindingIDs[0]).
 			AddRow(bindingIDs[1]))
-	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0, 0)
+	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0)
 	mock.ExpectQuery("SELECT\\s+id::text, listing_id, membership_id").
 		WithArgs(operationID).
 		WillReturnRows(lifecycleOperationRows(
@@ -1030,7 +1042,7 @@ func TestAccountShareModeRepositoryFinalizesPausedPendingDrainAtomically(t *test
 			accountShareRoomOperationStatusPending,
 			now,
 		))
-	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0, 0)
+	expectLifecycleDatabaseBlockers(mock, listingID, 0, 0, 0)
 	mock.ExpectExec("UPDATE account_share_listings\\s+SET status = 'paused'").
 		WithArgs(listingID, oldVersion, operationID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
@@ -1059,8 +1071,6 @@ func TestAccountShareModeRepositoryFinalizesPausedPendingDrainAtomically(t *test
 			listingID,
 			accountID,
 			ownerID,
-			"",
-			time.Time{},
 			func(row *accountShareListingRowData) {
 				row.RowVersion = finalVersion
 				row.CurrentRevisionID = revisionID
@@ -1100,8 +1110,6 @@ type lifecycleLockedListingRowData struct {
 	DeleteRequestID    any
 	DeletedAt          any
 	AccountIdentityID  any
-	EditSessionID      any
-	EditingExpiresAt   any
 	DeleteReason       any
 	DeletedByUserID    any
 }
@@ -1130,8 +1138,6 @@ func lifecycleLockedListingRows(
 		"pending_operation_id",
 		"delete_request_id",
 		"deleted_at",
-		"edit_session_id",
-		"editing_expires_at",
 		"delete_reason",
 		"deleted_by_user_id",
 	}).AddRow(
@@ -1144,8 +1150,6 @@ func lifecycleLockedListingRows(
 		row.PendingOperationID,
 		row.DeleteRequestID,
 		row.DeletedAt,
-		row.EditSessionID,
-		row.EditingExpiresAt,
 		row.DeleteReason,
 		row.DeletedByUserID,
 	)
@@ -1240,7 +1244,6 @@ func lifecycleManagementStateColumns() []string {
 		"active_count",
 		"ending_count",
 		"remaining_count",
-		"queued_count",
 		"account_count",
 		"configured_total_concurrency",
 		"eligible_total_concurrency",
@@ -1248,7 +1251,6 @@ func lifecycleManagementStateColumns() []string {
 		"synchronous_billing_pending_count",
 		"blocking_active_membership_count",
 		"blocking_ending_membership_count",
-		"valid_edit_session",
 		"conflicting_operation",
 		"conflicting_operation_id",
 		"runtime_membership_ids",
@@ -1333,7 +1335,6 @@ func expectLifecycleDatabaseBlockers(
 	mock sqlmock.Sqlmock,
 	listingID int64,
 	active int,
-	queued int,
 	ending int,
 	synchronousBilling int,
 ) {
@@ -1341,10 +1342,9 @@ func expectLifecycleDatabaseBlockers(
 		WithArgs(listingID).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"active_count",
-			"queued_count",
 			"ending_count",
 			"synchronous_billing_pending_count",
-		}).AddRow(active, queued, ending, synchronousBilling))
+		}).AddRow(active, ending, synchronousBilling))
 }
 
 func expectLifecycleRevisionSuccess(

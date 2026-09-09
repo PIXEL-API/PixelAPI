@@ -4545,7 +4545,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 		// Status-level retries are finished. Keep only response/billing metadata
 		// while reading the response; the handler owns any cross-account replay.
 		body = nil
-		originalBody = nil
+		originalBody = nil //nolint:ineffassign // Preserve request-body release before the long-lived response read.
 		analysis = nil
 		requestView = openAIRequestView{}
 		upstreamReq = nil
@@ -4972,7 +4972,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthroughWithOptions(
 			}
 			return nil, s.handleErrorResponsePassthrough(ctx, resp, c, account, body)
 		}
-		body = nil
+		body = nil //nolint:ineffassign // Preserve request-body release before the long-lived response read.
 		upstreamReq = nil
 
 		var usage *OpenAIUsage
@@ -8182,11 +8182,7 @@ func (s *OpenAIGatewayService) detachedUsageDrainTimeout() time.Duration {
 }
 
 func (s *OpenAIGatewayService) detachedStreamDrainTimeout() time.Duration {
-	timeout := s.detachedUsageDrainTimeout()
-	if timeout <= 0 || timeout > defaultDetachedStreamDrainTimeout {
-		return defaultDetachedStreamDrainTimeout
-	}
-	return timeout
+	return detachedStreamDrainTimeout(s.detachedUsageDrainTimeout())
 }
 
 func (s *OpenAIGatewayService) startDisconnectedStreamDrainDeadline(ctx context.Context, body io.Closer, requestID string) context.CancelFunc {
@@ -8197,19 +8193,7 @@ func (s *OpenAIGatewayService) startDisconnectedStreamDrainDeadline(ctx context.
 		_ = body.Close()
 		return func() {}
 	}
-	timeout := s.detachedStreamDrainTimeout()
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	go func() {
-		<-ctx.Done()
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			logger.L().Warn("openai stream drain deadline exceeded after client disconnect",
-				zap.String("request_id", requestID),
-				zap.Duration("timeout", timeout),
-			)
-			_ = body.Close()
-		}
-	}()
-	return cancel
+	return startDisconnectedStreamDrainDeadline(body, requestID, s.detachedStreamDrainTimeout())
 }
 
 type openaiNonStreamingResult struct {

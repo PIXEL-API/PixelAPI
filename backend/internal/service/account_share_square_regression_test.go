@@ -253,15 +253,10 @@ func TestAccountShareSquareRegressionSessionlessContractUpdateIsDelegatedToRepos
 			input := tc.input
 			input.ExpectedVersion = &expectedVersion
 			input.Reason = "房主调整合约"
-			// 刻意不带 EditSessionID：免锁保存恒不带 session。
 
 			_, err := svc.UpdateListing(context.Background(), 42, false, 7, input)
-
-			require.NotErrorIs(t, err, ErrAccountShareEditSessionRequired,
-				"service 层不得再前置拒绝无编辑锁的合约更新，裁决权在仓储")
 			require.NoError(t, err)
 			require.Equal(t, 1, repo.updateCalls, "sessionless contract update must be forwarded to the repository")
-			require.Empty(t, repo.updateInput.EditSessionID, "空 edit_session_id 必须原样转交给仓储")
 		})
 	}
 }

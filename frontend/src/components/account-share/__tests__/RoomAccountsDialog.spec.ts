@@ -87,7 +87,6 @@ function listing(id: number, roomName: string): AccountShareListing {
     codex_7d_limit_percent: 100,
     account_status: 'active',
     account_schedulable: true,
-    editing_mine: false,
     created_at: '2026-07-24T00:00:00Z',
     updated_at: '2026-07-24T00:00:00Z',
   }

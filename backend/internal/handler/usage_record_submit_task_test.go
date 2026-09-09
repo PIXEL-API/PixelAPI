@@ -25,6 +25,48 @@ func newUsageRecordTestPool(t *testing.T) *service.UsageRecordWorkerPool {
 	return pool
 }
 
+func TestAccountShareUsageWaitsForBillingBeforeReleaseWithBusyPool(t *testing.T) {
+	for _, kind := range []string{"messages", "openai"} {
+		t.Run(kind, func(t *testing.T) {
+			pool := newUsageRecordTestPool(t)
+			workerStarted, unblockWorker := make(chan struct{}), make(chan struct{})
+			pool.Submit(func(context.Context) { close(workerStarted); <-unblockWorker })
+			<-workerStarted
+			defer close(unblockWorker)
+			var released atomic.Bool
+			slot := func() *service.AcquireResult {
+				return &service.AcquireResult{
+					Acquired: true, LeaseTTL: time.Minute,
+					RefreshFunc: func(context.Context) (bool, error) { return true, nil },
+					ReleaseFunc: func() { released.Store(true) },
+				}
+			}
+			lease, err := service.NewAccountShareRuntimeLease(context.Background(), slot(), slot())
+			require.NoError(t, err)
+			defer lease.Release()
+			ctx, cancel := service.BindAccountShareRuntimeLeaseContext(context.Background(), lease)
+			cancel() // disconnected clients must still be billed
+			submit := (&GatewayHandler{usageRecordWorkerPool: pool}).submitUsageRecordTask
+			if kind == "openai" {
+				submit = (&OpenAIGatewayHandler{usageRecordWorkerPool: pool}).submitUsageRecordTask
+			}
+			var billed atomic.Bool
+			finalizeAccountShareRequest(true, func() {
+				submit(ctx, func(billingCtx context.Context) {
+					require.NoError(t, billingCtx.Err())
+					require.False(t, released.Load(), "membership is still in flight during billing")
+					billed.Store(true)
+				})
+			}, func() {
+				require.True(t, billed.Load(), "a busy worker pool must not postpone room billing past release")
+				lease.Release()
+			})
+			require.True(t, billed.Load())
+			require.True(t, released.Load())
+		})
+	}
+}
+
 func TestUsageRecordContextSnapshotDetachesParentValues(t *testing.T) {
 	type parentKey struct{}
 	parent := context.WithValue(context.Background(), parentKey{}, "large-request-marker")

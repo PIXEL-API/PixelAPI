@@ -9,6 +9,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestIsAccountShareModeBillingRequest(t *testing.T) {
+	require.False(t, IsAccountShareModeBillingRequest(nil)) //nolint:staticcheck // Exercise the explicit nil-context contract.
+	ctx := WithAccountShareModeRequest(context.Background(), 21, 34)
+	require.False(t, IsAccountShareModeBillingRequest(ctx), "routing marker alone must keep ordinary usage asynchronous")
+	request, ok := AccountShareModeRequestFromContext(ctx)
+	require.True(t, ok)
+	request.state.set(21, 34, 55, nil, nil, nil)
+	require.False(t, IsAccountShareModeBillingRequest(ctx))
+	request.state.set(21, 34, 55, &AccountShareMembership{ID: 67}, &AccountShareListing{ID: 89}, nil)
+	require.True(t, IsAccountShareModeBillingRequest(ctx))
+	snapshot, ok := SnapshotAccountShareModeRequest(ctx)
+	require.True(t, ok)
+	require.True(t, IsAccountShareModeBillingRequest(snapshot.Context(context.Background())))
+}
+
 func TestAccountShareRuntimeLease(t *testing.T) {
 	newSlot := func(name string, ttl time.Duration, refresh func(context.Context) (bool, error), releaseOrder *[]string) *AcquireResult {
 		return &AcquireResult{

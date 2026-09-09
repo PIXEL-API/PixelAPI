@@ -310,9 +310,6 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		}
 		result, forwardErr := func() (*service.OpenAIForwardResult, error) {
 			defer cancelForward()
-			if accountRelease != nil {
-				defer accountRelease()
-			}
 			return h.gatewayService.ForwardAlphaSearch(forwardCtx, c, account, forwardBody)
 		}()
 		service.SetOpsLatencyMs(c, service.OpsResponseLatencyMsKey, time.Since(forwardStart).Milliseconds())
@@ -335,14 +332,11 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 			})
 		}
 		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-		if forwardErr != nil && hasBillableUsage {
-			recordUsageResult(result)
-		}
+		finalizeAccountShareRequest(hasBillableUsage || forwardErr == nil, func() { recordUsageResult(result) }, accountRelease)
 
 		if forwardErr == nil {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil, account.GetMappedModel(selectionModel))
 			routeCursor.recordSuccess(currentAPIKey.ID)
-			recordUsageResult(result)
 			return
 		}
 

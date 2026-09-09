@@ -367,12 +367,7 @@ routeLoop:
 				})
 			}
 			hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-			if err != nil && hasBillableUsage {
-				recordUsageResult(result)
-			}
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
-			}
+			finalizeAccountShareRequest(hasBillableUsage || err == nil, func() { recordUsageResult(result) }, accountReleaseFunc)
 			upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 			responseLatencyMs := forwardDurationMs
 			if upstreamLatencyMs > 0 && forwardDurationMs > upstreamLatencyMs {
@@ -481,8 +476,6 @@ routeLoop:
 				h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil, account.GetMappedModel(selectionModel))
 			}
 			routeCursor.recordSuccess(apiKey.ID)
-
-			recordUsageResult(result)
 
 			reqLog.Debug("openai.images.request_completed",
 				zap.Int64("account_id", account.ID),

@@ -1,9 +1,10 @@
 <template>
   <Teleport to="#dialog-root">
-    <Transition name="modal">
+    <Transition :name="placement === 'right' ? 'modal-drawer' : 'modal'">
       <div
         v-if="show"
         class="modal-overlay"
+        :class="{ 'modal-overlay-right': placement === 'right' }"
         :data-ui-skin="uiSkin"
         :style="zIndexStyle"
         :aria-labelledby="dialogId"
@@ -14,7 +15,7 @@
         <!-- Modal panel -->
         <div
           ref="dialogRef"
-          :class="['modal-content', widthClasses, panelClass]"
+          :class="['modal-content', { 'modal-content-right': placement === 'right' }, widthClasses, panelClass]"
           tabindex="-1"
           @click.stop
         >
@@ -194,6 +195,7 @@ interface Props {
   show: boolean
   title: string
   width?: DialogWidth
+  placement?: 'center' | 'right'
   closeOnEscape?: boolean
   closeOnClickOutside?: boolean
   closeDisabled?: boolean
@@ -208,6 +210,7 @@ interface Emits {
 
 const props = withDefaults(defineProps<Props>(), {
   width: 'normal',
+  placement: 'center',
   closeOnEscape: true,
   closeOnClickOutside: false,
   closeDisabled: false,
@@ -235,6 +238,8 @@ const zIndexStyle = computed(() => {
 })
 
 const widthClasses = computed(() => {
+  if (props.placement === 'right') return ''
+
   // Width guidance: narrow=confirm/short prompts, normal=standard forms,
   // wide=multi-section forms or rich content, extra-wide=analytics/tables,
   // full=full-screen or very dense layouts.
@@ -406,3 +411,75 @@ onBeforeUnmount(() => {
   deactivateDialog(true)
 })
 </script>
+
+<style scoped>
+.modal-overlay.modal-overlay-right {
+  align-items: stretch;
+  justify-content: flex-end;
+  overflow: hidden;
+  padding: 0;
+}
+
+.modal-content.modal-content-right {
+  width: 100%;
+  max-width: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  border-radius: 0;
+}
+
+.modal-content-right > .modal-body {
+  min-height: 0;
+  overscroll-behavior-y: contain;
+}
+
+@media (min-width: 640px) {
+  .modal-content.modal-content-right {
+    /* Set this property through panelClass to customize a drawer's desktop width. */
+    max-width: min(100vw, var(--dialog-drawer-width, 48rem));
+  }
+}
+
+.modal-drawer-enter-active {
+  transition: opacity 250ms ease-out;
+}
+
+.modal-drawer-leave-active {
+  transition: opacity 200ms ease-in;
+}
+
+.modal-drawer-enter-active .modal-content-right {
+  transition: transform 250ms ease-out;
+}
+
+.modal-drawer-leave-active .modal-content-right {
+  transition: transform 200ms ease-in;
+}
+
+.modal-drawer-enter-from,
+.modal-drawer-leave-to {
+  opacity: 0;
+}
+
+.modal-drawer-enter-from .modal-content-right,
+.modal-drawer-leave-to .modal-content-right {
+  transform: translateX(100%);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal-drawer-enter-active,
+  .modal-drawer-leave-active,
+  .modal-drawer-enter-active .modal-content-right,
+  .modal-drawer-leave-active .modal-content-right {
+    transition-duration: 1ms;
+  }
+
+  .modal-drawer-enter-from .modal-content-right,
+  .modal-drawer-leave-to .modal-content-right {
+    transform: none;
+  }
+}
+</style>

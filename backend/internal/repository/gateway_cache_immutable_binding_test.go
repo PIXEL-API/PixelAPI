@@ -5,10 +5,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 )
+
+func TestGatewayCacheSessionAccountIDErrorContract(t *testing.T) {
+	server := miniredis.RunT(t)
+	client := redis.NewClient(&redis.Options{Addr: server.Addr()})
+	t.Cleanup(func() { _ = client.Close() })
+	cache := &gatewayCache{rdb: client}
+	ctx := context.Background()
+
+	accountID, err := cache.GetSessionAccountID(ctx, 1, "missing-session")
+	require.Zero(t, accountID)
+	require.ErrorIs(t, err, service.ErrGatewaySessionStringNotFound)
+	require.ErrorIs(t, err, redis.Nil)
+
+	require.NoError(t, client.Set(ctx, buildSessionKey(1, "corrupted-session"), "not-an-account-id", time.Minute).Err())
+	_, err = cache.GetSessionAccountID(ctx, 1, "corrupted-session")
+	require.Error(t, err)
+	require.NotErrorIs(t, err, service.ErrGatewaySessionStringNotFound)
+	require.NotErrorIs(t, err, redis.Nil)
+
+	server.SetError("ERR cache unavailable")
+	_, err = cache.GetSessionAccountID(ctx, 1, "missing-session")
+	require.ErrorContains(t, err, "cache unavailable")
+	require.NotErrorIs(t, err, service.ErrGatewaySessionStringNotFound)
+	require.NotErrorIs(t, err, redis.Nil)
+}
 
 func TestGatewayCacheBindSessionStringImmutable(t *testing.T) {
 	server := miniredis.RunT(t)

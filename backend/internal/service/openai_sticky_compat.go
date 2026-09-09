@@ -12,7 +12,6 @@ import (
 
 	"github.com/cespare/xxhash/v2"
 	"github.com/gin-gonic/gin"
-	"github.com/redis/go-redis/v9"
 )
 
 type openAILegacySessionHashContextKey struct{}
@@ -172,7 +171,7 @@ func (s *OpenAIGatewayService) getStickySessionAccountIDStrict(ctx context.Conte
 	}
 
 	if !s.openAISessionHashReadOldFallbackEnabled() {
-		if primaryErr != nil && !errors.Is(primaryErr, redis.Nil) {
+		if primaryErr != nil && !errors.Is(primaryErr, ErrGatewaySessionStringNotFound) {
 			return 0, primaryErr
 		}
 		return 0, nil
@@ -180,7 +179,7 @@ func (s *OpenAIGatewayService) getStickySessionAccountIDStrict(ctx context.Conte
 
 	legacyKey := s.openAILegacySessionCacheKey(ctx, sessionHash)
 	if legacyKey == "" {
-		if primaryErr != nil && !errors.Is(primaryErr, redis.Nil) {
+		if primaryErr != nil && !errors.Is(primaryErr, ErrGatewaySessionStringNotFound) {
 			return 0, primaryErr
 		}
 		return 0, nil
@@ -192,10 +191,10 @@ func (s *OpenAIGatewayService) getStickySessionAccountIDStrict(ctx context.Conte
 		openAIStickyLegacyReadFallbackHit.Add(1)
 		return legacyAccountID, nil
 	}
-	if primaryErr != nil && !errors.Is(primaryErr, redis.Nil) {
+	if primaryErr != nil && !errors.Is(primaryErr, ErrGatewaySessionStringNotFound) {
 		return 0, primaryErr
 	}
-	if legacyErr != nil && !errors.Is(legacyErr, redis.Nil) {
+	if legacyErr != nil && !errors.Is(legacyErr, ErrGatewaySessionStringNotFound) {
 		return 0, legacyErr
 	}
 	return 0, nil

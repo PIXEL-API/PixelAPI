@@ -1264,7 +1264,6 @@
       :action="accountShareConflict.action"
       :key-name="accountShareConflict.key?.name || ''"
       :active-count="accountShareConflict.activeCount"
-      :queued-count="accountShareConflict.queuedCount"
       :ending-count="accountShareConflict.endingCount"
       :navigating="accountShareConflictNavigating"
       @close="closeAccountShareConflict"
@@ -1320,18 +1319,32 @@
           {{ t('keys.imagePlaygroundModelDialog.description') }}
         </p>
         <div>
-          <label for="image-playground-model" class="input-label">
+          <label id="image-playground-model-label" class="input-label">
             {{ t('keys.imagePlaygroundModelDialog.modelLabel') }}
           </label>
-          <input
+          <Select
             id="image-playground-model"
             v-model="imagePlaygroundModel"
-            type="text"
-            required
-            autocomplete="off"
-            class="input min-h-11 w-full"
-            :placeholder="t('keys.imagePlaygroundModelDialog.modelPlaceholder')"
+            :options="imagePlaygroundModels.map(model => ({ value: model, label: model }))"
+            :disabled="imagePlaygroundModelsLoading || imagePlaygroundModels.length === 0"
+            :placeholder="imagePlaygroundModelsLoading ? t('common.loading') : t('keys.imagePlaygroundModelDialog.modelPlaceholder')"
+            aria-labelledby="image-playground-model-label"
+            searchable
           />
+          <p v-if="imagePlaygroundModelsError" class="mt-2 text-sm text-red-600 dark:text-red-400" role="alert">
+            {{ imagePlaygroundModelsError }}
+          </p>
+          <p v-else-if="!imagePlaygroundModelsLoading && imagePlaygroundModels.length === 0" class="mt-2 text-sm text-gray-600 dark:text-gray-400" role="status">
+            {{ t('keys.imagePlaygroundModelDialog.empty') }}
+          </p>
+          <button
+            v-if="imagePlaygroundModelsError"
+            type="button"
+            class="btn btn-secondary mt-2 min-h-11"
+            @click="loadImagePlaygroundModels"
+          >
+            {{ t('common.tryAgain') }}
+          </button>
         </div>
       </form>
       <template #footer>
@@ -1553,7 +1566,6 @@ interface AccountShareConflictState {
   action: AccountShareBlockedAction
   key: ApiKey | null
   activeCount: number | null
-  queuedCount: number | null
   endingCount: number | null
 }
 
@@ -1814,9 +1826,15 @@ const showCcsClientSelect = ref(false)
 const pendingCcsRow = ref<ApiKey | null>(null)
 const showImagePlaygroundModelDialog = ref(false)
 const pendingImagePlaygroundRow = ref<ApiKey | null>(null)
-const IMAGE_PLAYGROUND_DEFAULT_MODEL = 'gpt-image-2'
 const imagePlaygroundModel = ref('')
-const canOpenImagePlayground = computed(() => imagePlaygroundModel.value.trim().length > 0)
+const imagePlaygroundModels = ref<string[]>([])
+const imagePlaygroundModelsLoading = ref(false)
+const imagePlaygroundModelsError = ref('')
+let imagePlaygroundModelsController: AbortController | null = null
+const canOpenImagePlayground = computed(() =>
+  !imagePlaygroundModelsLoading.value && !imagePlaygroundModelsError.value &&
+  imagePlaygroundModels.value.includes(imagePlaygroundModel.value)
+)
 const selectedKey = ref<ApiKey | null>(null)
 const copiedKeyId = ref<number | null>(null)
 const groupSelectorKeyId = ref<number | null>(null)
@@ -1832,7 +1850,6 @@ const accountShareConflict = ref<AccountShareConflictState>({
   action: 'change_group',
   key: null,
   activeCount: null,
-  queuedCount: null,
   endingCount: null
 })
 let abortController: AbortController | null = null
@@ -2443,7 +2460,6 @@ const showAccountShareConflict = (
     action,
     key,
     activeCount: status?.active_count ?? null,
-    queuedCount: status?.queued_count ?? null,
     endingCount: status?.ending_count ?? null
   }
 }
@@ -2882,20 +2898,56 @@ const executeCcsImport = (row: ApiKey, clientType: 'claude' | 'gemini') => {
 
 const openImagePlayground = (row: ApiKey) => {
   pendingImagePlaygroundRow.value = row
-  imagePlaygroundModel.value = IMAGE_PLAYGROUND_DEFAULT_MODEL
   showImagePlaygroundModelDialog.value = true
+  void loadImagePlaygroundModels()
+}
+
+const loadImagePlaygroundModels = async () => {
+  const row = pendingImagePlaygroundRow.value
+  if (!row) return
+
+  imagePlaygroundModelsController?.abort()
+  const controller = new AbortController()
+  imagePlaygroundModelsController = controller
+  imagePlaygroundModel.value = ''
+  imagePlaygroundModels.value = []
+  imagePlaygroundModelsError.value = ''
+  imagePlaygroundModelsLoading.value = true
+  try {
+    const models = await keysAPI.getImageModels(
+      publicSettings.value?.api_base_url || window.location.origin,
+      row.key,
+      { signal: controller.signal }
+    )
+    if (controller.signal.aborted) return
+    imagePlaygroundModels.value = models
+    imagePlaygroundModel.value = models.length === 1 ? models[0] : ''
+  } catch (error) {
+    if (controller.signal.aborted || isAbortError(error)) return
+    imagePlaygroundModelsError.value = t('keys.imagePlaygroundModelDialog.loadFailed')
+  } finally {
+    if (imagePlaygroundModelsController === controller) {
+      imagePlaygroundModelsLoading.value = false
+      imagePlaygroundModelsController = null
+    }
+  }
 }
 
 const closeImagePlaygroundModelDialog = () => {
+  imagePlaygroundModelsController?.abort()
+  imagePlaygroundModelsController = null
+  imagePlaygroundModelsLoading.value = false
   showImagePlaygroundModelDialog.value = false
   pendingImagePlaygroundRow.value = null
   imagePlaygroundModel.value = ''
+  imagePlaygroundModels.value = []
+  imagePlaygroundModelsError.value = ''
 }
 
 const confirmOpenImagePlayground = () => {
   const row = pendingImagePlaygroundRow.value
   const model = imagePlaygroundModel.value.trim()
-  if (!row || !model) return
+  if (!row || !canOpenImagePlayground.value) return
 
   try {
     const baseUrl = publicSettings.value?.api_base_url || window.location.origin
@@ -2967,6 +3019,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  imagePlaygroundModelsController?.abort()
   document.removeEventListener('click', closeGroupSelector)
   document.removeEventListener('click', handleColumnSettingsClickOutside)
   document.removeEventListener('focusin', handleGroupSelectorFocusIn)

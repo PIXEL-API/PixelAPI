@@ -82,24 +82,6 @@ func (s *balanceRedeemRepoStub) Create(ctx context.Context, code *RedeemCode) er
 	return nil
 }
 
-type authCacheInvalidatorStub struct {
-	userIDs  []int64
-	groupIDs []int64
-	keys     []string
-}
-
-func (s *authCacheInvalidatorStub) InvalidateAuthCacheByKey(ctx context.Context, key string) {
-	s.keys = append(s.keys, key)
-}
-
-func (s *authCacheInvalidatorStub) InvalidateAuthCacheByUserID(ctx context.Context, userID int64) {
-	s.userIDs = append(s.userIDs, userID)
-}
-
-func (s *authCacheInvalidatorStub) InvalidateAuthCacheByGroupID(ctx context.Context, groupID int64) {
-	s.groupIDs = append(s.groupIDs, groupID)
-}
-
 func newAdminBalanceTestClient(t *testing.T) *dbent.Client {
 	t.Helper()
 

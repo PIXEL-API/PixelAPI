@@ -26,8 +26,7 @@ type Proxy struct {
 	Username string
 	Password string
 	// OwnerUserID 为 nil 表示平台代理（所有用户可见）；非 nil 表示专属代理，
-	// 仅对该用户显示可用。来源有二：管理员显式指派（自 1.2.29 起），
-	// 以及迁移 256 保留的历史用户自有代理。
+	// 仅该用户可用和管理，包括用户自建、管理员指派以及历史保留的个人代理。
 	OwnerUserID *int64
 	// Platform 为空字符串表示通用代理（所有平台可用）。
 	Platform string
@@ -99,8 +98,8 @@ func IsValidProxyPlatform(platform string) bool {
 // Platform 为空表示调用方未提供平台信息，此时只有通用代理可用；
 // AccountLevel 为空/unknown 表示只有“所有等级可用”的代理可用。
 //
-// OwnerUserID 控制专属代理的可见性：owner_user_id 非空的代理（管理员指派的
-// 专属代理，或迁移 256 保留的历史用户自有代理）仅对其归属用户可见可用。
+// OwnerUserID 控制专属代理的可见性：owner_user_id 非空的代理
+// （用户自建或管理员指派）仅对其归属用户可见可用。
 //   - 传 0 时只返回平台代理（owner_user_id IS NULL）；
 //   - 传用户 ID 时，除平台代理外还放行该用户名下的专属代理。
 //     专属代理不受平台/等级筛选限制，对归属用户全量可见。

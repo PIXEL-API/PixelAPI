@@ -106,12 +106,10 @@ var (
 
 type AccountShareRoomBlockers struct {
 	ActiveMembershipCount          int    `json:"active_membership_count"`
-	QueuedMembershipCount          int    `json:"queued_membership_count"`
 	EndingMembershipCount          int    `json:"ending_membership_count"`
 	InFlightRequestCount           int    `json:"in_flight_request_count"`
 	PendingBillingIntentCount      int    `json:"pending_billing_intent_count"`
 	SynchronousBillingPendingCount int    `json:"synchronous_billing_pending_count"`
-	ValidEditSession               bool   `json:"valid_edit_session"`
 	ConflictingOperation           bool   `json:"conflicting_operation"`
 	ConflictingOperationID         string `json:"conflicting_operation_id,omitempty"`
 	RuntimeDependencyUnavailable   bool   `json:"runtime_dependency_unavailable"`
@@ -119,12 +117,10 @@ type AccountShareRoomBlockers struct {
 
 func (b AccountShareRoomBlockers) Any() bool {
 	return b.ActiveMembershipCount > 0 ||
-		b.QueuedMembershipCount > 0 ||
 		b.EndingMembershipCount > 0 ||
 		b.InFlightRequestCount > 0 ||
 		b.PendingBillingIntentCount > 0 ||
 		b.SynchronousBillingPendingCount > 0 ||
-		b.ValidEditSession ||
 		b.ConflictingOperation ||
 		b.RuntimeDependencyUnavailable
 }
@@ -132,12 +128,10 @@ func (b AccountShareRoomBlockers) Any() bool {
 func (b AccountShareRoomBlockers) Metadata() map[string]string {
 	return map[string]string{
 		"active_membership_count":           strconv.Itoa(b.ActiveMembershipCount),
-		"queued_membership_count":           strconv.Itoa(b.QueuedMembershipCount),
 		"ending_membership_count":           strconv.Itoa(b.EndingMembershipCount),
 		"in_flight_request_count":           strconv.Itoa(b.InFlightRequestCount),
 		"pending_billing_intent_count":      strconv.Itoa(b.PendingBillingIntentCount),
 		"synchronous_billing_pending_count": strconv.Itoa(b.SynchronousBillingPendingCount),
-		"valid_edit_session":                strconv.FormatBool(b.ValidEditSession),
 		"conflicting_operation":             strconv.FormatBool(b.ConflictingOperation),
 		"conflicting_operation_id":          b.ConflictingOperationID,
 		"runtime_dependency_unavailable":    strconv.FormatBool(b.RuntimeDependencyUnavailable),
@@ -157,7 +151,6 @@ type AccountShareRoomManagementState struct {
 	ActiveSeats                int                      `json:"active_seats"`
 	EndingSeats                int                      `json:"ending_seats"`
 	AdmissionRemainingSeats    int                      `json:"admission_remaining_seats"`
-	QueuedMembershipCount      int                      `json:"queued_membership_count"`
 	RoomAccountCount           int                      `json:"room_account_count"`
 	ConfiguredTotalConcurrency int                      `json:"configured_total_concurrency"`
 	EligibleTotalConcurrency   int                      `json:"eligible_total_concurrency"`
@@ -222,6 +215,20 @@ type AccountShareRoomOperation struct {
 	StartedAt       *time.Time     `json:"started_at,omitempty"`
 	CompletedAt     *time.Time     `json:"completed_at,omitempty"`
 	UpdatedAt       time.Time      `json:"updated_at"`
+}
+
+const (
+	AccountShareMembershipEndBlockerInFlight   = "in_flight_requests"
+	AccountShareMembershipEndBlockerRuntime    = "runtime_dependency_unavailable"
+	AccountShareMembershipEndBlockerSettlement = "settlement_error"
+)
+
+// AccountShareMembershipEndProgress 投影到既有退出 operation，状态不影响重试资格。
+type AccountShareMembershipEndProgress struct {
+	Code                 string
+	InFlightRequestCount int
+	ErrorMessage         string
+	CheckedAt            time.Time
 }
 
 type accountShareRoomDeleteClaims struct {
@@ -384,8 +391,8 @@ func (s *AccountShareModeService) DrainRoom(
 	); err != nil {
 		return nil, err
 	}
-	// 同步清退全部成员（排队直接终结、活跃结算+退款）。失败不阻塞下架——
-	// finalizer 每 15s 会对残留成员重跑清退直至收口。
+	// 下架事务已经将成员置为 ending；幂等补清覆盖旧状态与恢复流程，
+	// 所有退款和解绑仍等待在途请求结束后由 finalizer 执行。
 	if billing, err := repo.ClearRoomMembersForDrain(ctx, actorUserID, actorIsAdmin, listingID); err != nil {
 		log.Printf("account_share_mode: drain member clearing failed (finalizer will retry): listing=%d err=%v", listingID, err)
 	} else {
@@ -870,7 +877,7 @@ func (s *AccountShareModeService) processRoomLifecycleOnce(ctx context.Context, 
 		case AccountShareRoomOperationActionDrain:
 			// 残留成员重清退：排空事务与"派发失败降级"并发时可能漏掉一个
 			// 恰在降级中的成员，这里幂等重跑清退直至归零。
-			if state.Blockers.QueuedMembershipCount > 0 || state.Blockers.ActiveMembershipCount > 0 {
+			if state.Blockers.ActiveMembershipCount > 0 {
 				if leaseErr := guard.Check(ctx); leaseErr != nil {
 					return errors.Join(errors.Join(processingErrors...), leaseErr)
 				}
@@ -1049,7 +1056,6 @@ func accountShareRoomAllowedActions(state *AccountShareRoomManagementState, view
 			actions = append(actions, AccountShareRoomActionSuspend)
 		}
 	case AccountShareListingStatusDraining:
-		actions = append(actions, AccountShareRoomActionActivate)
 		if viewerIsAdmin {
 			actions = append(actions, AccountShareRoomActionSuspend)
 		}

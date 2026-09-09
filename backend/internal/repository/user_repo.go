@@ -496,6 +496,10 @@ func (r *userRepository) Delete(ctx context.Context, id int64) error {
 }
 
 func (r *userRepository) deleteUser(ctx context.Context, exec *dbent.Client, id int64) error {
+	if err := ensureUserAccountShareSettled(ctx, exec, id); err != nil {
+		return err
+	}
+
 	identityIDs, err := exec.AuthIdentity.Query().
 		Where(authidentity.UserIDEQ(id)).
 		IDs(ctx)
@@ -527,6 +531,60 @@ func (r *userRepository) deleteUser(ctx context.Context, exec *dbent.Client, id 
 	}
 	if affected == 0 {
 		return service.ErrUserNotFound
+	}
+	return nil
+}
+
+// JoinListing locks both the consumer and owner before inserting a membership.
+// Holding the same user row through deletion makes this check authoritative even
+// when joining and deleting happen concurrently. Do not filter deleted listings:
+// their unfinished memberships still require the owner's wallet to settle.
+func ensureUserAccountShareSettled(ctx context.Context, client *dbent.Client, userID int64) error {
+	userQuery := client.User.Query().Where(dbuser.IDEQ(userID), dbuser.DeletedAtIsNil())
+	if client.Driver().Dialect() == dialect.Postgres {
+		userQuery = userQuery.ForUpdate()
+	}
+	if _, err := userQuery.OnlyID(ctx); err != nil {
+		return translatePersistenceError(err, service.ErrUserNotFound, nil)
+	}
+	exec := sqlExecutorFromEntClient(client)
+	if exec == nil {
+		return fmt.Errorf("user deletion sql executor is not configured")
+	}
+	rows, err := exec.QueryContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM account_share_memberships m
+			WHERE m.consumer_user_id = $1 AND m.deleted_at IS NULL
+				AND m.status IN ($2, $3)
+		) OR EXISTS (
+			SELECT 1 FROM account_share_listings l
+			JOIN account_share_memberships m ON m.listing_id = l.id
+			WHERE l.owner_user_id = $1 AND m.deleted_at IS NULL
+				AND m.status IN ($2, $3)
+		)
+	`, userID, service.AccountShareMembershipStatusActive, service.AccountShareMembershipStatusEnding)
+	if err != nil {
+		return fmt.Errorf("check user account share settlement: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return fmt.Errorf("user account share settlement check returned no result")
+	}
+	var unsettled bool
+	if err := rows.Scan(&unsettled); err != nil {
+		return err
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if unsettled {
+		return service.ErrUserAccountShareUnsettled
 	}
 	return nil
 }

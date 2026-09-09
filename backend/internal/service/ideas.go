@@ -74,11 +74,11 @@ func SlugifyIdeaTag(name string) string {
 	for _, r := range name {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r >= 0x4e00 && r <= 0x9fff:
-			b.WriteRune(r)
+			_, _ = b.WriteRune(r)
 			lastDash = false
 		default:
 			if !lastDash {
-				b.WriteRune('-')
+				_, _ = b.WriteRune('-')
 				lastDash = true
 			}
 		}

@@ -447,12 +447,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 			})
 		}
 		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-		if err != nil && hasBillableUsage {
-			recordUsageResult(result)
-		}
-		if accountReleaseFunc != nil {
-			accountReleaseFunc()
-		}
+		finalizeAccountShareRequest(hasBillableUsage || err == nil, func() { recordUsageResult(result) }, accountReleaseFunc)
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
 		if upstreamLatencyMs > 0 && forwardDurationMs > upstreamLatencyMs {
@@ -551,7 +546,6 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		}
 		routeCursor.recordSuccess(apiKey.ID)
 
-		recordUsageResult(result)
 		reqLog.Debug("openai_chat_completions.request_completed",
 			zap.Int64("account_id", account.ID),
 			zap.Int("switch_count", switchCount),

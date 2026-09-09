@@ -2872,7 +2872,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				setOpsUpstreamError(c, http.StatusServiceUnavailable, "continuation state is unavailable; please retry", "")
 				return nil, wrapOpenAIWSFallback("continuation_state_unavailable", bindErr)
 			}
-			responseOwnerBound = true
 		}
 
 		c.Data(http.StatusOK, "application/json", finalResponse)
@@ -4889,7 +4888,6 @@ func (s *OpenAIGatewayService) ResolveOpenAIWSContinuationRouteGroup(
 			)
 		}
 
-		matchedGroupID = 0
 		matched = false
 		for _, groupID := range groupIDs {
 			ownerSession, err := store.GetResponseSessionStrict(ctx, groupID, responseID)
@@ -4902,7 +4900,6 @@ func (s *OpenAIGatewayService) ResolveOpenAIWSContinuationRouteGroup(
 			if matched {
 				return 0, false, fmt.Errorf("%w: response session exists in multiple route groups (legacy)", errOpenAIWSContinuationAccountUnresolved)
 			}
-			matchedGroupID = groupID
 			matched = true
 		}
 		if matched {

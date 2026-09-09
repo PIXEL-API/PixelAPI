@@ -1544,11 +1544,6 @@ func lockAndHydrateAccountMutationRooms(
 			row_version,
 			current_revision_id,
 			status,
-			(
-				edit_session_id IS NOT NULL
-				AND editing_expires_at IS NOT NULL
-				AND editing_expires_at > NOW()
-			),
 			(pending_operation_id IS NOT NULL),
 			COALESCE(pending_operation_id::text, '')
 		FROM account_share_listings
@@ -1577,7 +1572,6 @@ func lockAndHydrateAccountMutationRooms(
 			&version.version,
 			&version.revision,
 			&version.lifecycleStatus,
-			&version.blockers.ValidEditSession,
 			&version.blockers.ConflictingOperation,
 			&version.blockers.ConflictingOperationID,
 		); err != nil {
@@ -1602,7 +1596,6 @@ func lockAndHydrateAccountMutationRooms(
 			SELECT
 				listing_id,
 				COUNT(*) FILTER (WHERE status = 'active')::int AS active_count,
-				COUNT(*) FILTER (WHERE status = 'queued')::int AS queued_count,
 				COUNT(*) FILTER (WHERE status = 'ending')::int AS ending_count,
 				COUNT(*) FILTER (
 					WHERE settlement_status IN ('pending', 'processing', 'failed')
@@ -1626,7 +1619,6 @@ func lockAndHydrateAccountMutationRooms(
 		SELECT
 			listing.id,
 			COALESCE(membership_blockers.active_count, 0),
-			COALESCE(membership_blockers.queued_count, 0),
 			COALESCE(membership_blockers.ending_count, 0),
 			COALESCE(membership_blockers.settlement_count, 0),
 			COALESCE(billing_blockers.pending_count, 0),
@@ -1652,7 +1644,6 @@ func lockAndHydrateAccountMutationRooms(
 		if err := blockerRows.Scan(
 			&listingID,
 			&version.blockers.ActiveMembershipCount,
-			&version.blockers.QueuedMembershipCount,
 			&version.blockers.EndingMembershipCount,
 			&version.blockers.SynchronousBillingPendingCount,
 			&version.blockers.PendingBillingIntentCount,
@@ -1667,7 +1658,6 @@ func lockAndHydrateAccountMutationRooms(
 			return service.ErrAccountMutationStale.WithMetadata(map[string]string{"resource": "room_blocker"})
 		}
 		current.blockers.ActiveMembershipCount = version.blockers.ActiveMembershipCount
-		current.blockers.QueuedMembershipCount = version.blockers.QueuedMembershipCount
 		current.blockers.EndingMembershipCount = version.blockers.EndingMembershipCount
 		current.blockers.SynchronousBillingPendingCount = version.blockers.SynchronousBillingPendingCount
 		current.blockers.PendingBillingIntentCount = version.blockers.PendingBillingIntentCount

@@ -3,11 +3,14 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"math/rand/v2"
+	"net"
 	"strings"
 	"time"
 
@@ -52,7 +55,8 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 		cmd.UsageOccurredAt = resolveUsageOccurredAt(cmd)
 	}
 
-	// PostgreSQL 会中止发生死锁的整个事务，因此每次重试都必须从新事务开始。
+	// Retry the same fingerprint in a fresh transaction. This also resolves an
+	// uncertain commit after a transient connection failure without charging twice.
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -62,13 +66,13 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 		if err == nil {
 			return result, nil
 		}
-		if !isUsageBillingDeadlock(err) {
+		if !isUsageBillingDeadlock(err) && (cmd.AccountShareModeSettlement == nil || !isUsageBillingTransientError(err)) {
 			return nil, err
 		}
 		if attempt == usageBillingMaxAttempts {
 			logger.LegacyPrintf(
 				"repository.usage_billing",
-				"[ERROR] deadlock_retry_exhausted request_id=%s api_key_id=%d sqlstate=40P01 attempts=%d",
+				"[ERROR] billing_retry_exhausted request_id=%s api_key_id=%d attempts=%d",
 				cmd.RequestID,
 				cmd.APIKeyID,
 				usageBillingMaxAttempts,
@@ -80,7 +84,7 @@ func (r *usageBillingRepository) Apply(ctx context.Context, cmd *service.UsageBi
 		delay := baseDelay + time.Duration(rand.Int64N(int64(baseDelay)+1))
 		logger.LegacyPrintf(
 			"repository.usage_billing",
-			"[WARN] deadlock_retry request_id=%s api_key_id=%d sqlstate=40P01 attempt=%d max_attempts=%d delay_ms=%d",
+			"[WARN] billing_retry request_id=%s api_key_id=%d attempt=%d max_attempts=%d delay_ms=%d",
 			cmd.RequestID,
 			cmd.APIKeyID,
 			attempt,
@@ -205,6 +209,22 @@ func isUsageBillingDeadlock(err error) bool {
 	}
 	var pqErr *pq.Error
 	return errors.As(err, &pqErr) && pqErr != nil && pqErr.Code == "40P01"
+}
+
+func isUsageBillingTransientError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var postgresError *pq.Error
+	if errors.As(err, &postgresError) && postgresError != nil {
+		switch postgresError.Code {
+		case "40001", "08000", "08003", "08006", "08007", "57P01", "57P02", "57P03":
+			return true
+		}
+	}
+	var networkError net.Error
+	return errors.Is(err, driver.ErrBadConn) || errors.Is(err, io.EOF) ||
+		errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &networkError)
 }
 
 func waitUsageBillingRetry(ctx context.Context, delay time.Duration) error {

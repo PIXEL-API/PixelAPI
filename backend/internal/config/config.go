@@ -2162,7 +2162,6 @@ func setDefaults() {
 	// Account-share staged rollout. Contract behavior stays disabled until the
 	// expand schema has been observed and the dedicated contract release runs.
 	viper.SetDefault("account_share_rollout.lifecycle_contract_enabled", false)
-	viper.SetDefault("account_share_rollout.deferred_queue_binding_enabled", false)
 	viper.SetDefault("account_share_rollout.review_room_subject_writes_enabled", false)
 	viper.SetDefault("account_share_rollout.quota_mode", AccountShareQuotaModeShadow)
 

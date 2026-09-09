@@ -29,26 +29,6 @@ type accountShareUpdateRepositoryStub struct {
 	updateCalls int
 }
 
-type accountShareEditSessionRepositoryStub struct {
-	service.AccountShareModeRepository
-
-	beginCalls   int
-	releaseCalls int
-}
-
-func (s *accountShareEditSessionRepositoryStub) GetRoomManagementState(
-	_ context.Context,
-	viewerUserID int64,
-	_ bool,
-	listingID int64,
-) (*service.AccountShareRoomManagementState, error) {
-	return &service.AccountShareRoomManagementState{
-		ListingID:       listingID,
-		OwnerUserID:     viewerUserID,
-		LifecycleStatus: service.AccountShareListingStatusPaused,
-	}, nil
-}
-
 type accountShareRoomBatchHandlerRepoStub struct {
 	service.AccountShareModeRepository
 	service.AccountShareRoomRepository
@@ -81,6 +61,12 @@ type accountShareEndHandlerRepoStub struct {
 	service.AccountShareModeRepository
 	snapshot *service.AccountShareMembership
 	result   *service.AccountShareMembership
+	progress service.AccountShareMembershipEndProgress
+}
+
+func (s *accountShareEndHandlerRepoStub) UpdateMembershipEndProgress(_ context.Context, _ int64, _ string, progress service.AccountShareMembershipEndProgress) error {
+	s.progress = progress
+	return nil
 }
 
 type accountShareHistoryHandlerRepoStub struct {
@@ -224,6 +210,7 @@ func (s *accountShareEndHandlerRepoStub) FinalizeMembershipEnd(
 
 func (s *accountShareEndHandlerRepoStub) ListEndingMembershipCandidates(
 	context.Context,
+	int64,
 	int,
 ) ([]service.AccountShareEndingMembershipCandidate, error) {
 	return nil, nil
@@ -298,36 +285,6 @@ func (s *accountShareUpdateRepositoryStub) UpdateListing(
 	}, nil
 }
 
-func (s *accountShareEditSessionRepositoryStub) BeginListingEdit(
-	_ context.Context,
-	actorUserID int64,
-	_ bool,
-	listingID int64,
-	input service.BeginAccountShareListingEditInput,
-) (*service.AccountShareListing, error) {
-	s.beginCalls++
-	return &service.AccountShareListing{
-		ID:              listingID,
-		OwnerUserID:     actorUserID,
-		EditSessionID:   input.SessionID,
-		EditingByUserID: &actorUserID,
-	}, nil
-}
-
-func (s *accountShareEditSessionRepositoryStub) ReleaseListingEdit(
-	_ context.Context,
-	actorUserID int64,
-	_ bool,
-	listingID int64,
-	_ string,
-) (*service.AccountShareListing, error) {
-	s.releaseCalls++
-	return &service.AccountShareListing{
-		ID:          listingID,
-		OwnerUserID: actorUserID,
-	}, nil
-}
-
 type accountShareHandlerErrorEnvelope struct {
 	Code     int               `json:"code"`
 	Reason   string            `json:"reason"`
@@ -364,6 +321,54 @@ func performAccountShareListingUpdate(
 
 	handler.UpdateListing(c)
 	return recorder
+}
+
+type accountShareListPageHandlerRepoStub struct {
+	service.AccountShareModeRepository
+	result pagination.PaginationResult
+}
+
+func (s *accountShareListPageHandlerRepoStub) ListListings(
+	_ context.Context,
+	_ int64,
+	_ service.AccountShareListingFilters,
+	_ pagination.PaginationParams,
+) ([]service.AccountShareListing, *pagination.PaginationResult, error) {
+	return []service.AccountShareListing{}, &s.result, nil
+}
+
+func TestAccountShareModeHandlerListListingsReportsTotalAccuracy(t *testing.T) {
+	for _, approximate := range []bool{false, true} {
+		t.Run(strconv.FormatBool(approximate), func(t *testing.T) {
+			repo := &accountShareListPageHandlerRepoStub{
+				result: pagination.PaginationResult{
+					Total: 21, Page: 1, PageSize: 20, Pages: 2,
+					Approximate: approximate, HasMore: true,
+				},
+			}
+			handler := NewAccountShareModeHandler(service.NewAccountShareModeService(repo, nil, nil, nil, nil, nil))
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodGet, "/api/v1/account-share/listings", nil)
+			c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 42})
+			handler.ListListings(c)
+
+			require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+			var envelope struct {
+				Data struct {
+					Total      int64 `json:"total"`
+					TotalExact *bool `json:"total_exact"`
+					HasMore    *bool `json:"has_more"`
+				} `json:"data"`
+			}
+			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &envelope))
+			require.Equal(t, int64(21), envelope.Data.Total)
+			require.NotNil(t, envelope.Data.TotalExact)
+			require.Equal(t, !approximate, *envelope.Data.TotalExact)
+			require.NotNil(t, envelope.Data.HasMore)
+			require.True(t, *envelope.Data.HasMore)
+		})
+	}
 }
 
 func TestAccountShareModeHandlerListMembershipHistoryScopesConsumerAndPagination(t *testing.T) {
@@ -441,7 +446,6 @@ func TestAccountShareModeHandlerGetAPIKeyBindingStatusIncludesEnding(t *testing.
 		key: &service.APIKey{ID: 42, UserID: 7},
 		memberships: []service.AccountShareMembership{
 			{ID: 1, APIKeyID: 42, Status: service.AccountShareMembershipStatusActive},
-			{ID: 2, APIKeyID: 42, Status: service.AccountShareMembershipStatusQueued},
 			{
 				ID:                    3,
 				APIKeyID:              42,
@@ -481,11 +485,10 @@ func TestAccountShareModeHandlerGetAPIKeyBindingStatusIncludesEnding(t *testing.
 	}
 	if envelope.Data.APIKeyID != 42 ||
 		envelope.Data.ActiveCount != 1 ||
-		envelope.Data.QueuedCount != 1 ||
 		envelope.Data.EndingCount != 1 ||
-		envelope.Data.BlockingCount != 3 ||
-		len(envelope.Data.Memberships) != 3 ||
-		envelope.Data.Memberships[2].EndingOperationStatus != "needs_attention" {
+		envelope.Data.BlockingCount != 2 ||
+		len(envelope.Data.Memberships) != 2 ||
+		envelope.Data.Memberships[1].EndingOperationStatus != "needs_attention" {
 		t.Fatalf("unexpected binding status response: %#v", envelope.Data)
 	}
 }
@@ -721,7 +724,6 @@ func TestAccountShareModeHandlerUpdateListingPassesVersionAndAdminAuditFields(t 
 	recorder := performAccountShareListingUpdate(t, handler, service.RoleAdmin, `{
 		"seat_limit": 3,
 		"allowed_models": [" gpt-5 ", "gpt-5"],
-		"edit_session_id": " edit-1 ",
 		"expected_version": 9,
 		"force_active_edit": true,
 		"reason": " risk review ",
@@ -741,9 +743,6 @@ func TestAccountShareModeHandlerUpdateListingPassesVersionAndAdminAuditFields(t 
 	}
 	if !repo.input.ForceActiveEdit || !repo.input.Confirmed || repo.input.Reason != "risk review" {
 		t.Fatalf("unexpected force audit fields: %+v", repo.input)
-	}
-	if repo.input.EditSessionID != "edit-1" {
-		t.Fatalf("edit session = %q, want edit-1", repo.input.EditSessionID)
 	}
 	if repo.input.SeatLimit == nil || *repo.input.SeatLimit != 3 {
 		t.Fatalf("seat limit = %v, want 3", repo.input.SeatLimit)
@@ -805,104 +804,6 @@ func TestAccountShareModeHandlerUpdateListingReplaysWithoutSecondMutation(t *tes
 	}
 	if repo.updateCalls != 1 {
 		t.Fatalf("repository update calls = %d, want 1", repo.updateCalls)
-	}
-}
-
-func TestAccountShareModeHandlerEditSessionMutationsReplaySafely(t *testing.T) {
-	tests := []struct {
-		name      string
-		route     string
-		path      string
-		firstBody string
-		otherBody string
-		invoke    func(*AccountShareModeHandler) gin.HandlerFunc
-		callCount func(*accountShareEditSessionRepositoryStub) int
-	}{
-		{
-			name:      "begin",
-			route:     "/api/v1/account-share/listings/:id/edit-session",
-			path:      "/api/v1/account-share/listings/7/edit-session",
-			firstBody: `{"session_id":"edit-session-1"}`,
-			otherBody: `{"session_id":"edit-session-2"}`,
-			invoke: func(handler *AccountShareModeHandler) gin.HandlerFunc {
-				return handler.BeginListingEdit
-			},
-			callCount: func(repo *accountShareEditSessionRepositoryStub) int {
-				return repo.beginCalls
-			},
-		},
-		{
-			name:      "release",
-			route:     "/api/v1/account-share/listings/:id/edit-session/release",
-			path:      "/api/v1/account-share/listings/7/edit-session/release",
-			firstBody: `{"session_id":"edit-session-1"}`,
-			otherBody: `{"session_id":"edit-session-2"}`,
-			invoke: func(handler *AccountShareModeHandler) gin.HandlerFunc {
-				return handler.ReleaseListingEdit
-			},
-			callCount: func(repo *accountShareEditSessionRepositoryStub) int {
-				return repo.releaseCalls
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			repo := &accountShareEditSessionRepositoryStub{}
-			svc := service.NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
-			svc.SetRuntimeDependencies(
-				service.NewConcurrencyService(&accountShareEndHandlerConcurrencyCache{}),
-				nil,
-				nil,
-				nil,
-			)
-			handler := NewAccountShareModeHandler(svc)
-			service.SetDefaultIdempotencyCoordinator(
-				service.NewIdempotencyCoordinator(
-					newUserMemoryIdempotencyRepoStub(),
-					service.DefaultIdempotencyConfig(),
-				),
-			)
-			t.Cleanup(func() {
-				service.SetDefaultIdempotencyCoordinator(nil)
-			})
-
-			router := gin.New()
-			router.Use(func(c *gin.Context) {
-				c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 42})
-				c.Set(string(middleware2.ContextKeyUserRole), service.RoleUser)
-				c.Next()
-			})
-			router.POST(tt.route, tt.invoke(handler))
-
-			call := func(body string) *httptest.ResponseRecorder {
-				request := httptest.NewRequest(http.MethodPost, tt.path, bytes.NewBufferString(body))
-				request.Header.Set("Content-Type", "application/json")
-				request.Header.Set("Idempotency-Key", "edit-session-once")
-				recorder := httptest.NewRecorder()
-				router.ServeHTTP(recorder, request)
-				return recorder
-			}
-
-			first := call(tt.firstBody)
-			if first.Code != http.StatusOK {
-				t.Fatalf("first status = %d, want %d; body=%s", first.Code, http.StatusOK, first.Body.String())
-			}
-			replay := call(tt.firstBody)
-			if replay.Code != http.StatusOK {
-				t.Fatalf("replay status = %d, want %d; body=%s", replay.Code, http.StatusOK, replay.Body.String())
-			}
-			if replay.Header().Get("X-Idempotency-Replayed") != "true" {
-				t.Fatalf("replay header = %q, want true", replay.Header().Get("X-Idempotency-Replayed"))
-			}
-			conflict := call(tt.otherBody)
-			if conflict.Code != http.StatusConflict {
-				t.Fatalf("conflict status = %d, want %d; body=%s", conflict.Code, http.StatusConflict, conflict.Body.String())
-			}
-			if calls := tt.callCount(repo); calls != 1 {
-				t.Fatalf("repository calls = %d, want 1", calls)
-			}
-		})
 	}
 }
 
@@ -1370,17 +1271,15 @@ func TestAccountShareModeHandlerEndMembershipReturnsAcceptedWhileEnding(t *testi
 		nil,
 		nil,
 	)
-	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 7)
-	if err != nil {
-		t.Fatalf("CreateEndMembershipToken: %v", err)
-	}
 	handler := NewAccountShareModeHandler(svc)
 
-	recorder := performAccountShareMembershipEnd(t, handler, 7, intent.Token)
+	recorder := performAccountShareMembershipEnd(t, handler, 7)
 
 	if recorder.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusAccepted, recorder.Body.String())
 	}
+	require.Equal(t, service.AccountShareMembershipEndBlockerInFlight, repo.progress.Code)
+	require.Equal(t, 1, repo.progress.InFlightRequestCount)
 }
 
 func TestAccountShareModeHandlerEndMembershipReturnsOKWhenEnded(t *testing.T) {
@@ -1401,13 +1300,9 @@ func TestAccountShareModeHandlerEndMembershipReturnsOKWhenEnded(t *testing.T) {
 	}
 	svc := service.NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
 	svc.SetActionTokenSecret(strings.Repeat("s", 32))
-	intent, err := svc.CreateEndMembershipToken(context.Background(), 42, 8)
-	if err != nil {
-		t.Fatalf("CreateEndMembershipToken: %v", err)
-	}
 	handler := NewAccountShareModeHandler(svc)
 
-	recorder := performAccountShareMembershipEnd(t, handler, 8, intent.Token)
+	recorder := performAccountShareMembershipEnd(t, handler, 8)
 
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
@@ -1418,20 +1313,15 @@ func performAccountShareMembershipEnd(
 	t *testing.T,
 	handler *AccountShareModeHandler,
 	membershipID int64,
-	token string,
 ) *httptest.ResponseRecorder {
 	t.Helper()
-	body, err := json.Marshal(map[string]string{"token": token})
-	if err != nil {
-		t.Fatalf("marshal end request: %v", err)
-	}
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(
 		http.MethodPost,
 		"/api/v1/account-share/memberships/"+strconv.FormatInt(membershipID, 10)+"/end",
-		bytes.NewReader(body),
+		nil,
 	)
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Params = []gin.Param{{Key: "id", Value: strconv.FormatInt(membershipID, 10)}}

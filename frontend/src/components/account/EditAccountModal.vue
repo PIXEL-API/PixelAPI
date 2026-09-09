@@ -1531,6 +1531,7 @@
           :allow-empty="!userAccountProxyRequired"
           :can-test="!isUserScope"
           :hide-endpoint="hideProxyEndpoint"
+          :user-scope="isUserScope"
           disable-full
         />
         <p v-if="isUserScope" class="input-hint">

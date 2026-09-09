@@ -617,6 +617,8 @@ async function startAttach(currentActivation = activationVersion): Promise<void>
     })
     if (!isCurrentFlow(currentActivation, listingID, accountID)) return
     if ((result.success || 0) < 1) {
+      // 已收到确定的业务失败结果；重试是一次新操作，不能重放已缓存的失败。
+      attachIdempotencyKey.value = ''
       const failure = result.results.find((item) => !item.success)
       throw new Error(failure?.error || t('accountShare.roomAccounts.createFlow.attachRequestFailed'))
     }

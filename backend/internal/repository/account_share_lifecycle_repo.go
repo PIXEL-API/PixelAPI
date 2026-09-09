@@ -31,8 +31,6 @@ type lockedAccountShareLifecycleListing struct {
 	PendingOperationID sql.NullString
 	DeleteRequestID    sql.NullString
 	DeletedAt          sql.NullTime
-	EditSessionID      sql.NullString
-	EditingExpiresAt   sql.NullTime
 	DeleteReason       sql.NullString
 	DeletedByUserID    sql.NullInt64
 }
@@ -59,7 +57,6 @@ func (r *accountShareModeRepository) GetRoomManagementState(
 					WHERE membership.status = 'active'
 						AND membership.consumer_user_id <> scoped_listing.owner_user_id
 				)::int AS consumer_active_count,
-				COUNT(*) FILTER (WHERE membership.status = 'queued')::int AS queued_count,
 				COUNT(*) FILTER (WHERE membership.status = 'ending')::int AS ending_count,
 				COUNT(*) FILTER (
 					WHERE membership.status = 'ending'
@@ -124,7 +121,6 @@ func (r *accountShareModeRepository) GetRoomManagementState(
 					- COALESCE(membership_stats.consumer_active_count, 0)
 					- COALESCE(membership_stats.consumer_ending_count, 0)
 			)::int,
-			COALESCE(membership_stats.queued_count, 0),
 			COALESCE(room_stats.account_count, 0),
 			COALESCE(room_stats.configured_total_concurrency, 0),
 			COALESCE(room_stats.eligible_total_concurrency, 0),
@@ -132,11 +128,6 @@ func (r *accountShareModeRepository) GetRoomManagementState(
 			COALESCE(membership_stats.synchronous_billing_pending_count, 0),
 			COALESCE(membership_stats.active_count, 0),
 			COALESCE(membership_stats.ending_count, 0),
-			(
-				listing.edit_session_id IS NOT NULL
-				AND listing.editing_expires_at IS NOT NULL
-				AND listing.editing_expires_at > NOW()
-			) AS valid_edit_session,
 			COALESCE(open_operation.id IS NOT NULL, FALSE) AS conflicting_operation,
 			COALESCE(open_operation.id::text, ''),
 			COALESCE(membership_stats.runtime_membership_ids, ARRAY[]::bigint[]),
@@ -172,7 +163,6 @@ func (r *accountShareModeRepository) GetRoomManagementState(
 		&state.ActiveSeats,
 		&state.EndingSeats,
 		&state.AdmissionRemainingSeats,
-		&state.QueuedMembershipCount,
 		&state.RoomAccountCount,
 		&state.ConfiguredTotalConcurrency,
 		&state.EligibleTotalConcurrency,
@@ -180,7 +170,6 @@ func (r *accountShareModeRepository) GetRoomManagementState(
 		&state.Blockers.SynchronousBillingPendingCount,
 		&state.Blockers.ActiveMembershipCount,
 		&state.Blockers.EndingMembershipCount,
-		&state.Blockers.ValidEditSession,
 		&state.Blockers.ConflictingOperation,
 		&state.Blockers.ConflictingOperationID,
 		&runtimeMembershipIDs,
@@ -193,7 +182,6 @@ func (r *accountShareModeRepository) GetRoomManagementState(
 	if err != nil {
 		return nil, err
 	}
-	state.Blockers.QueuedMembershipCount = state.QueuedMembershipCount
 	state.Blockers.PendingBillingIntentCount = state.PendingBillingIntentCount
 	state.PendingOperationID = state.Blockers.ConflictingOperationID
 	state.RuntimeMembershipIDs = append([]int64(nil), runtimeMembershipIDs...)
@@ -237,10 +225,6 @@ func (r *accountShareModeRepository) TransitionRoomLifecycle(
 			"operation_id": listing.PendingOperationID.String,
 		})
 	}
-	if listing.EditSessionID.Valid && listing.EditingExpiresAt.Valid &&
-		listing.EditingExpiresAt.Time.After(time.Now().UTC()) {
-		return nil, service.ErrAccountShareListingEditing
-	}
 
 	command = strings.ToLower(strings.TrimSpace(command))
 	reason := strings.TrimSpace(input.Reason)
@@ -258,12 +242,7 @@ func (r *accountShareModeRepository) TransitionRoomLifecycle(
 		statusReasonCode = "owner_delisted"
 		eventType = "listing.delisted"
 		source = "delist_room"
-		// 排空是同步收口的：本事务内立即清退全部排队成员（无费用）并按
-		// "结算到当前时刻+退还未用预付"结束全部活跃成员。房间短暂停留在
-		// 'draining'，仅等待运行时在途请求归零，由 lifecycle finalizer
-		// （15s 周期，无开关门控）flip 到 'paused'——因为准入已停止，
-		// 在途请求数单调递减，排空必然在分钟级完成。operation 行仅作
-		// 审计与前端进度展示。
+		// 本事务持久化下架与成员 ending，停止新请求；在途排空后再结算。
 		operationID = uuid.NewString()
 		actorRole := accountShareRevisionActorRole(actorUserID, actorIsAdmin)
 		if _, err := tx.ExecContext(ctx, `
@@ -383,6 +362,15 @@ func (r *accountShareModeRepository) TransitionRoomLifecycle(
 	); err != nil {
 		return nil, err
 	}
+	if command == service.AccountShareRoomActionDrain {
+		endingAt, err := accountShareRoomDrainingAtInTx(ctx, tx, listing.ID)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := r.endLiveMembershipsForRoomDrainInTx(ctx, tx, listing.ID, endingAt); err != nil {
+			return nil, err
+		}
+	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
@@ -435,16 +423,10 @@ func (r *accountShareModeRepository) FinalizeDrainingRoom(
 	if err != nil {
 		return nil, err
 	}
-	if listing.EditSessionID.Valid && listing.EditingExpiresAt.Valid &&
-		listing.EditingExpiresAt.Time.After(time.Now().UTC()) {
-		blockers.ValidEditSession = true
-	}
 	if blockers.ActiveMembershipCount > 0 ||
-		blockers.QueuedMembershipCount > 0 ||
 		blockers.EndingMembershipCount > 0 ||
 		blockers.PendingBillingIntentCount > 0 ||
-		blockers.SynchronousBillingPendingCount > 0 ||
-		blockers.ValidEditSession {
+		blockers.SynchronousBillingPendingCount > 0 {
 		return nil, service.ErrAccountShareRoomDeleteBlocked.WithMetadata(blockers.Metadata())
 	}
 
@@ -695,10 +677,6 @@ func (r *accountShareModeRepository) SoftDeleteRoom(
 	if err != nil {
 		return nil, err
 	}
-	if listing.EditSessionID.Valid && listing.EditingExpiresAt.Valid &&
-		listing.EditingExpiresAt.Time.After(time.Now().UTC()) {
-		blockers.ValidEditSession = true
-	}
 	if blockers.Any() {
 		return nil, service.ErrAccountShareRoomDeleteBlocked.WithMetadata(blockers.Metadata())
 	}
@@ -741,10 +719,6 @@ func (r *accountShareModeRepository) SoftDeleteRoom(
 			deleted_by_user_id = $3,
 			delete_reason = $1,
 			delete_request_id = $4,
-			edit_session_id = NULL,
-			editing_by_user_id = NULL,
-			editing_started_at = NULL,
-			editing_expires_at = NULL,
 			updated_at = NOW()
 		WHERE id = $5
 			AND row_version = $6
@@ -978,10 +952,6 @@ func (r *accountShareModeRepository) FinalizeRoomDeletion(
 			deleted_revision_id = $2,
 			deletion_snapshot = $3::jsonb,
 			pending_operation_id = NULL,
-			edit_session_id = NULL,
-			editing_by_user_id = NULL,
-			editing_started_at = NULL,
-			editing_expires_at = NULL,
 			updated_at = $1
 		WHERE id = $4
 			AND row_version = $5
@@ -1132,8 +1102,6 @@ func lockAccountShareLifecycleListingInTx(
 			pending_operation_id::text,
 			delete_request_id,
 			deleted_at,
-			edit_session_id,
-			editing_expires_at,
 			delete_reason,
 			deleted_by_user_id
 		FROM account_share_listings
@@ -1150,8 +1118,6 @@ func lockAccountShareLifecycleListingInTx(
 		&listing.PendingOperationID,
 		&listing.DeleteRequestID,
 		&listing.DeletedAt,
-		&listing.EditSessionID,
-		&listing.EditingExpiresAt,
 		&listing.DeleteReason,
 		&listing.DeletedByUserID,
 	)
@@ -1312,7 +1278,6 @@ func accountShareLifecycleDatabaseBlockersInTx(
 	err := tx.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE status = 'active')::int,
-			COUNT(*) FILTER (WHERE status = 'queued')::int,
 			COUNT(*) FILTER (WHERE status = 'ending')::int,
 			COUNT(*) FILTER (
 				WHERE settlement_status IN ('pending', 'processing', 'failed')
@@ -1322,7 +1287,6 @@ func accountShareLifecycleDatabaseBlockersInTx(
 			AND deleted_at IS NULL
 	`, listingID).Scan(
 		&blockers.ActiveMembershipCount,
-		&blockers.QueuedMembershipCount,
 		&blockers.EndingMembershipCount,
 		&blockers.SynchronousBillingPendingCount,
 	)
@@ -1346,7 +1310,6 @@ func accountShareListingEditBlockersInTx(
 	err := tx.QueryRowContext(ctx, `
 		SELECT
 			COUNT(*) FILTER (WHERE membership.status = 'active')::int,
-			COUNT(*) FILTER (WHERE membership.status = 'queued')::int,
 			COUNT(*) FILTER (WHERE membership.status = 'ending')::int,
 			COUNT(*) FILTER (
 				WHERE membership.settlement_status IN ('pending', 'processing', 'failed')
@@ -1358,7 +1321,6 @@ func accountShareListingEditBlockersInTx(
 			AND membership.consumer_user_id <> listing.owner_user_id
 	`, listingID).Scan(
 		&blockers.ActiveMembershipCount,
-		&blockers.QueuedMembershipCount,
 		&blockers.EndingMembershipCount,
 		&blockers.SynchronousBillingPendingCount,
 	)
@@ -1366,9 +1328,9 @@ func accountShareListingEditBlockersInTx(
 }
 
 // ClearRoomMembersForDrain 在独立事务里清退排空中房间的全部存活成员：
-// 排队成员直接终结（未入座、无费用），活跃成员结算已用时段并退还未用预付后结束。
+// 活跃成员只进入 ending；在途请求完成后由成员 finalizer 统一结算并解绑。
 // 幂等：由 DrainRoom 在状态转换后调用，也由 lifecycle finalizer 在发现残留成员时
-// 反复调用直至清空（覆盖"派发失败降级与排空并发"竞态与中途崩溃）。
+// 反复调用直至全部成员进入 ending，覆盖中途崩溃。
 func (r *accountShareModeRepository) ClearRoomMembersForDrain(
 	ctx context.Context,
 	actorUserID int64,
@@ -1392,8 +1354,10 @@ func (r *accountShareModeRepository) ClearRoomMembersForDrain(
 		// 不在排空中：无事可做（可能已被 finalizer 收口）。
 		return &service.AccountShareSeatBillingResult{}, tx.Commit()
 	}
-	actorRole := accountShareRevisionActorRole(actorUserID, actorIsAdmin)
-	result, err := r.endLiveMembershipsForRoomDrainInTx(ctx, tx, listing.ID, actorUserID, actorRole)
+	// New drains fence memberships atomically. Remaining active rows belong to
+	// an older incomplete drain; stop them now without rewriting billed history.
+	endingAt := time.Now().UTC()
+	result, err := r.endLiveMembershipsForRoomDrainInTx(ctx, tx, listing.ID, endingAt)
 	if err != nil {
 		return nil, err
 	}
@@ -1407,22 +1371,9 @@ func (r *accountShareModeRepository) endLiveMembershipsForRoomDrainInTx(
 	ctx context.Context,
 	tx *sql.Tx,
 	listingID int64,
-	actorUserID int64,
-	actorRole string,
+	endingAt time.Time,
 ) (*service.AccountShareSeatBillingResult, error) {
 	result := &service.AccountShareSeatBillingResult{}
-	queuedConsumerIDs, err := lockAccountShareIDsInTx(ctx, tx, `
-		SELECT consumer_user_id
-		FROM account_share_memberships
-		WHERE listing_id = $1
-			AND status = 'queued'
-			AND deleted_at IS NULL
-		ORDER BY id ASC
-		FOR UPDATE
-	`, listingID)
-	if err != nil {
-		return nil, err
-	}
 	activeIDs, err := lockAccountShareIDsInTx(ctx, tx, `
 		SELECT id
 		FROM account_share_memberships
@@ -1435,37 +1386,6 @@ func (r *accountShareModeRepository) endLiveMembershipsForRoomDrainInTx(
 	if err != nil {
 		return nil, err
 	}
-	// 先按 membership id 升序持有全部成员行锁，再按 user id 升序持有
-	// 钱包行锁（consumer/owner/inviter）。这与单成员结算事务的
-	// membership → users 顺序一致，避免 drain 与 seat billing 形成环。
-	if _, err := lockAccountShareIDsInTx(ctx, tx, `
-		SELECT id
-		FROM users
-		WHERE deleted_at IS NULL
-			AND (
-				id IN (
-					SELECT consumer_user_id FROM account_share_memberships
-					WHERE listing_id = $1 AND status IN ('active', 'queued') AND deleted_at IS NULL
-				)
-				OR id = (SELECT owner_user_id FROM account_share_listings WHERE id = $1)
-				OR id IN (
-					SELECT affiliate.inviter_id
-					FROM user_affiliates affiliate
-					JOIN account_share_memberships m ON m.consumer_user_id = affiliate.user_id
-					WHERE m.listing_id = $1 AND m.status IN ('active', 'queued') AND m.deleted_at IS NULL
-				)
-			)
-		ORDER BY id ASC
-		FOR UPDATE
-	`, listingID); err != nil {
-		return nil, err
-	}
-	if err := endQueuedMembershipsForRoomDrainInTx(ctx, tx, listingID, actorUserID, actorRole); err != nil {
-		return nil, err
-	}
-	result.Processed += len(queuedConsumerIDs)
-	result.EndedConsumerUserIDs = append(result.EndedConsumerUserIDs, queuedConsumerIDs...)
-	now := time.Now().UTC()
 	for _, membershipID := range activeIDs {
 		membership, err := r.lockSeatBillingMembershipInTx(ctx, tx, membershipID, 0)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1477,14 +1397,8 @@ func (r *accountShareModeRepository) endLiveMembershipsForRoomDrainInTx(
 		if membership == nil || membership.Status != service.AccountShareMembershipStatusActive {
 			continue
 		}
-		if _, err := r.closeAccountShareMembershipBindingInTx(
-			ctx, tx, membership.ID, actorUserID, actorRole,
-			service.AccountShareMembershipEndReasonRoomDraining, now,
-		); err != nil {
-			return nil, err
-		}
 		memberResult, err := r.endSeatBillingMembershipInTx(
-			ctx, tx, membership, now, service.AccountShareMembershipEndReasonRoomDraining,
+			ctx, tx, membership, endingAt, service.AccountShareMembershipEndReasonRoomDraining,
 		)
 		if err != nil {
 			return nil, err
@@ -1497,78 +1411,6 @@ func (r *accountShareModeRepository) endLiveMembershipsForRoomDrainInTx(
 		}
 	}
 	return result, nil
-}
-
-func endQueuedMembershipsForRoomDrainInTx(
-	ctx context.Context,
-	tx *sql.Tx,
-	listingID int64,
-	actorUserID int64,
-	actorRole string,
-) error {
-	rows, err := tx.QueryContext(ctx, `
-		SELECT id
-		FROM account_share_memberships
-		WHERE listing_id = $1
-			AND status = 'queued'
-			AND deleted_at IS NULL
-		ORDER BY id ASC
-		FOR UPDATE
-	`, listingID)
-	if err != nil {
-		return err
-	}
-	ids := make([]int64, 0)
-	for rows.Next() {
-		var id int64
-		if err := rows.Scan(&id); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	if _, err := tx.ExecContext(ctx, `
-		UPDATE account_share_membership_account_bindings
-		SET unbound_at = NOW(),
-			unbound_by_user_id = $1,
-			unbound_by_role = $2,
-			unbind_reason = 'room_draining'
-		WHERE membership_id = ANY($3::bigint[])
-			AND unbound_at IS NULL
-	`, nullablePositiveInt64(actorUserID), actorRole, pq.Array(ids)); err != nil {
-		return err
-	}
-	result, err := tx.ExecContext(ctx, `
-		UPDATE account_share_memberships
-		SET status = 'ended',
-			ended_at = NOW(),
-			ended_reason = $2,
-			settlement_status = 'not_required',
-			updated_at = NOW()
-		WHERE id = ANY($1::bigint[])
-			AND status = 'queued'
-			AND deleted_at IS NULL
-	`, pq.Array(ids), service.AccountShareMembershipEndReasonRoomDraining)
-	if err != nil {
-		return err
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if affected != int64(len(ids)) {
-		return fmt.Errorf("end queued room memberships affected %d rows, expected %d", affected, len(ids))
-	}
-	return nil
 }
 
 func lockAccountShareRoomProjectionInTx(ctx context.Context, tx *sql.Tx, listingID int64) ([]int64, error) {
@@ -1618,12 +1460,26 @@ func lockAccountShareAccountsInTx(ctx context.Context, tx *sql.Tx, accountIDs []
 	return rows.Err()
 }
 
+func accountShareRoomDrainingAtInTx(ctx context.Context, tx *sql.Tx, listingID int64) (time.Time, error) {
+	var drainingAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `
+		SELECT draining_at FROM account_share_listings
+		WHERE id = $1 AND status = 'draining'
+	`, listingID).Scan(&drainingAt); err != nil {
+		return time.Time{}, err
+	}
+	if !drainingAt.Valid {
+		return time.Time{}, service.ErrAccountShareRoomOperationConflict
+	}
+	return drainingAt.Time.UTC(), nil
+}
+
 func lockLiveAccountShareMembershipIDsInTx(ctx context.Context, tx *sql.Tx, listingID int64) ([]int64, error) {
 	return lockAccountShareIDsInTx(ctx, tx, `
 		SELECT id
 		FROM account_share_memberships
 		WHERE listing_id = $1
-			AND status IN ('active', 'queued', 'ending')
+			AND status IN ('active', 'ending')
 			AND deleted_at IS NULL
 		ORDER BY id ASC
 		FOR UPDATE
@@ -1667,6 +1523,58 @@ func lockAccountShareIDsInTx(ctx context.Context, tx *sql.Tx, query string, list
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func (r *accountShareModeRepository) UpdateMembershipEndProgress(
+	ctx context.Context,
+	membershipID int64,
+	operationID string,
+	progress service.AccountShareMembershipEndProgress,
+) error {
+	if r == nil || r.db == nil {
+		return service.ErrServiceUnavailable
+	}
+	if membershipID <= 0 || strings.TrimSpace(operationID) == "" || progress.CheckedAt.IsZero() {
+		return service.ErrAccountShareEndStateConflict
+	}
+	blocker := map[string]any{"code": progress.Code, "checked_at": progress.CheckedAt.UTC().Format(time.RFC3339Nano)}
+	status, errorCode, errorMessage := "pending", "", ""
+	switch progress.Code {
+	case service.AccountShareMembershipEndBlockerInFlight:
+		if progress.InFlightRequestCount <= 0 {
+			return service.ErrAccountShareEndStateConflict
+		}
+		blocker["in_flight_request_count"] = progress.InFlightRequestCount
+	case service.AccountShareMembershipEndBlockerRuntime, service.AccountShareMembershipEndBlockerSettlement:
+		status, errorCode, errorMessage = "needs_attention", progress.Code, progress.ErrorMessage
+	default:
+		return service.ErrAccountShareEndStateConflict
+	}
+	blockerJSON, err := json.Marshal(blocker)
+	if err != nil {
+		return err
+	}
+	// 只更新仍在重试的同一操作，不覆盖并发 Finalizer 已提交的 succeeded。
+	_, err = r.db.ExecContext(ctx, `
+		UPDATE account_share_room_operations operation
+		SET status = $1,
+			blocker = $2::jsonb,
+			error_code = NULLIF($3, ''),
+			error_message = NULLIF($4, ''),
+			updated_at = NOW(),
+			state_token = state_token + 1
+		WHERE operation.id = $5::uuid
+			AND operation.action = 'end_membership'
+			AND operation.membership_id = $6
+			AND operation.status IN ('pending', 'running', 'needs_attention')
+			AND EXISTS (
+				SELECT 1 FROM account_share_memberships membership
+				WHERE membership.id = $6 AND membership.status = 'ending'
+					AND membership.ending_operation_id = operation.id
+					AND membership.deleted_at IS NULL
+			)
+	`, status, string(blockerJSON), errorCode, errorMessage, operationID, membershipID)
+	return err
 }
 
 func completeAccountShareRoomOperationInTx(

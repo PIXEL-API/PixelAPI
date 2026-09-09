@@ -102,10 +102,14 @@ func TestOpenAIRequestMapPathHelpers(t *testing.T) {
 
 	setOpenAIRequestMapPath(reqBody, "reasoning.effort", "high")
 	setOpenAIRequestMapPath(reqBody, "text.verbosity", "medium")
-	require.Equal(t, "high", reqBody["reasoning"].(map[string]any)["effort"])
-	require.Equal(t, "medium", reqBody["text"].(map[string]any)["verbosity"])
+	reasoning, ok := reqBody["reasoning"].(map[string]any)
+	require.True(t, ok)
+	text, ok := reqBody["text"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "high", reasoning["effort"])
+	require.Equal(t, "medium", text["verbosity"])
 
 	deleteOpenAIRequestMapPath(reqBody, "reasoning.effort")
 	deleteOpenAIRequestMapPath(reqBody, "missing.child")
-	require.NotContains(t, reqBody["reasoning"].(map[string]any), "effort")
+	require.NotContains(t, reasoning, "effort")
 }
