@@ -294,7 +294,7 @@
     </div>
 
     <Pagination
-      v-if="!loading && total > pageSize"
+      v-if="showPagination && !loading && total > pageSize"
       class="overflow-hidden rounded-xl border border-slate-200 shadow-sm dark:border-dark-700"
       :page="page"
       :total="total"
@@ -311,14 +311,15 @@ import Icon from '@/components/icons/Icon.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import HistoryTerm from './MembershipHistoryTerm.vue'
 
-defineProps<{
+withDefaults(defineProps<{
   items: AccountShareMembershipHistoryEntry[]
   loading: boolean
   errorMessage: string
   page: number
   pageSize: number
   total: number
-}>()
+  showPagination?: boolean
+}>(), { showPagination: true })
 
 const emit = defineEmits<{
   reload: []

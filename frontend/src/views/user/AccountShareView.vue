@@ -1,73 +1,73 @@
 <template>
-  <AppLayout>
+  <AppLayout content-layout="viewport">
     <div class="account-marketplace">
-      <section class="marketplace-hero" aria-labelledby="marketplace-title">
-        <div class="marketplace-intro">
-          <h1 id="marketplace-title">账号广场</h1>
-          <p>选择适合你的共享房间，比较费用与能力，绑定账号模式 Key 即可使用。</p>
-        </div>
-        <label v-if="!isMembershipHistoryView" class="filter-search">
-          <Icon name="search" size="md" />
-          <input v-model.trim="searchQuery" class="filter-search-input" aria-label="搜索账号、号主或模型" placeholder="搜索账号、号主或模型" />
-          <span class="marketplace-search-hint" aria-hidden="true">搜索</span>
-        </label>
-        <div class="marketplace-utility-bar">
-          <div class="hero-actions">
-            <button
-              class="btn-primary min-h-11"
-              type="button"
-              :disabled="capabilitiesLoading || capabilities?.can_create_room === false"
-              :title="createRoomCapabilityHint"
-              @click="openCreateDialog"
-            >
-              <Icon name="plus" size="sm" class="mr-2" />
-              创建房间
-            </button>
-            <button class="btn-secondary min-h-11" type="button" @click="openRecommendationDialog">
-              <Icon name="sparkles" size="sm" class="mr-2" />
-              费用估算
-            </button>
+      <div class="marketplace-header">
+        <section class="marketplace-hero" aria-labelledby="marketplace-title">
+          <div class="marketplace-intro">
+            <h1 id="marketplace-title">账号广场</h1>
+            <p>选择适合你的共享房间，比较费用与能力，绑定账号模式 Key 即可使用。</p>
           </div>
-          <div class="hero-utility-actions">
-            <button
-              v-if="authStore.isAdmin"
-              class="account-share-admin-quota-button"
-              type="button"
-              data-testid="open-account-share-quotas"
-              @click="openAdminQuotaDialog"
-            >
-              <Icon name="cog" size="sm" class="mr-2" />
-              房间配额
-            </button>
-            <button class="account-share-guide-button" type="button" @click="openUsageGuideDialog">
-              <Icon name="book" size="sm" class="mr-2" />
-              使用说明
-            </button>
-            <button class="account-share-spend-button" type="button" @click="openMySpendDialog()">
-              <Icon name="dollar" size="sm" class="mr-2" />
-              我的消费
-            </button>
-          </div>
-        </div>
-      </section>
+          <label v-if="!isMembershipHistoryView" class="filter-search">
+            <Icon name="search" size="md" />
+            <input v-model.trim="searchQuery" class="filter-search-input" aria-label="搜索账号、号主或模型" placeholder="搜索账号、号主或模型" />
+            <span class="marketplace-search-hint" aria-hidden="true">搜索</span>
+          </label>
+        </section>
 
-      <nav class="marketplace-navigation" aria-label="账号广场分类">
-        <div class="filter-actions">
-          <button
-            v-for="filter in filters"
-            :key="filter.key"
-            type="button"
-            class="filter-chip"
-            :class="mainViewTab === filter.tab ? 'filter-chip-active' : 'filter-chip-idle'"
-            :aria-pressed="mainViewTab === filter.tab"
-            @click="setFilter(filter)"
-          >
-            <Icon :name="filter.tab === 'using' ? 'key' : filter.tab === 'mine' ? 'home' : 'grid'" size="sm" />
-            {{ filter.label }}
-          </button>
-        </div>
-        <span class="marketplace-navigation-note">一个 Key，一次专注使用一个房间</span>
-      </nav>
+        <nav class="marketplace-navigation" aria-label="账号广场分类">
+          <div class="marketplace-utility-bar">
+            <div class="hero-actions">
+              <button
+                class="btn-primary min-h-11"
+                type="button"
+                :disabled="capabilitiesLoading || capabilities?.can_create_room === false"
+                :title="createRoomCapabilityHint"
+                @click="openCreateDialog"
+              >
+                <Icon name="plus" size="sm" class="mr-2" />
+                创建房间
+              </button>
+              <button class="btn-secondary min-h-11" type="button" @click="openRecommendationDialog">
+                <Icon name="sparkles" size="sm" class="mr-2" />
+                费用估算
+              </button>
+            </div>
+            <div class="hero-utility-actions">
+              <button
+                v-if="authStore.isAdmin"
+                class="account-share-admin-quota-button"
+                type="button"
+                data-testid="open-account-share-quotas"
+                @click="openAdminQuotaDialog"
+              >
+                <Icon name="cog" size="sm" class="mr-2" />
+                房间配额
+              </button>
+              <button class="account-share-guide-button" type="button" @click="openUsageGuideDialog">
+                <Icon name="book" size="sm" class="mr-2" />
+                使用说明
+              </button>
+              <button class="account-share-spend-button" type="button" @click="openMySpendDialog()">
+                <Icon name="dollar" size="sm" class="mr-2" />
+                我的消费
+              </button>
+            </div>
+          </div>
+          <div class="filter-actions">
+            <button
+              v-for="filter in filters"
+              :key="filter.key"
+              type="button"
+              class="filter-chip"
+              :class="mainViewTab === filter.tab ? 'filter-chip-active' : 'filter-chip-idle'"
+              :aria-pressed="mainViewTab === filter.tab"
+              @click="setFilter(filter)"
+            >
+              <Icon :name="filter.tab === 'using' ? 'key' : filter.tab === 'mine' ? 'home' : 'grid'" size="sm" />
+              {{ filter.label }}
+            </button>
+          </div>
+        </nav>
 
         <div
           v-if="(mainViewTab === 'mine' || capabilities?.can_create_room === false || capabilitiesError) && (capabilities || capabilitiesError)"
@@ -99,52 +99,54 @@
           <small v-else>{{ capabilitiesError }}</small>
         </div>
 
-      <section
-        v-if="isKeyResolutionMode"
-        class="key-resolution-panel"
-        :class="keyResolutionPanelToneClass"
-        role="region"
-        aria-label="API Key 关联处置"
-        :aria-busy="keyResolutionLoading"
-      >
-        <div class="key-resolution-main">
-          <span class="key-resolution-icon" aria-hidden="true">
-            <Icon :name="keyResolutionAllClear ? 'checkCircle' : (keyResolutionError ? 'exclamationCircle' : 'key')" size="md" />
-          </span>
-          <div class="key-resolution-copy" aria-live="polite">
-            <span class="key-resolution-eyebrow">API Key 关联处置</span>
-            <h2>{{ keyResolutionAllClear ? '关联已全部解除' : `正在处理 ${keyResolutionKeyLabel}` }}</h2>
-            <p>{{ keyResolutionStatusMessage }}</p>
+        <section
+          v-if="isKeyResolutionMode"
+          class="key-resolution-panel"
+          :class="keyResolutionPanelToneClass"
+          role="region"
+          aria-label="API Key 关联处置"
+          :aria-busy="keyResolutionLoading"
+        >
+          <div class="key-resolution-main">
+            <span class="key-resolution-icon" aria-hidden="true">
+              <Icon :name="keyResolutionAllClear ? 'checkCircle' : (keyResolutionError ? 'exclamationCircle' : 'key')" size="md" />
+            </span>
+            <div class="key-resolution-copy" aria-live="polite">
+              <span class="key-resolution-eyebrow">API Key 关联处置</span>
+              <h2>{{ keyResolutionAllClear ? '关联已全部解除' : `正在处理 ${keyResolutionKeyLabel}` }}</h2>
+              <p>{{ keyResolutionStatusMessage }}</p>
+            </div>
           </div>
-        </div>
 
-        <div class="key-resolution-counts grid grid-cols-1 gap-2 sm:grid-cols-2" aria-label="待处理关联数量">
-          <div>
-            <span>正在使用</span>
-            <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionActiveCount }}</strong>
+          <div class="key-resolution-counts grid grid-cols-1 gap-2 sm:grid-cols-2" aria-label="待处理关联数量">
+            <div>
+              <span>正在使用</span>
+              <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionActiveCount }}</strong>
+            </div>
+            <div>
+              <span>退出/结算中</span>
+              <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionEndingCount }}</strong>
+            </div>
           </div>
-          <div>
-            <span>退出/结算中</span>
-            <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionEndingCount }}</strong>
-          </div>
-        </div>
 
-        <div class="key-resolution-actions">
-          <button
-            type="button"
-            class="key-resolution-refresh-button"
-            :disabled="keyResolutionLoading"
-            @click="refreshKeyResolutionContext"
-          >
-            <Icon name="refresh" size="sm" :class="{ 'animate-spin': keyResolutionLoading }" />
-            {{ keyResolutionLoading ? '核对中' : '刷新状态' }}
-          </button>
-          <button type="button" class="key-resolution-return-button" @click="returnToApiKeyManagement">
-            <Icon name="arrowLeft" size="sm" />
-            返回 API Key 管理
-          </button>
-        </div>
-      </section>
+          <div class="key-resolution-actions">
+            <button
+              type="button"
+              class="key-resolution-refresh-button"
+              :disabled="keyResolutionLoading"
+              @click="refreshKeyResolutionContext"
+            >
+              <Icon name="refresh" size="sm" :class="{ 'animate-spin': keyResolutionLoading }" />
+              {{ keyResolutionLoading ? '核对中' : '刷新状态' }}
+            </button>
+            <button type="button" class="key-resolution-return-button" @click="returnToApiKeyManagement">
+              <Icon name="arrowLeft" size="sm" />
+              返回 API Key 管理
+            </button>
+          </div>
+        </section>
+
+      </div>
 
       <BaseDialog :show="showUsageGuideDialog" title="账号广场使用说明" width="wide" :z-index="55" @close="closeUsageGuideDialog">
         <div class="space-y-5 text-sm leading-7 text-gray-600 dark:text-dark-200">
@@ -983,134 +985,160 @@
         </div>
       </section>
 
-      <div class="marketplace-results" :aria-busy="currentViewLoading">
-        <div class="marketplace-results-toolbar">
-          <div class="marketplace-result-count">
-            <h2>{{ isMembershipHistoryView ? '历史记录' : isArchiveView ? '已删除房间' : mainViewTab === 'using' ? '当前使用' : mainViewTab === 'mine' ? '我的房间' : '发现房间' }}</h2>
-            <span v-if="!isMembershipHistoryView">{{ loading ? '加载中…' : `${pagination.total_exact ? '' : '至少 '}${pagination.total} 个房间` }}</span>
+        <div class="marketplace-results" :aria-busy="currentViewLoading">
+          <div class="marketplace-results-toolbar">
+            <div class="marketplace-result-count">
+              <h2>{{ isMembershipHistoryView ? '历史记录' : isArchiveView ? '已删除房间' : mainViewTab === 'using' ? '当前使用' : mainViewTab === 'mine' ? '我的房间' : '发现房间' }}</h2>
+              <span v-if="!isMembershipHistoryView">{{ loading ? '加载中…' : `${pagination.total_exact ? '' : '至少 '}${pagination.total} 个房间` }}</span>
+              <span v-if="!isMembershipHistoryView && !isKeyResolutionMode" class="marketplace-page-capacity">每页 {{ pagination.page_size }} 个</span>
+            </div>
+            <div v-if="!isMembershipHistoryView && !isArchiveView" class="marketplace-result-stats">
+              <span>本页可用席位 <strong>{{ loading ? '—' : availableSeatCount }}</strong></span>
+              <span>本页已用席位 <strong>{{ loading ? '—' : activeSeatCount }}</strong></span>
+              <span>账号模式 Key <strong>{{ modeKeysLoading && !modeKeysLoaded ? '…' : modeApiKeys.length }}</strong></span>
+            </div>
+            <button class="marketplace-refresh" type="button" :disabled="currentViewLoading || isAnyModeKeysLoading || selfUseSettingsLoading" @click="refreshPageData">
+              <Icon name="refresh" size="sm" :class="{ 'animate-spin': currentViewLoading || isAnyModeKeysLoading || selfUseSettingsLoading }" />
+              刷新
+            </button>
           </div>
-          <div v-if="!isMembershipHistoryView && !isArchiveView" class="marketplace-result-stats">
-            <span>本页可用席位 <strong>{{ loading ? '—' : availableSeatCount }}</strong></span>
-            <span>本页已用席位 <strong>{{ loading ? '—' : activeSeatCount }}</strong></span>
-            <span>账号模式 Key <strong>{{ modeKeysLoading && !modeKeysLoaded ? '…' : modeApiKeys.length }}</strong></span>
+          <div ref="roomGridViewportRef" class="marketplace-result-body" data-testid="listing-viewport">
+            <p v-if="isMembershipHistoryView" class="marketplace-history-note">按每次加入独立展示，包含所有平台。这里保留当次使用的条款与消费记录。</p>
+            <MembershipHistoryPanel
+              v-if="isMembershipHistoryView"
+              :items="membershipHistoryEntries"
+              :loading="membershipHistoryLoading"
+              :error-message="membershipHistoryError"
+              :page="membershipHistoryPagination.page"
+              :page-size="membershipHistoryPagination.page_size"
+              :total="membershipHistoryPagination.total"
+              :show-pagination="false"
+              @reload="loadMembershipHistory"
+              @update:page="handleMembershipHistoryPageChange"
+              @review="openHistoryReviewDialog"
+            />
+
+            <template v-else>
+              <div v-if="errorMessage" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
+                {{ errorMessage }}
+              </div>
+
+
+              <div v-if="loading" class="marketplace-empty" role="status">
+                <Icon name="refresh" size="lg" class="animate-spin" />
+                <strong>正在加载账号广场...</strong>
+                <span>正在获取房间与席位信息</span>
+              </div>
+
+              <section v-else-if="displayedListings.length > 0" ref="roomGridRef" class="listing-grid">
+                <article
+                  v-for="listing in displayedListings"
+                  :key="listing.id"
+                  class="listing-card room-preview-card"
+                  :class="{ 'key-resolution-listing-card': isKeyResolutionListing(listing) }"
+                  role="button"
+                  tabindex="0"
+                  :aria-label="'查看 ' + (isUnknownHistorySnapshot(listing) ? '房间 #' + listing.id : listingDisplayName(listing)) + ' 的房间详情'"
+                  aria-haspopup="dialog"
+                  :aria-expanded="detailListing?.id === listing.id"
+                  @click="openRoomDetails(listing, $event)"
+                  @keydown.enter.self.prevent="openRoomDetails(listing)"
+                  @keydown.space.self.prevent="openRoomDetails(listing)"
+                >
+                  <div class="room-preview-heading">
+                    <span class="listing-platform-icon" aria-hidden="true"><PlatformIcon :platform="listingPlatform(listing)" size="lg" /></span>
+                    <div class="room-preview-name">
+                      <h2>{{ isUnknownHistorySnapshot(listing) ? '房间 #' + listing.id : listingDisplayName(listing) }}</h2>
+                      <span v-if="!isUnknownHistorySnapshot(listing)">{{ platformLabel(listingPlatform(listing)) }}<template v-if="isOpenAIListing(listing)"> · {{ accountLevelBadgeLabel(listing) }}</template></span>
+                      <span v-else>历史记录</span>
+                    </div>
+                    <span :class="listingStatusBadgeClass(listing)">{{ isArchiveView ? '已删除' : listingStatusLabel(listing) }}</span>
+                  </div>
+                  <template v-if="!isUnknownHistorySnapshot(listing)">
+                    <div class="room-preview-prices">
+                      <div><span>请求倍率</span><strong>{{ formatNumber(listing.rate_multiplier) }}<small>×</small></strong></div>
+                      <div><span>占位费</span><strong>{{ formatNumber(listing.hourly_rate) }}<small>/ 小时</small></strong></div>
+                    </div>
+                    <div class="room-preview-features">
+                      <span v-if="isOpenAIListing(listing) && supportsImageGeneration(listing)">支持生图</span>
+                      <span v-if="listing.hourly_fee_waiver_minimum > 0">满低消免占位费</span>
+                      <span v-if="isOpenAIListing(listing) && listing.codex_cli_only">仅官方客户端</span>
+                      <span v-if="listing.hourly_rate === 0">无占位费</span>
+                    </div>
+                    <div class="room-preview-models" aria-label="主要支持模型">
+                      <span v-for="model in listing.allowed_models.slice(0, 2)" :key="model" :title="model">{{ model }}</span>
+                      <span v-if="listing.allowed_models.length > 2">+{{ listing.allowed_models.length - 2 }}</span>
+                      <span v-if="listing.allowed_models.length === 0">{{ isArchiveView ? '未记录模型' : '暂无可用模型' }}</span>
+                    </div>
+                    <div v-if="!isArchiveView" class="room-preview-availability">
+                      <span><Icon name="users" size="sm" />剩余席位 <strong>{{ Math.max(0, listing.seat_limit - listing.active_seats) }}/{{ listing.seat_limit }}</strong></span>
+                      <span><span aria-hidden="true">★</span>{{ listingRatingLabel(listing) }}</span>
+                    </div>
+                    <div v-else class="room-preview-history">只读历史快照 · 查看当时的房间条款</div>
+                  </template>
+                  <p v-else class="room-preview-history">历史详情未完整保留，点击查看记录说明。</p>
+                  <div v-if="!isArchiveView && (listing.current_membership_id || isListingMembershipEnding(listing))" class="room-preview-membership" :class="{ 'room-preview-membership-ending': isListingMembershipEnding(listing) }">
+                    <Icon :name="isListingMembershipEnding(listing) ? 'clock' : 'key'" size="sm" />
+                    <span>{{ membershipPanelTitle(listing) }} · {{ boundApiKeyDisplayName(listing) }}</span>
+                  </div>
+                  <footer class="room-preview-footer">
+                    <span v-if="isUnknownHistorySnapshot(listing)">历史信息未完整保留</span>
+                    <span v-else :title="ownerDisplayName(listing)">{{ isOwnListing(listing) ? '我的房间 · 自用费率见详情' : '号主 · ' + ownerDisplayName(listing) }}</span>
+                    <span class="room-preview-open">查看详情 <Icon name="arrowRight" size="sm" /></span>
+                  </footer>
+                </article>
+              </section>
+
+              <div v-else class="marketplace-empty" role="status">
+                <Icon :name="hasResultFilters ? 'search' : 'grid'" size="xl" />
+                <strong>{{ isKeyResolutionMode ? (keyResolutionError ? '关联房间详情暂时无法加载，请在上方刷新状态后重试。' : '当前 API Key 没有需要处理的关联房间。') : (pagination.total === 0 ? (hasResultFilters ? '没有匹配的账号房间。' : (isArchiveView ? '暂无已删除房间。' : (isManagementView ? '暂无可管理房间。' : '当前分类暂无房间。'))) : '当前页暂无房间。') }}</strong>
+                <button v-if="hasResultFilters && !isKeyResolutionMode" type="button" class="btn-secondary min-h-11" @click="resetListingFilters">重置筛选</button>
+              </div>
+
+            </template>
           </div>
-          <button class="marketplace-refresh" type="button" :disabled="currentViewLoading || isAnyModeKeysLoading || selfUseSettingsLoading" @click="refreshPageData">
-            <Icon name="refresh" size="sm" :class="{ 'animate-spin': currentViewLoading || isAnyModeKeysLoading || selfUseSettingsLoading }" />
-            刷新
-          </button>
+          <div class="marketplace-pagination" data-testid="listing-pagination-footer" :aria-busy="currentViewLoading">
+            <span v-if="isKeyResolutionMode" class="marketplace-pagination-note">所有需要处理的关联房间均在此展示</span>
+            <template v-else-if="isMembershipHistoryView">
+              <Pagination
+                v-if="membershipHistoryPagination.total > 0"
+                class="marketplace-page-controls"
+                :inert="membershipHistoryLoading || undefined"
+                :page="membershipHistoryPagination.page"
+                :total="membershipHistoryPagination.total"
+                :page-size="membershipHistoryPagination.page_size"
+                :show-page-size-selector="false"
+                compact
+                @update:page="handleMembershipHistoryPageChange"
+              />
+              <span v-else class="marketplace-pagination-note">{{ membershipHistoryLoading ? '正在加载历史记录…' : '暂无历史记录' }}</span>
+            </template>
+            <template v-else>
+              <Pagination
+                v-if="pagination.total_exact && pagination.total > 0"
+                class="marketplace-page-controls"
+                :inert="loading || undefined"
+                :page="pagination.page"
+                :total="pagination.total"
+                :page-size="pagination.page_size"
+                :show-page-size-selector="false"
+                compact
+                @update:page="handlePageChange"
+              />
+              <LowerBoundPagination
+                v-else-if="!pagination.total_exact"
+                class="marketplace-page-controls"
+                :page="pagination.page"
+                :total="pagination.total"
+                :has-more="Boolean(pagination.has_more)"
+                :loading="loading"
+                data-testid="listing-cursor-pagination"
+                @update:page="handlePageChange"
+              />
+              <span v-else class="marketplace-pagination-note">{{ loading ? '正在加载房间…' : '暂无匹配房间' }}</span>
+            </template>
+          </div>
         </div>
-        <p v-if="isMembershipHistoryView" class="marketplace-history-note">按每次加入独立展示，包含所有平台。这里保留当次使用的条款与消费记录。</p>
-      <MembershipHistoryPanel
-        v-if="isMembershipHistoryView"
-        :items="membershipHistoryEntries"
-        :loading="membershipHistoryLoading"
-        :error-message="membershipHistoryError"
-        :page="membershipHistoryPagination.page"
-        :page-size="membershipHistoryPagination.page_size"
-        :total="membershipHistoryPagination.total"
-        @reload="loadMembershipHistory"
-        @update:page="handleMembershipHistoryPageChange"
-        @review="openHistoryReviewDialog"
-      />
-
-      <template v-else>
-      <div v-if="errorMessage" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
-        {{ errorMessage }}
-      </div>
-
-
-      <div v-if="loading" class="marketplace-empty" role="status">
-        <Icon name="refresh" size="lg" class="animate-spin" />
-        <strong>正在加载账号广场...</strong>
-        <span>正在获取房间与席位信息</span>
-      </div>
-
-      <section v-else-if="displayedListings.length > 0" class="listing-grid">
-<article
-                v-for="listing in displayedListings"
-                :key="listing.id"
-                class="listing-card room-preview-card"
-                :class="{ 'key-resolution-listing-card': isKeyResolutionListing(listing) }"
-                role="button"
-                tabindex="0"
-                :aria-label="'查看 ' + (isUnknownHistorySnapshot(listing) ? '房间 #' + listing.id : listingDisplayName(listing)) + ' 的房间详情'"
-                aria-haspopup="dialog"
-                :aria-expanded="detailListing?.id === listing.id"
-                @click="openRoomDetails(listing, $event)"
-                @keydown.enter.self.prevent="openRoomDetails(listing)"
-                @keydown.space.self.prevent="openRoomDetails(listing)"
-              >
-                <div class="room-preview-heading">
-                  <span class="listing-platform-icon" aria-hidden="true"><PlatformIcon :platform="listingPlatform(listing)" size="lg" /></span>
-                  <div class="room-preview-name">
-                    <h2>{{ isUnknownHistorySnapshot(listing) ? '房间 #' + listing.id : listingDisplayName(listing) }}</h2>
-                    <span v-if="!isUnknownHistorySnapshot(listing)">{{ platformLabel(listingPlatform(listing)) }}<template v-if="isOpenAIListing(listing)"> · {{ accountLevelBadgeLabel(listing) }}</template></span>
-                    <span v-else>历史记录</span>
-                  </div>
-                  <span :class="listingStatusBadgeClass(listing)">{{ isArchiveView ? '已删除' : listingStatusLabel(listing) }}</span>
-                </div>
-                <template v-if="!isUnknownHistorySnapshot(listing)">
-                  <div class="room-preview-prices">
-                    <div><span>请求倍率</span><strong>{{ formatNumber(listing.rate_multiplier) }}<small>×</small></strong></div>
-                    <div><span>占位费</span><strong>{{ formatNumber(listing.hourly_rate) }}<small>/ 小时</small></strong></div>
-                  </div>
-                  <div class="room-preview-features">
-                    <span v-if="isOpenAIListing(listing) && supportsImageGeneration(listing)">支持生图</span>
-                    <span v-if="listing.hourly_fee_waiver_minimum > 0">满低消免占位费</span>
-                    <span v-if="isOpenAIListing(listing) && listing.codex_cli_only">仅官方客户端</span>
-                    <span v-if="listing.hourly_rate === 0">无占位费</span>
-                  </div>
-                  <div class="room-preview-models" aria-label="主要支持模型">
-                    <span v-for="model in listing.allowed_models.slice(0, 2)" :key="model" :title="model">{{ model }}</span>
-                    <span v-if="listing.allowed_models.length > 2">+{{ listing.allowed_models.length - 2 }}</span>
-                    <span v-if="listing.allowed_models.length === 0">{{ isArchiveView ? '未记录模型' : '暂无可用模型' }}</span>
-                  </div>
-                  <div v-if="!isArchiveView" class="room-preview-availability">
-                    <span><Icon name="users" size="sm" />剩余席位 <strong>{{ Math.max(0, listing.seat_limit - listing.active_seats) }}/{{ listing.seat_limit }}</strong></span>
-                    <span><span aria-hidden="true">★</span>{{ listingRatingLabel(listing) }}</span>
-                  </div>
-                  <div v-else class="room-preview-history">只读历史快照 · 查看当时的房间条款</div>
-                </template>
-                <p v-else class="room-preview-history">历史详情未完整保留，点击查看记录说明。</p>
-                <div v-if="!isArchiveView && (listing.current_membership_id || isListingMembershipEnding(listing))" class="room-preview-membership" :class="{ 'room-preview-membership-ending': isListingMembershipEnding(listing) }">
-                  <Icon :name="isListingMembershipEnding(listing) ? 'clock' : 'key'" size="sm" />
-                  <span>{{ membershipPanelTitle(listing) }} · {{ boundApiKeyDisplayName(listing) }}</span>
-                </div>
-                <footer class="room-preview-footer">
-                  <span v-if="isUnknownHistorySnapshot(listing)">历史信息未完整保留</span>
-                  <span v-else :title="ownerDisplayName(listing)">{{ isOwnListing(listing) ? '我的房间 · 自用费率见详情' : '号主 · ' + ownerDisplayName(listing) }}</span>
-                  <span class="room-preview-open">查看详情 <Icon name="arrowRight" size="sm" /></span>
-                </footer>
-              </article>
-      </section>
-
-      <div v-else class="marketplace-empty" role="status">
-        <Icon :name="hasResultFilters ? 'search' : 'grid'" size="xl" />
-        <strong>{{ isKeyResolutionMode ? (keyResolutionError ? '关联房间详情暂时无法加载，请在上方刷新状态后重试。' : '当前 API Key 没有需要处理的关联房间。') : (pagination.total === 0 ? (hasResultFilters ? '没有匹配的账号房间。' : (isArchiveView ? '暂无已删除房间。' : (isManagementView ? '暂无可管理房间。' : '当前分类暂无房间。'))) : '当前页暂无房间。') }}</strong>
-        <button v-if="hasResultFilters && !isKeyResolutionMode" type="button" class="btn-secondary min-h-11" @click="resetListingFilters">重置筛选</button>
-      </div>
-
-      <Pagination
-        v-if="!isKeyResolutionMode && !loading && pagination.total_exact && pagination.total > pagination.page_size"
-        class="overflow-hidden rounded-lg border border-gray-200 shadow-sm dark:border-dark-700"
-        :page="pagination.page"
-        :total="pagination.total"
-        :page-size="pagination.page_size"
-        :show-page-size-selector="false"
-        @update:page="handlePageChange"
-        @update:pageSize="handlePageSizeChange"
-      />
-      <LowerBoundPagination
-        v-if="!isKeyResolutionMode && !loading && !pagination.total_exact && (pagination.page > 1 || pagination.has_more)"
-        :page="pagination.page"
-        :total="pagination.total"
-        :has-more="pagination.has_more"
-        data-testid="listing-cursor-pagination"
-        @update:page="handlePageChange"
-      />
-
-      </template>
-      </div>
       </div>
     </div>
 
@@ -2749,6 +2777,7 @@ import AccountShareQuotaAdminDialog from '@/components/account-share/AccountShar
 import MembershipHistoryPanel from '@/components/account-share/MembershipHistoryPanel.vue'
 import RoomDetailsDrawer from '@/components/account-share/RoomDetailsDrawer.vue'
 import RoomReviewsPanel from '@/components/account-share/RoomReviewsPanel.vue'
+import { useRoomGridCapacity } from '@/components/account-share/useRoomGridCapacity'
 // 房间生命周期弹窗按需加载：未打开时其模板、状态机与样式都不进入本页首屏产物。
 const RoomLifecycleDialog = defineAsyncComponent(
   () => import('@/components/account-share/RoomLifecycleDialog.vue')
@@ -3398,7 +3427,7 @@ function buildCurrentListingPreferences(): ListingPreferenceState {
     platform: activeListingPlatform.value,
     tab: activeFilter.value.tab,
     search: searchQuery.value,
-    pageSize: pagination.page_size,
+    pageSize: initialListingPreferences.pageSize,
     status: listingFilters.status,
     accountLevel: listingFilters.accountLevel,
     sortKeys: listingFilters.sortKeys,
@@ -3441,6 +3470,8 @@ const initialListingPreferences = readListingPreferences()
 const activeFilter = ref<FilterOption>(filterForListingTab(initialListingPreferences.tab))
 const activeListingPlatform = ref<AccountSharePlatform>(initialListingPreferences.platform)
 const listings = ref<AccountShareListing[]>([])
+const roomGridViewportRef = ref<HTMLElement | null>(null)
+const roomGridRef = ref<HTMLElement | null>(null)
 const membershipHistoryEntries = ref<AccountShareMembershipHistoryEntry[]>([])
 const visibleValidatingListingIDs = ref(new Set<number>())
 const selectedRecommendationPreset = ref<RecommendationPresetKey>('balanced')
@@ -4852,11 +4883,11 @@ function handleMembershipHistoryPageChange(page: number): void {
   void loadMembershipHistory()
 }
 
-function handlePageSizeChange(pageSize: number): void {
+function handleRoomGridCapacityChange(pageSize: number): void {
+  if (isMembershipHistoryView.value || isKeyResolutionMode.value || pageSize === pagination.page_size) return
   clearSearchDebounceTimer()
-  pagination.page_size = normalizeListingPageSize(pageSize)
+  pagination.page_size = pageSize
   pagination.page = 1
-  persistListingPreferences()
   void loadListings()
 }
 
@@ -8772,6 +8803,13 @@ watch([displayedListings, loading, keyResolutionLoading], () => {
   if (loading.value || keyResolutionLoading.value || !detailSnapshot.value) return
   if (!displayedListings.value.some(listing => listing.id === detailSnapshot.value?.id)) closeRoomDetails()
 }, { flush: 'post' })
+
+useRoomGridCapacity({
+  viewport: roomGridViewportRef,
+  grid: roomGridRef,
+  enabled: computed(() => !isMembershipHistoryView.value && !isKeyResolutionMode.value),
+  onCapacityChange: handleRoomGridCapacityChange
+})
 
 onMounted(async () => {
   document.addEventListener('click', handleFilterPanelDocumentClick)

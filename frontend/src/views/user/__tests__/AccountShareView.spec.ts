@@ -14,7 +14,10 @@ import type {
 import type { Account, ApiKey } from '@/types'
 import AccountShareView from '../AccountShareView.vue'
 
+type RoomGridCapacityOptions = Parameters<typeof import('@/components/account-share/useRoomGridCapacity').useRoomGridCapacity>[0]
+
 const {
+  roomGridCapacity,
   listListings,
   listMembershipHistory,
   getMySpendSummary,
@@ -51,6 +54,7 @@ const {
   authState,
   routeQuery,
 } = vi.hoisted(() => ({
+  roomGridCapacity: vi.fn<(options: RoomGridCapacityOptions) => void>(),
   listListings: vi.fn(),
   listMembershipHistory: vi.fn(),
   getMySpendSummary: vi.fn(),
@@ -93,6 +97,8 @@ const {
   },
   routeQuery: {} as Record<string, string>,
 }))
+
+vi.mock('@/components/account-share/useRoomGridCapacity', () => ({ useRoomGridCapacity: roomGridCapacity }))
 
 vi.mock('@/api/accountShare', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/api/accountShare')>()
@@ -547,6 +553,7 @@ async function mountPendingJoin(expiresAt = '2099-07-11T01:02:00Z') {
 describe('AccountShareView async snapshots and mode keys', () => {
   beforeEach(() => {
     localStorage.clear()
+    roomGridCapacity.mockReset()
     listListings.mockReset()
     listMembershipHistory.mockReset()
     getMySpendSummary.mockReset()
@@ -2090,6 +2097,16 @@ describe('AccountShareView async snapshots and mode keys', () => {
     expect(wrapper.findAll('[data-testid="membership-history-card"]')).toHaveLength(2)
     expect(wrapper.text()).toContain('记录 #8801')
     expect(wrapper.text()).toContain('记录 #8802')
+    const capacity = roomGridCapacity.mock.calls[0][0]
+    const listingCalls = listListings.mock.calls.length
+    const historyCalls = listMembershipHistory.mock.calls.length
+    expect(capacity.enabled.value).toBe(false)
+    capacity.onCapacityChange(1)
+    await flushPromises()
+    expect(listListings).toHaveBeenCalledTimes(listingCalls)
+    expect(listMembershipHistory).toHaveBeenCalledTimes(historyCalls)
+    expect(wrapper.findAll('[data-testid="membership-history-card"]')).toHaveLength(2)
+    expect((wrapper.vm as any).$.setupState.membershipHistoryPagination.page_size).toBe(10)
     wrapper.unmount()
   })
 
@@ -2766,8 +2783,10 @@ describe('AccountShareView async snapshots and mode keys', () => {
     let resolveOlder!: (value: ReturnType<typeof paginated>) => void
     let resolveNewer!: (value: ReturnType<typeof paginated>) => void
     let mainRequestCount = 0
-    listListings.mockImplementation((_page: number, pageSize: number) => {
-      if (pageSize !== 10) return Promise.resolve(paginated([]))
+    const signals: AbortSignal[] = []
+    listListings.mockImplementation((_page: number, pageSize: number, _filters: unknown, options?: { signal?: AbortSignal }) => {
+      if (pageSize === 100) return Promise.resolve(paginated([]))
+      if (options?.signal) signals.push(options.signal)
       mainRequestCount += 1
       return new Promise(resolve => {
         if (mainRequestCount === 1) resolveOlder = resolve
@@ -2777,16 +2796,18 @@ describe('AccountShareView async snapshots and mode keys', () => {
 
     const wrapper = mountView()
     const setupState = (wrapper.vm as any).$?.setupState
-    const newerLoad = setupState.loadListings()
-    resolveNewer(paginated([listing({ id: 502, room_name: '最新房间', account_name: '最新底层账号' })]))
-    await newerLoad
-    await nextTick()
+    roomGridCapacity.mock.calls[0][0].onCapacityChange(6)
+    expect(signals[0].aborted).toBe(true)
+    resolveNewer(paginated([listing({ id: 502, room_name: '最新房间', account_name: '最新底层账号' })], 1, 1, 1, 6))
+    await flushPromises()
     expect(wrapper.text()).toContain('最新房间')
+    expect(setupState.pagination.page_size).toBe(6)
 
     resolveOlder(paginated([listing({ id: 501, room_name: '旧响应房间', account_name: '旧响应底层账号' })]))
     await flushPromises()
     expect(wrapper.text()).toContain('最新房间')
     expect(wrapper.text()).not.toContain('旧响应房间')
+    expect(setupState.pagination.page_size).toBe(6)
     wrapper.unmount()
   })
 
@@ -3210,18 +3231,106 @@ describe('AccountShareView async snapshots and mode keys', () => {
     }
   })
 
-  it('renders inexact pagination as a lower bound without an invented last page', async () => {
-    listListings.mockImplementation((_page: number, size: number) => Promise.resolve({
-      ...paginated(size === 10 ? [listing()] : [], 1, 2, 11),
-      total_exact: false,
-      has_more: true,
+  it('uses the measured room capacity for server pages without persisting it as a table preference', async () => {
+    const rooms = Array.from({ length: 18 }, (_, index) => listing({
+      id: 501 + index, room_name: `自动房间 ${index + 1}`,
     }))
+    listListings.mockImplementation((page: number, size: number, filters?: { tab?: string }) => Promise.resolve(
+      filters?.tab === 'all'
+        ? paginated(rooms.slice((page - 1) * size, page * size), page, Math.ceil(rooms.length / size), rooms.length, size)
+        : paginated([], page, 0, 0, size)
+    ))
+    const wrapper = mountView()
+    await flushPromises()
+    const capacity = roomGridCapacity.mock.calls[0][0]
+    const storageBeforeResize = localStorage.getItem('account-share-listing-preferences:user:9')
+    expect(capacity.enabled.value).toBe(true)
+    expect(wrapper.findAll('.listing-card')).toHaveLength(10)
+
+    capacity.onCapacityChange(6)
+    await flushPromises()
+    expect(listListings).toHaveBeenLastCalledWith(1, 6, expect.objectContaining({ tab: 'all' }), expect.objectContaining({ signal: expect.any(AbortSignal) }))
+    expect(wrapper.findAll('.listing-card')).toHaveLength(6)
+    expect(wrapper.getComponent({ name: 'Pagination' }).props('showPageSizeSelector')).toBe(false)
+    wrapper.getComponent({ name: 'Pagination' }).vm.$emit('update:page', 2)
+    await flushPromises()
+    expect(listListings).toHaveBeenLastCalledWith(2, 6, expect.objectContaining({ tab: 'all' }), expect.any(Object))
+    expect(wrapper.findAll('.listing-card')[0].text()).toContain('自动房间 7')
+
+    const callsBeforeRepeatedSize = listListings.mock.calls.length
+    capacity.onCapacityChange(6)
+    await flushPromises()
+    expect(listListings).toHaveBeenCalledTimes(callsBeforeRepeatedSize)
+    capacity.onCapacityChange(4)
+    await flushPromises()
+    expect(listListings).toHaveBeenLastCalledWith(1, 4, expect.objectContaining({ tab: 'all' }), expect.any(Object))
+    expect(wrapper.findAll('.listing-card')).toHaveLength(4)
+    expect(wrapper.findAll('.listing-card')[0].text()).toContain('自动房间 1')
+    expect(localStorage.getItem('account-share-listing-preferences:user:9')).toBe(storageBeforeResize)
+
+    const state = (wrapper.vm as any).$.setupState
+    state.applyListingFilters()
+    await flushPromises()
+    expect(JSON.parse(localStorage.getItem('account-share-listing-preferences:user:9') as string).pageSize).toBe(10)
+    expect(state.pagination.page_size).toBe(4)
+    wrapper.unmount()
+  })
+
+  it('ignores capacity changes in Key resolution mode and keeps every associated room visible', async () => {
+    routeQuery.mode = 'resolve-key-binding'
+    routeQuery.api_key_id = '1001'
+    const rooms = [501, 502, 503].map(id => listing({ id, room_name: `关联房间 ${id}` }))
+    getAPIKeyBindingStatus.mockResolvedValue({
+      api_key_id: 1001, active_count: 3, ending_count: 0, blocking_count: 3,
+      memberships: rooms.map((room, index) => membership({
+        id: 801 + index, listing_id: room.id, api_key_id: 1001, status: 'active',
+      })),
+    })
+    getListing.mockImplementation((id: number) => Promise.resolve(rooms.find(room => room.id === id)))
+    const wrapper = mountView()
+    await flushPromises()
+    const capacity = roomGridCapacity.mock.calls[0][0]
+    const listingCalls = listListings.mock.calls.length
+    const detailCalls = getListing.mock.calls.length
+    const bindingCalls = getAPIKeyBindingStatus.mock.calls.length
+    expect(capacity.enabled.value).toBe(false)
+    expect(wrapper.findAll('.listing-card')).toHaveLength(3)
+    capacity.onCapacityChange(1)
+    await flushPromises()
+    expect(listListings).toHaveBeenCalledTimes(listingCalls)
+    expect(getListing).toHaveBeenCalledTimes(detailCalls)
+    expect(getAPIKeyBindingStatus).toHaveBeenCalledTimes(bindingCalls)
+    expect(wrapper.findAll('.listing-card')).toHaveLength(3)
+    expect(wrapper.get('[data-testid="listing-pagination-footer"]').text()).toContain('所有需要处理的关联房间均在此展示')
+    expect(wrapper.find('pagination-stub').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="listing-cursor-pagination"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('renders inexact pagination as a lower bound without an invented last page', async () => {
+    listListings.mockImplementation((page: number, size: number, filters?: { tab?: string }) => Promise.resolve(
+      filters?.tab === 'all'
+        ? {
+            ...paginated([listing({ id: 501 + page })], page, 2, size + 1, size),
+            total_exact: false,
+            has_more: page === 1,
+          }
+        : paginated([], page, 0, 0, size)
+    ))
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.text()).toContain('至少 11')
     const pager = wrapper.get('[data-testid="listing-cursor-pagination"]')
     expect(pager.text()).toContain('下一页')
     expect(pager.text()).not.toContain('共 2 页')
+    expect(wrapper.find('pagination-stub').exists()).toBe(false)
+    roomGridCapacity.mock.calls[0][0].onCapacityChange(6)
+    await flushPromises()
+    expect(wrapper.get('[data-testid="listing-cursor-pagination"]').text()).toContain('至少 7')
+    await wrapper.get('[data-testid="listing-cursor-pagination"]').findAll('button')[1].trigger('click')
+    await flushPromises()
+    expect(listListings).toHaveBeenLastCalledWith(2, 6, expect.objectContaining({ tab: 'all' }), expect.any(Object))
+    expect(wrapper.get('[data-testid="listing-cursor-pagination"]').findAll('button')[1].attributes('disabled')).toBeDefined()
     expect(wrapper.find('pagination-stub').exists()).toBe(false)
     wrapper.unmount()
   })
