@@ -36,6 +36,7 @@
     >
       <!-- Desktop pagination info -->
       <div
+        class="pagination-info"
         :class="[
           'flex items-center',
           compact ? 'w-full min-w-0 justify-between gap-3' : 'space-x-4'
