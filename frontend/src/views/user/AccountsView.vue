@@ -590,6 +590,7 @@ import type { Account, AccountLevel, AccountPlatform, AccountType, AdminGroup, G
 import type { Column } from '@/components/common/types'
 import { formatDateTime, formatRelativeTime } from '@/utils/format'
 import { extractApiErrorCode, extractApiErrorMessage, extractApiErrorMetadata, isAbortError } from '@/utils/apiError'
+import { displayText } from '@/utils/displayText'
 
 type UserAccountStatus = 'active' | 'disabled'
 
@@ -767,7 +768,7 @@ const groupFilterOptions = computed(() => [
   { value: -1, label: t('userAccounts.privateDefaultGroupOnly') },
   ...groups.value.map((group) => ({
     value: group.id,
-    label: group.name
+    label: displayText(group.name)
   }))
 ])
 

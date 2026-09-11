@@ -1422,7 +1422,7 @@
         :id="getGroupSelectorPopoverId(groupSelectorKeyId)"
         ref="dropdownRef"
         :data-ui-skin="uiSkin"
-        class="data-teleport-panel animate-in fade-in slide-in-from-top-2 fixed z-[100000020] flex max-h-[calc(100dvh-2rem)] min-w-0 w-[min(34rem,calc(100vw-2rem))] flex-col duration-200"
+        class="data-teleport-panel animate-in fade-in slide-in-from-top-2 fixed z-[100000020] flex max-h-[calc(100dvh-2rem)] min-w-0 w-[min(58rem,calc(100vw-2rem))] flex-col overflow-hidden duration-200"
         style="pointer-events: auto !important;"
         role="dialog"
         :aria-label="t('keys.groupSelectorLabel')"
@@ -1433,8 +1433,21 @@
         @click.stop
         @keydown="handleGroupSelectorKeydown"
       >
-        <!-- Search box -->
-        <div class="flex-shrink-0 border-b border-line p-2">
+        <!-- Search and context header -->
+        <div class="flex-shrink-0 border-b border-line bg-surface/95 p-4 backdrop-blur-sm">
+          <div class="mb-3 flex items-start justify-between gap-4">
+            <div class="min-w-0">
+              <p class="text-sm font-semibold text-content">{{ t('keys.groupSelectorLabel') }}</p>
+              <p class="mt-0.5 text-xs text-content-subtle">
+                {{ activeGroupPlatform ? t(`admin.groups.platforms.${activeGroupPlatform}`) : t('admin.groups.platforms.all') }}
+                <span class="mx-1 text-content-faint">·</span>
+                {{ filteredGroupOptions.length }}
+              </p>
+            </div>
+            <span class="hidden rounded-full bg-brand-soft px-2.5 py-1 text-[11px] font-medium text-brand sm:inline-flex">
+              {{ t('keys.searchGroup') }}
+            </span>
+          </div>
           <div class="relative">
             <svg class="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-content-subtle" fill="none" stroke="currentColor" viewBox="0 0 24 24" stroke-width="2">
               <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -1452,73 +1465,104 @@
               @click.stop
             />
           </div>
-          <div class="mt-2 flex items-center gap-1 overflow-x-auto pb-0.5" role="tablist" :aria-label="t('keys.groupSelectorLabel')">
-            <button
-              v-for="platform in groupPlatforms"
-              :key="platform.value || 'all'"
-              type="button"
-              role="tab"
-              :aria-selected="activeGroupPlatform === platform.value"
-              :class="[
-                'inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors',
-                activeGroupPlatform === platform.value
-                  ? 'bg-brand-soft text-brand'
-                  : 'text-content-muted hover:bg-surface-muted hover:text-content'
-              ]"
-              @click="activeGroupPlatform = platform.value"
-            >
-              <PlatformIcon v-if="platform.value" :platform="platform.value" size="xs" />
-              <span>{{ platform.label }}</span>
-              <span class="rounded-full bg-black/5 px-1.5 py-0.5 text-[10px] dark:bg-white/10">{{ platform.count }}</span>
-            </button>
-          </div>
         </div>
-        <!-- Group list -->
-        <div
-          :id="getGroupSelectorListId(groupSelectorKeyId)"
-          class="min-h-0 flex-1 overflow-y-auto p-1.5"
-          role="group"
-          :aria-label="t('keys.groupLabel')"
-        >
-          <button
-            v-for="option in filteredGroupOptions"
-            :key="option.value ?? 'null'"
-            type="button"
-            :aria-pressed="
-              selectedKeyForGroup?.group_id === option.value ||
-              (!selectedKeyForGroup?.group_id && option.value === null)
-            "
-            @click="changeGroup(selectedKeyForGroup!, option.value)"
-            :class="[
-              'data-teleport-option',
-              selectedKeyForGroup?.group_id === option.value ||
-              (!selectedKeyForGroup?.group_id && option.value === null)
-                ? 'bg-brand-soft'
-                : ''
-            ]"
-            :title="option.description || undefined"
+        <div class="flex min-h-0 flex-1 flex-col sm:flex-row">
+          <!-- Platform navigation -->
+          <aside class="shrink-0 border-b border-line bg-surface-muted/45 p-2 sm:w-48 sm:border-b-0 sm:border-r">
+            <div class="mb-2 px-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-content-faint">
+              {{ t('admin.groups.platforms.all') }}
+            </div>
+            <div class="flex gap-1 overflow-x-auto sm:block sm:space-y-1 sm:overflow-visible" role="tablist" :aria-label="t('keys.groupSelectorLabel')">
+              <button
+                v-for="platform in groupPlatforms"
+                :key="platform.value || 'all'"
+                type="button"
+                role="tab"
+                :aria-selected="activeGroupPlatform === platform.value"
+                :class="[
+                  'group inline-flex min-h-10 shrink-0 items-center gap-2 rounded-xl px-3 text-left text-xs font-medium transition-all sm:flex sm:w-full',
+                  activeGroupPlatform === platform.value
+                    ? 'bg-brand text-white shadow-sm shadow-brand/20'
+                    : 'text-content-muted hover:bg-surface hover:text-content'
+                ]"
+                @click="activeGroupPlatform = platform.value"
+              >
+                <span
+                  :class="[
+                    'grid h-6 w-6 shrink-0 place-items-center rounded-lg',
+                    activeGroupPlatform === platform.value ? 'bg-white/15' : 'bg-black/5 dark:bg-white/10'
+                  ]"
+                >
+                  <PlatformIcon v-if="platform.value" :platform="platform.value" size="xs" />
+                  <Icon v-else name="grid" size="xs" />
+                </span>
+                <span class="min-w-0 flex-1 truncate">{{ platform.label }}</span>
+                <span
+                  :class="[
+                    'rounded-full px-1.5 py-0.5 text-[10px] tabular-nums',
+                    activeGroupPlatform === platform.value ? 'bg-white/15' : 'bg-black/5 dark:bg-white/10'
+                  ]"
+                >{{ platform.count }}</span>
+              </button>
+            </div>
+          </aside>
+          <!-- Group list -->
+          <div
+            :id="getGroupSelectorListId(groupSelectorKeyId)"
+            class="min-h-0 flex-1 overflow-y-auto bg-surface p-3"
+            role="group"
+            :aria-label="t('keys.groupLabel')"
           >
-            <GroupOptionItem
-              :name="option.label"
-              :platform="option.platform"
-              :scope="option.scope"
-              :subscription-type="option.subscriptionType"
-              :rate-multiplier="option.rate"
-              :user-rate-multiplier="option.userRate"
-              :effective-rate-multiplier="option.effectiveRate"
-              :rate-multiplier-source="option.rateSource"
-              :description="option.description"
-              :api-key-badge-type="option.apiKeyBadgeType"
-              :api-key-badge-text="option.apiKeyBadgeText"
-              :selected="
-                selectedKeyForGroup?.group_id === option.value ||
-                (!selectedKeyForGroup?.group_id && option.value === null)
-              "
-            />
-          </button>
-          <!-- Empty state when search has no results -->
-          <div v-if="filteredGroupOptions.length === 0" class="py-4 text-center text-sm text-content-subtle">
-            {{ t('keys.noGroupFound') }}
+            <div v-if="filteredGroupOptions.length > 0" class="mb-2 flex items-center justify-between px-1">
+              <span class="text-xs font-medium text-content-muted">{{ t('keys.groupLabel') }}</span>
+              <span class="text-[11px] tabular-nums text-content-faint">{{ filteredGroupOptions.length }}</span>
+            </div>
+            <div v-if="filteredGroupOptions.length > 0" class="grid gap-2 lg:grid-cols-2">
+              <button
+                v-for="option in filteredGroupOptions"
+                :key="option.value ?? 'null'"
+                type="button"
+                :aria-pressed="
+                  selectedKeyForGroup?.group_id === option.value ||
+                  (!selectedKeyForGroup?.group_id && option.value === null)
+                "
+                @click="changeGroup(selectedKeyForGroup!, option.value)"
+                :class="[
+                  'data-teleport-option min-w-0 rounded-xl border border-line bg-surface-raised p-0 text-left transition-all hover:-translate-y-px hover:border-brand/45 hover:shadow-sm',
+                  selectedKeyForGroup?.group_id === option.value ||
+                  (!selectedKeyForGroup?.group_id && option.value === null)
+                    ? 'border-brand/60 bg-brand-soft ring-1 ring-brand/20'
+                    : ''
+                ]"
+                :title="option.description || undefined"
+              >
+                <GroupOptionItem
+                  :name="option.label"
+                  :platform="option.platform"
+                  :scope="option.scope"
+                  :subscription-type="option.subscriptionType"
+                  :rate-multiplier="option.rate"
+                  :user-rate-multiplier="option.userRate"
+                  :effective-rate-multiplier="option.effectiveRate"
+                  :rate-multiplier-source="option.rateSource"
+                  :description="option.description"
+                  :api-key-badge-type="option.apiKeyBadgeType"
+                  :api-key-badge-text="option.apiKeyBadgeText"
+                  :selected="
+                    selectedKeyForGroup?.group_id === option.value ||
+                    (!selectedKeyForGroup?.group_id && option.value === null)
+                  "
+                />
+              </button>
+            </div>
+            <!-- Empty state when search has no results -->
+            <div v-else class="flex min-h-56 flex-col items-center justify-center rounded-2xl border border-dashed border-line px-6 text-center">
+              <span class="mb-3 grid h-10 w-10 place-items-center rounded-full bg-surface-muted text-content-faint">
+                <Icon name="search" size="md" />
+              </span>
+              <p class="text-sm font-medium text-content">{{ t('keys.noGroupFound') }}</p>
+              <p class="mt-1 text-xs text-content-subtle">{{ t('keys.searchGroup') }}</p>
+            </div>
           </div>
         </div>
       </div>
@@ -2041,7 +2085,7 @@ const groupOptions = computed<GroupOption[]>(() =>
         effectiveRate: group.effective_rate_multiplier ?? fallbackUserRate,
         rateSource: group.effective_rate_multiplier_source ?? (fallbackUserRate != null ? 'user_group' : 'group_default'),
         subscriptionType: group.subscription_type,
-        platform: group.platform,
+        platform: group.platform.trim().toLowerCase() as GroupPlatform,
         scope: group.scope,
         apiKeyBadgeType: group.api_key_badge_type,
         apiKeyBadgeText: group.api_key_badge_text
@@ -2199,18 +2243,39 @@ const groupRoutingChanged = (
 // Group dropdown search
 const groupSearchQuery = ref('')
 const activeGroupPlatform = ref<GroupPlatform | null>(null)
+
+// Keep the platform rail stable even when a platform currently has no available
+// groups. This avoids the selector layout shifting as group visibility changes.
+const canonicalGroupPlatforms: GroupPlatform[] = [
+  'anthropic',
+  'openai',
+  'gemini',
+  'antigravity',
+  'grok',
+  'opencode',
+  'kimi',
+  'zhipu',
+  'deepseek',
+  'minimax',
+  'qwen'
+]
+
 const groupPlatforms = computed(() => {
-  const platforms = Array.from(new Set(groupOptions.value.map((option) => option.platform)))
+  const counts = new Map<GroupPlatform, number>()
+  for (const option of groupOptions.value) {
+    const platform = option.platform.trim().toLowerCase() as GroupPlatform
+    counts.set(platform, (counts.get(platform) ?? 0) + 1)
+  }
   return [
     {
       value: null as GroupPlatform | null,
       label: t('admin.groups.platforms.all'),
       count: groupOptions.value.length
     },
-    ...platforms.map((platform) => ({
+    ...canonicalGroupPlatforms.map((platform) => ({
       value: platform,
       label: t(`admin.groups.platforms.${platform}`),
-      count: groupOptions.value.filter((option) => option.platform === platform).length
+      count: counts.get(platform) ?? 0
     }))
   ]
 })
@@ -2408,7 +2473,8 @@ const updateGroupSelectorPosition = (): boolean => {
   const dropdownHeight = Math.min(dropdownRef.value?.offsetHeight || 400, maxDropdownHeight)
   const spaceBelow = window.innerHeight - rect.bottom - viewportPadding
   const spaceAbove = rect.top - viewportPadding
-  const dropdownWidth = Math.min(544, Math.max(0, window.innerWidth - viewportPadding * 2))
+  // Keep the clamp in sync with the 58rem (928px) two-column selector.
+  const dropdownWidth = Math.min(928, Math.max(0, window.innerWidth - viewportPadding * 2))
   const maxLeft = Math.max(viewportPadding, window.innerWidth - dropdownWidth - viewportPadding)
   const clampedLeft = Math.min(Math.max(rect.left, viewportPadding), maxLeft)
   const preferredTop = spaceBelow >= dropdownHeight || spaceBelow >= spaceAbove
