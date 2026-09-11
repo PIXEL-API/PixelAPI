@@ -2516,7 +2516,9 @@
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem 1rem;
-  border-bottom: 1px solid rgb(186 230 253);
+  align-items: center;
+  border: 1px solid rgb(186 230 253);
+  border-radius: 0.875rem;
   background: rgb(240 249 255);
   padding: 0.75rem 1rem;
   color: rgb(3 105 161);
@@ -3557,6 +3559,7 @@
 
 .create-room-stage-heading > div {
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .create-room-stage-heading strong,
@@ -3629,13 +3632,71 @@
 }
 
 .create-room-submit-stage {
-  border-top: 1px solid rgb(226 232 240);
-  background: rgb(255 255 255);
+  min-width: 0;
+  border: 0;
+  background: transparent;
 }
 
 .create-room-submit-content {
-  display: grid;
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
   gap: 1rem;
+}
+
+.create-room-summary-eyebrow {
+  margin-bottom: 0.125rem;
+  color: rgb(37 99 235) !important;
+  font-size: 0.6875rem !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.create-room-summary-list {
+  display: grid;
+  gap: 0.625rem;
+  border-top: 1px solid rgb(191 219 254);
+  border-bottom: 1px solid rgb(191 219 254);
+  padding: 0.875rem 0;
+}
+
+.create-room-summary-list > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.create-room-summary-list span {
+  flex: 0 0 auto;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+}
+
+.create-room-summary-list strong {
+  min-width: 0;
+  overflow: hidden;
+  color: rgb(30 41 59);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.create-room-summary-note,
+.create-room-submit-hint {
+  margin: 0;
+  color: rgb(100 116 139);
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
+.create-room-submit-hint {
+  color: rgb(180 83 9);
+  text-align: center;
 }
 
 .create-room-submit-button {
@@ -3704,16 +3765,55 @@
 
 @media (min-width: 1024px) {
   .create-room-field-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 1.125rem 1rem;
+  }
+
+  .create-room-field-grid > .field:first-child {
+    grid-column: 1 / -1;
   }
 
   .create-room-submit-content {
-    grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
-    align-items: center;
+    position: sticky;
+    top: 1rem;
+    border: 1px solid rgb(191 219 254);
+    border-radius: 1rem;
+    background: linear-gradient(160deg, rgb(239 246 255), rgb(248 250 252));
+    padding: 1.25rem;
+    box-shadow: 0 0.75rem 1.5rem rgb(37 99 235 / 0.07);
   }
 
-  .create-room-submit-content > :not(.create-room-stage-heading):not(.create-room-submit-button) {
-    grid-column: 1 / -1;
+  .create-room-submit-content .create-room-stage-heading {
+    width: 100%;
+  }
+}
+
+.dark .create-room-summary-list {
+  border-color: rgb(30 64 175 / 0.65);
+}
+
+.dark .create-room-summary-list span,
+.dark .create-room-summary-note {
+  color: rgb(161 161 170);
+}
+
+.dark .create-room-summary-list strong {
+  color: rgb(244 244 245);
+}
+
+.dark .create-room-submit-hint {
+  color: rgb(253 186 116);
+}
+
+.dark .create-room-submit-content {
+  border-color: rgb(63 63 70);
+  background: rgb(24 24 27);
+}
+
+@media (min-width: 1024px) {
+  .dark .create-room-submit-content {
+    border-color: rgb(30 64 175);
+    background: linear-gradient(160deg, rgb(30 64 175 / 0.2), rgb(24 24 27 / 0.9));
   }
 }
 

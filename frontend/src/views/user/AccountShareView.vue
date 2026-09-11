@@ -619,28 +619,51 @@
               <div class="create-room-stage-heading">
                 <span class="create-room-stage-index">4</span>
                 <div>
+                  <small class="create-room-summary-eyebrow">最后一步</small>
                   <strong>确认创建</strong>
-                  <small>系统保留账号凭证、代理和账号 ID。</small>
+                  <small>确认配置后即可发布房间。</small>
                 </div>
               </div>
-              <template>
-                <p
-                  v-if="createErrorMessage"
-                  class="create-room-error-message"
-                  role="alert"
-                >
-                  {{ createErrorMessage }}
-                </p>
-                <button
-                  class="btn-primary create-room-submit-button"
-                  type="button"
-                  :disabled="creating || !canCreateRoomFromOwnedAccount"
-                  @click="createRoomFromOwnedAccount"
-                >
-                  <Icon name="plus" size="sm" class="mr-2" :class="{ 'animate-pulse': creating }" />
-                  {{ creating ? '创建房间中...' : '使用已有账号创建房间' }}
-                </button>
-              </template>
+              <div class="create-room-summary-list" aria-label="房间配置摘要">
+                <div>
+                  <span>账号来源</span>
+                  <strong>{{ selectedOwnedAccount?.name || '尚未选择' }}</strong>
+                </div>
+                <div>
+                  <span>平台</span>
+                  <strong>{{ ACCOUNT_SHARE_PLATFORM_OPTIONS.find((option) => option.value === createPlatform)?.label || createPlatform }}</strong>
+                </div>
+                <div>
+                  <span>房间名称</span>
+                  <strong>{{ createForm.name || '尚未填写' }}</strong>
+                </div>
+                <div>
+                  <span>模型白名单</span>
+                  <strong>{{ allowedModels.length ? `${allowedModels.length} 个模型` : '尚未选择' }}</strong>
+                </div>
+              </div>
+              <p class="create-room-summary-note">
+                系统仅保存账号凭证、代理和账号 ID 的关联关系，不会复制账号密钥。
+              </p>
+              <p
+                v-if="createErrorMessage"
+                class="create-room-error-message"
+                role="alert"
+              >
+                {{ createErrorMessage }}
+              </p>
+              <button
+                class="btn-primary create-room-submit-button"
+                type="button"
+                :disabled="creating || !canCreateRoomFromOwnedAccount"
+                @click="createRoomFromOwnedAccount"
+              >
+                <Icon name="plus" size="sm" class="mr-2" :class="{ 'animate-pulse': creating }" />
+                {{ creating ? '创建房间中...' : '使用已有账号创建房间' }}
+              </button>
+              <small v-if="!canCreateRoomFromOwnedAccount && !creating" class="create-room-submit-hint">
+                请先选择健康账号并完成必填配置
+              </small>
             </div>
           </div>
         </div>
