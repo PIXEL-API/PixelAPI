@@ -30,7 +30,7 @@
             v-if="item.group_name"
             class="inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300 flex-shrink-0"
           >
-            {{ item.group_name }}
+            {{ displayText(item.group_name) }}
           </span>
         </div>
       </div>
@@ -76,6 +76,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { UserMonitorView } from '@/api/channelMonitor'
+import { displayText } from '@/utils/displayText'
 import {
   useChannelMonitorFormat,
   providerGradient,

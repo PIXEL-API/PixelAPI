@@ -59,12 +59,12 @@
                 <td
                   class="max-w-[100px] truncate py-1.5 font-medium"
                   :class="group.group_id > 0 ? 'text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-300' : 'text-gray-900 dark:text-white'"
-                  :title="group.group_name || String(group.group_id)"
+                  :title="displayText(group.group_name) || String(group.group_id)"
                 >
                   <span class="inline-flex items-center gap-1">
                     <svg v-if="group.group_id > 0 && expandedKey === `group-${group.group_id}`" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
                     <svg v-else-if="group.group_id > 0" class="h-3 w-3 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                    {{ group.group_name || t('admin.dashboard.noGroup') }}
+                    {{ displayText(group.group_name) || t('admin.dashboard.noGroup') }}
                   </span>
                 </td>
                 <td class="py-1.5 text-right text-gray-600 dark:text-gray-400">
@@ -115,6 +115,7 @@ import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
 import UserBreakdownSubTable from './UserBreakdownSubTable.vue'
 import type { GroupStat, UserBreakdownItem } from '@/types'
 import { getUserBreakdown } from '@/api/admin/dashboard'
+import { displayText } from '@/utils/displayText'
 
 ChartJS.register(ArcElement, Tooltip, Legend)
 
@@ -192,7 +193,7 @@ const chartData = computed(() => {
   if (!props.groupStats?.length) return null
 
   return {
-    labels: displayGroupStats.value.map((g) => g.group_name || String(g.group_id)),
+    labels: displayGroupStats.value.map((g) => displayText(g.group_name) || String(g.group_id)),
     datasets: [
       {
         data: displayGroupStats.value.map((g) => props.metric === 'actual_cost' ? g.actual_cost : g.total_tokens),

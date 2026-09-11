@@ -185,6 +185,7 @@ import type { AdminGroup, AdminUser, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime } from '@/utils/format'
+import { displayText } from '@/utils/displayText'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -214,7 +215,7 @@ const openAIGroups = computed(() => props.groups.filter((group) => (
 
 const groupOptions = computed<SelectOption[]>(() => openAIGroups.value.map((group) => ({
   value: group.id,
-  label: `${group.name} · ID ${group.id}`,
+  label: `${displayText(group.name)} · ID ${group.id}`,
 })))
 
 const userID = computed(() => selectedUser.value?.id ?? 0)

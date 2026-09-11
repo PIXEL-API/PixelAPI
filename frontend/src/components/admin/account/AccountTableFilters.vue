@@ -26,6 +26,7 @@
 <script setup lang="ts">
 import { computed } from 'vue'; import { useI18n } from 'vue-i18n'; import Select from '@/components/common/Select.vue'; import SearchInput from '@/components/common/SearchInput.vue'
 import { ACCOUNT_STATUS_FILTER_OPTIONS } from '@/constants/account'
+import { displayText } from '@/utils/displayText'
 import type { AdminGroup, Proxy } from '@/types'
 const props = defineProps<{ searchQuery: string; filters: Record<string, any>; groups?: AdminGroup[]; proxies?: Proxy[] }>()
 const emit = defineEmits(['update:searchQuery', 'update:filters', 'change']); const { t } = useI18n()
@@ -60,6 +61,6 @@ const proxyOpts = computed(() => [
 const gOpts = computed(() => [
   { value: '', label: t('admin.accounts.allGroups') },
   { value: 'ungrouped', label: t('admin.accounts.ungroupedGroup') },
-  ...(props.groups || []).map(g => ({ value: String(g.id), label: g.name }))
+  ...(props.groups || []).map(g => ({ value: String(g.id), label: displayText(g.name) }))
 ])
 </script>

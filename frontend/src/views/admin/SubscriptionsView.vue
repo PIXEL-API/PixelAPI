@@ -746,6 +746,7 @@ import type { UserSubscription, Group, GroupPlatform, SubscriptionType } from '@
 import type { SimpleUser } from '@/api/admin/usage'
 import type { Column } from '@/components/common/types'
 import { formatDateOnly } from '@/utils/format'
+import { displayText } from '@/utils/displayText'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
@@ -959,7 +960,7 @@ const extendForm = reactive({
 // Group options for filter (all groups)
 const groupOptions = computed(() => [
   { value: '', label: t('admin.subscriptions.allGroups') },
-  ...groups.value.map((g) => ({ value: g.id.toString(), label: g.name }))
+  ...groups.value.map((g) => ({ value: g.id.toString(), label: displayText(g.name) }))
 ])
 
 const platformFilterOptions = computed(() => [
@@ -978,8 +979,8 @@ const subscriptionGroupOptions = computed(() =>
     .filter((g) => g.subscription_type === 'subscription' && g.status === 'active')
     .map((g) => ({
       value: g.id,
-      label: g.name,
-      description: g.description,
+      label: displayText(g.name),
+      description: displayText(g.description),
       platform: g.platform,
       subscriptionType: g.subscription_type,
       rate: g.rate_multiplier

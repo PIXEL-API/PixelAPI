@@ -189,6 +189,7 @@
 import { ref, onMounted, onUnmounted, toRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
+import { displayText } from '@/utils/displayText'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import type { SimpleApiKey, SimpleUser } from '@/api/admin/usage'
 
@@ -467,7 +468,7 @@ onMounted(async () => {
       adminAPI.dashboard.getModelStats({ start_date: props.startDate, end_date: props.endDate })
     ])
 
-    groupOptions.value.push(...gs.items.map((g: any) => ({ value: g.id, label: g.name })))
+    groupOptions.value.push(...gs.items.map((g: any) => ({ value: g.id, label: displayText(g.name) })))
 
     const uniqueModels = new Set<string>()
     ms.models?.forEach((s: any) => {

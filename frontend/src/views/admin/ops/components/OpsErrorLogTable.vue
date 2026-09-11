@@ -121,7 +121,7 @@
               <td class="px-4 py-2">
                  <el-tooltip v-if="log.group_id" :content="t('admin.ops.errorLog.id') + ' ' + log.group_id" placement="top" :show-after="500">
                   <span class="max-w-[100px] truncate text-xs font-medium text-gray-900 dark:text-gray-200">
-                    {{ log.group_name || '-' }}
+                    {{ displayText(log.group_name) || '-' }}
                   </span>
                 </el-tooltip>
                 <span v-else class="text-xs text-gray-400">-</span>
@@ -215,6 +215,7 @@ import { useI18n } from 'vue-i18n'
 import Pagination from '@/components/common/Pagination.vue'
 import type { OpsErrorLog } from '@/api/admin/ops'
 import { getSeverityClass, formatDateTime } from '../utils/opsFormatters'
+import { displayText } from '@/utils/displayText'
 
 const { t } = useI18n()
 

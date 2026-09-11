@@ -89,7 +89,7 @@
                 <span v-else-if="redeemResult.type === 'subscription'">
                   {{ t('redeem.subscriptionAssigned') }}
                   <template v-if="redeemResult.group_name">
-                    · {{ redeemResult.group_name }}
+                    · {{ displayText(redeemResult.group_name) }}
                   </template>
                   <template v-if="redeemResult.validity_days">
                     · {{ t('redeem.subscriptionDays', { days: redeemResult.validity_days }) }}
@@ -239,6 +239,7 @@ import { useAppStore } from '@/stores/app'
 import { useAuthStore } from '@/stores/auth'
 import { useSubscriptionStore } from '@/stores/subscriptions'
 import { formatDateTime } from '@/utils/format'
+import { displayText } from '@/utils/displayText'
 
 const { t } = useI18n()
 const authStore = useAuthStore()

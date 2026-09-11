@@ -348,6 +348,7 @@ import PlatformIcon from '@/components/common/PlatformIcon.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import AvailableGroupDetailsDrawer from '@/components/channels/AvailableGroupDetailsDrawer.vue'
 import { formatDateTime } from '@/utils/format'
+import { displayText } from '@/utils/displayText'
 import { formatMultiplier } from '@/utils/formatters'
 import { platformLabel } from '@/utils/platformColors'
 import {
@@ -550,7 +551,7 @@ function groupSummaryKey(summary: AccountQuotaGroupSummary): string {
 }
 
 function groupName(summary: AccountQuotaGroupSummary): string {
-  return summary.group_name || t('admin.accounts.quotaDashboard.ungrouped')
+  return displayText(summary.group_name) || t('admin.accounts.quotaDashboard.ungrouped')
 }
 
 function hasAvailabilityIssues(summary: AccountQuotaSummary | AccountQuotaGroupSummary): boolean {

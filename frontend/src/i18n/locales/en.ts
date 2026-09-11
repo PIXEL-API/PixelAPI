@@ -1392,6 +1392,8 @@ export default {
       "Import through OpenAI account login: select a proxy IP, generate the login URL, then paste the callback result.",
     importSwitchToOAuthLogin: "Switch to OpenAI account login",
     importSwitchToCredential: "Switch to credential import",
+    importPlatformOAuthHint: "You can also use the platform's official login to create one account.",
+    importSwitchToPlatformOAuth: "Use {platform} OAuth login",
     importOAuthNamePlaceholder: "Optional; OpenAI email is used when blank",
     importProxy: "Proxy IP",
     importProxyHint:

@@ -1347,6 +1347,8 @@ export default {
       "通过 OpenAI 账号登录导入：请先选择代理 IP，再生成登录链接并粘贴回调结果。",
     importSwitchToOAuthLogin: "改用 OpenAI 账号登录导入",
     importSwitchToCredential: "改用粘贴凭证导入",
+    importPlatformOAuthHint: "也可以使用平台官方授权登录创建单个账号。",
+    importSwitchToPlatformOAuth: "使用 {platform} 授权登录",
     importOAuthNamePlaceholder: "可选；留空则使用 OpenAI 邮箱",
     importProxy: "代理 IP",
     importProxyHint:

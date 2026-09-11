@@ -215,7 +215,7 @@
                   <tr v-for="row in logs" :key="row.id" class="hover:bg-gray-50 dark:hover:bg-dark-700/60">
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">{{ formatDateTime(row.created_at) }}</td>
                     <td class="whitespace-nowrap px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
-                      <div>{{ row.group_name || '-' }}</div>
+                      <div>{{ displayText(row.group_name) || '-' }}</div>
                       <div v-if="row.group_id" class="text-xs text-gray-400">ID {{ row.group_id }}</div>
                       <div v-if="row.scope_type === 'account_share_mode'" class="text-xs text-gray-400">
                         {{ accountShareLogMeta(row) }}
@@ -772,7 +772,7 @@
                   @click="toggleGroup(group.id)"
                 >
                   <span class="min-w-0">
-                    <span class="block truncate text-sm font-semibold text-gray-900 dark:text-white">{{ group.name }}</span>
+                    <span class="block truncate text-sm font-semibold text-gray-900 dark:text-white">{{ displayText(group.name) }}</span>
                     <span class="mt-1 inline-flex rounded-md bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-dark-700 dark:text-gray-400">{{ group.platform }}</span>
                   </span>
                   <span
@@ -1071,7 +1071,7 @@
                 </p>
               </div>
               <span v-if="inputDetailRow.group_name" class="inline-flex rounded-md bg-sky-50 px-2.5 py-1 text-xs font-medium text-sky-700 dark:bg-sky-900/20 dark:text-sky-300">
-                {{ inputDetailRow.group_name }}
+                {{ displayText(inputDetailRow.group_name) }}
               </span>
               <span v-if="inputDetailRow.scope_type === 'account_share_mode'" class="inline-flex rounded-md bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
                 {{ accountShareLogMeta(inputDetailRow) }}
@@ -1121,6 +1121,7 @@ import type { AdminGroup, SelectOption } from '@/types'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime as formatDateTimeValue } from '@/utils/format'
+import { displayText } from '@/utils/displayText'
 
 type SettingsTab = 'basic' | 'sampling' | 'scope' | 'cyberRules' | 'runtime' | 'response' | 'retention'
 type RiskControlWorkspace = 'moderation' | 'cyberPolicy'
@@ -1306,7 +1307,7 @@ const groupFilterOptions = computed<SelectOption[]>(() => [
   { value: 0, label: t('admin.riskControl.filters.allGroups') },
   ...groups.value.map((group) => ({
     value: group.id,
-    label: `${group.name} (${group.platform})`,
+    label: `${displayText(group.name)} (${group.platform})`,
   })),
 ])
 
@@ -1316,7 +1317,7 @@ const filteredGroups = computed(() => {
   const keyword = groupSearch.value.trim().toLowerCase()
   if (!keyword) return groups.value
   return groups.value.filter((group) => {
-    return group.name.toLowerCase().includes(keyword) || String(group.platform).toLowerCase().includes(keyword)
+    return displayText(group.name).toLowerCase().includes(keyword) || String(group.platform).toLowerCase().includes(keyword)
   })
 })
 

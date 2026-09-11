@@ -164,7 +164,7 @@
               <template v-else-if="row.type === 'subscription'">
                 {{ row.validity_days || 30 }} {{ t('admin.redeem.days') }}
                 <span v-if="row.group" class="ml-1 text-xs text-gray-500 dark:text-gray-400"
-                  >({{ row.group.name }})</span
+                  >({{ displayText(row.group.name) }})</span
                 >
               </template>
               <template v-else>{{ value }}</template>
@@ -481,6 +481,7 @@ import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { useTableSelection } from '@/composables/useTableSelection'
 import { adminAPI } from '@/api/admin'
 import { formatDateTime } from '@/utils/format'
+import { displayText } from '@/utils/displayText'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import type { RedeemCode, RedeemCodeType, Group, GroupPlatform, SubscriptionType } from '@/types'
 import type { Column } from '@/components/common/types'
@@ -522,8 +523,8 @@ const subscriptionGroupOptions = computed(() => {
     .filter((g) => g.subscription_type === 'subscription')
     .map((g) => ({
       value: g.id,
-      label: g.name,
-      description: g.description,
+      label: displayText(g.name),
+      description: displayText(g.description),
       platform: g.platform,
       subscriptionType: g.subscription_type,
       rate: g.rate_multiplier

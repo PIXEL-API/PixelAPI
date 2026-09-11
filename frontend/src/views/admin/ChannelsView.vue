@@ -321,7 +321,7 @@
                       class="h-3 w-3 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                       @change="toggleGroupInSection(sIdx, group.id)"
                     />
-                    <span :class="['font-medium', platformTextClass(group.platform)]">{{ group.name }}</span>
+                    <span :class="['font-medium', platformTextClass(group.platform)]">{{ displayText(group.name) }}</span>
                     <span
                       :class="['rounded-full px-1 py-0 text-[10px]', platformBadgeLightClass(group.platform)]"
                     >{{ group.rate_multiplier }}x</span>
@@ -602,6 +602,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useAdminSettingsStore } from '@/stores/adminSettings'
 import { extractApiErrorMessage } from '@/utils/apiError'
+import { displayText } from '@/utils/displayText'
 import { adminAPI } from '@/api/admin'
 import type { Channel, ChannelModelPricing, CreateChannelRequest, UpdateChannelRequest, AccountStatsPricingRule } from '@/api/admin/channels'
 import type { PricingFormEntry } from '@/components/admin/channel/types'
@@ -911,7 +912,7 @@ function removeRulePricingEntry(sectionIdx: number, ruleIndex: number, pricingIn
 
 function getGroupNameById(groupId: number): string {
   const group = allGroups.value.find(g => g.id === groupId)
-  return group ? group.name : `#${groupId}`
+  return group ? displayText(group.name) : `#${groupId}`
 }
 
 // ── Account search for pricing rules ──

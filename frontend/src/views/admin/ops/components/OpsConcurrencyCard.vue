@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { displayText } from '@/utils/displayText'
 import { opsAPI, type OpsAccountAvailabilityStatsResponse, type OpsConcurrencyStatsResponse, type OpsUserConcurrencyStatsResponse } from '@/api/admin/ops'
 
 interface Props {
@@ -525,7 +526,7 @@ watch(
                 {{ row.name }}
               </div>
               <div class="mt-0.5 text-[9px] text-gray-400 dark:text-gray-500">
-                {{ row.group_name }}
+                {{ displayText(row.group_name) }}
               </div>
             </div>
             <div class="flex shrink-0 items-center gap-2">

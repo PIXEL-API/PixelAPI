@@ -192,7 +192,7 @@
               </div>
             </td>
             <td class="px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
-              <div class="max-w-48 truncate font-medium" :title="row.group_name">{{ row.group_name || '-' }}</div>
+              <div class="max-w-48 truncate font-medium" :title="displayText(row.group_name)">{{ displayText(row.group_name) || '-' }}</div>
               <div v-if="row.group_id" class="mt-1 text-xs text-gray-400">ID {{ row.group_id }}</div>
             </td>
             <td class="px-5 py-4 text-sm text-gray-700 dark:text-gray-300">
@@ -270,7 +270,7 @@
             </div>
             <div class="rounded-lg border border-gray-100 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/70">
               <p class="text-xs font-medium text-gray-500 dark:text-gray-400">{{ t('admin.riskControl.cyberRequests.table.group') }}</p>
-              <p class="mt-1 break-words text-sm font-semibold text-gray-900 dark:text-white">{{ requestDetail.group_name || '-' }}</p>
+              <p class="mt-1 break-words text-sm font-semibold text-gray-900 dark:text-white">{{ displayText(requestDetail.group_name) || '-' }}</p>
               <p v-if="requestDetail.group_id" class="mt-1 text-xs text-gray-400">ID {{ requestDetail.group_id }}</p>
             </div>
             <div class="rounded-lg border border-gray-100 bg-gray-50 p-4 dark:border-dark-700 dark:bg-dark-800/70">
@@ -334,6 +334,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime as formatDateTimeValue } from '@/utils/format'
+import { displayText } from '@/utils/displayText'
 
 const { t } = useI18n()
 const appStore = useAppStore()

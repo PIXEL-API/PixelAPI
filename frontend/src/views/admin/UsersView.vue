@@ -316,7 +316,7 @@
                 >
                   <div class="absolute left-4 bottom-full border-4 border-transparent border-b-gray-900 dark:border-b-dark-600"></div>
                   <div class="flex flex-col gap-0.5 whitespace-nowrap">
-                    <span v-for="g in getUserGroups(row).exclusive" :key="g.id">{{ g.name }}</span>
+                    <span v-for="g in getUserGroups(row).exclusive" :key="g.id">{{ displayText(g.name) }}</span>
                   </div>
                 </div>
                 <!-- 点击展开分组操作菜单 -->
@@ -334,7 +334,7 @@
                     @click.stop="openGroupReplace(row, g)"
                   >
                     <Icon name="swap" size="xs" class="h-3.5 w-3.5 flex-shrink-0 opacity-50" />
-                    <span class="flex-1">{{ g.name }}</span>
+                    <span class="flex-1">{{ displayText(g.name) }}</span>
                   </div>
                 </div>
               </span>
@@ -350,7 +350,7 @@
                 <div class="pointer-events-none absolute left-0 top-full z-50 mt-1.5 rounded bg-gray-900 px-2.5 py-1.5 text-xs text-white opacity-0 shadow-lg transition-opacity duration-75 group-hover/pub:opacity-100 dark:bg-dark-600">
                   <div class="absolute left-4 bottom-full border-4 border-transparent border-b-gray-900 dark:border-b-dark-600"></div>
                   <div class="flex flex-col gap-0.5 whitespace-nowrap">
-                    <span v-for="g in getUserGroups(row).publicGroups" :key="g.id">{{ g.name }}</span>
+                    <span v-for="g in getUserGroups(row).publicGroups" :key="g.id">{{ displayText(g.name) }}</span>
                   </div>
                 </div>
               </span>
@@ -699,6 +699,7 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { getPersistedPageSize } from '@/composables/usePersistedPageSize'
 import { formatDateTime } from '@/utils/format'
+import { displayText } from '@/utils/displayText'
 import Icon from '@/components/icons/Icon.vue'
 
 const { t } = useI18n()
@@ -935,7 +936,7 @@ const groupFilterOptions = computed(() => {
   ]
   for (const g of allGroups.value) {
     if (g.status !== 'active' || !g.is_exclusive || g.subscription_type !== 'standard') continue
-    options.push({ value: g.name, label: g.name })
+    options.push({ value: g.name, label: displayText(g.name) })
   }
   return options
 })

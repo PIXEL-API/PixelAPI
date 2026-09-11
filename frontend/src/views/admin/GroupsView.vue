@@ -3783,7 +3783,7 @@ const fallbackGroupOptions = computed(() => {
       g.status === "active",
   );
   eligibleGroups.forEach((g) => {
-    options.push({ value: g.id, label: g.name });
+    options.push({ value: g.id, label: displayText(g.name) });
   });
   return options;
 });
@@ -3802,7 +3802,7 @@ const fallbackGroupOptionsForEdit = computed(() => {
       g.id !== currentId,
   );
   eligibleGroups.forEach((g) => {
-    options.push({ value: g.id, label: g.name });
+    options.push({ value: g.id, label: displayText(g.name) });
   });
   return options;
 });
@@ -3820,7 +3820,7 @@ const invalidRequestFallbackOptions = computed(() => {
       g.fallback_group_id_on_invalid_request === null,
   );
   eligibleGroups.forEach((g) => {
-    options.push({ value: g.id, label: g.name });
+    options.push({ value: g.id, label: displayText(g.name) });
   });
   return options;
 });
@@ -3840,7 +3840,7 @@ const invalidRequestFallbackOptionsForEdit = computed(() => {
       g.id !== currentId,
   );
   eligibleGroups.forEach((g) => {
-    options.push({ value: g.id, label: g.name });
+    options.push({ value: g.id, label: displayText(g.name) });
   });
   return options;
 });
@@ -3852,7 +3852,7 @@ const copyAccountsGroupOptions = computed(() => {
   );
   return eligibleGroups.map((g) => ({
     value: g.id,
-    label: `${g.name} (${g.account_count || 0} 个账号)`,
+    label: `${displayText(g.name)} (${g.account_count || 0} 个账号)`,
   }));
 });
 
@@ -3867,7 +3867,7 @@ const copyAccountsGroupOptionsForEdit = computed(() => {
   );
   return eligibleGroups.map((g) => ({
     value: g.id,
-    label: `${g.name} (${g.account_count || 0} 个账号)`,
+    label: `${displayText(g.name)} (${g.account_count || 0} 个账号)`,
   }));
 });
 

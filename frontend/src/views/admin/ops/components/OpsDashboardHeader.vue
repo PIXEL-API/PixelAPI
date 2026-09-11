@@ -10,6 +10,7 @@ import { opsAPI, type OpsDashboardOverview, type OpsMetricThresholds, type OpsRe
 import type { OpsRequestDetailsPreset } from './OpsRequestDetailsModal.vue'
 import { useAdminSettingsStore } from '@/stores'
 import { formatNumber } from '@/utils/format'
+import { displayText } from '@/utils/displayText'
 
 type RealtimeWindow = '1min' | '5min' | '30min' | '1h'
 
@@ -138,7 +139,7 @@ const queryModeOptions = computed(() => [
 
 const groupOptions = computed(() => {
   const filtered = props.platform ? groups.value.filter((g) => g.platform === props.platform) : groups.value
-  return [{ value: null, label: t('common.all') }, ...filtered.map((g) => ({ value: g.id, label: g.name }))]
+  return [{ value: null, label: t('common.all') }, ...filtered.map((g) => ({ value: g.id, label: displayText(g.name) }))]
 })
 
 watch(
@@ -155,7 +156,7 @@ watch(
 onMounted(async () => {
   try {
     const list = await adminAPI.groups.getAll()
-    groups.value = list.map((g) => ({ id: g.id, name: g.name, platform: g.platform }))
+    groups.value = list.map((g) => ({ id: g.id, name: displayText(g.name), platform: g.platform }))
   } catch (e) {
     console.error('[OpsDashboardHeader] Failed to load groups', e)
     groups.value = []

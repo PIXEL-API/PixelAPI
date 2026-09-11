@@ -7881,6 +7881,7 @@ import {
   extractApiErrorMessage,
   extractI18nErrorMessage,
 } from "@/utils/apiError";
+import { displayText } from "@/utils/displayText";
 import { useAppStore } from "@/stores";
 import { useAdminSettingsStore } from "@/stores/adminSettings";
 import { normalizeVisibleMethod } from "@/components/payment/paymentFlow";
@@ -8663,8 +8664,8 @@ const defaultSubscriptionGroupOptions = computed<
 >(() =>
   subscriptionGroups.value.map((group) => ({
     value: group.id,
-    label: group.name,
-    description: group.description,
+    label: displayText(group.name),
+    description: displayText(group.description),
     platform: group.platform,
     subscriptionType: group.subscription_type,
     rate: group.rate_multiplier,

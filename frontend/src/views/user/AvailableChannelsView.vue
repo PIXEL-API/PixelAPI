@@ -89,6 +89,7 @@ import type { UserMonitorView } from '@/api/channelMonitor'
 import userGroupsAPI from '@/api/groups'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorMessage } from '@/utils/apiError'
+import { displayText } from '@/utils/displayText'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
 
 const { t } = useI18n()
@@ -168,7 +169,7 @@ const filteredChannels = computed(() => {
       const matchingSections = ch.platforms.filter(
         (p) =>
           p.platform.toLowerCase().includes(q) ||
-          p.groups.some((g) => g.name.toLowerCase().includes(q)) ||
+          p.groups.some((g) => displayText(g.name).toLowerCase().includes(q)) ||
           p.supported_models.some((m) => m.name.toLowerCase().includes(q)),
       )
       if (matchingSections.length === 0) return null

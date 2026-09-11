@@ -89,6 +89,7 @@ import Select from '@/components/common/Select.vue'
 import Icon from '@/components/icons/Icon.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import { platformTextClass } from '@/utils/platformColors'
+import { displayText } from '@/utils/displayText'
 
 const props = defineProps<{
   show: boolean
@@ -119,7 +120,7 @@ const groupOptions = computed(() =>
     .filter(g => g.subscription_type === 'subscription')
     .map(g => ({
       value: g.id,
-      label: `${g.name} — ${g.platform} (${g.rate_multiplier}x)`,
+      label: `${displayText(g.name)} — ${g.platform} (${g.rate_multiplier}x)`,
       platform: g.platform,
     })),
 )

@@ -10,6 +10,7 @@ import { opsAPI } from '@/api/admin/ops'
 import type { AlertRule, MetricType, Operator } from '../types'
 import type { OpsSeverity } from '@/api/admin/ops'
 import { formatDateTime } from '../utils/opsFormatters'
+import { displayText } from '@/utils/displayText'
 
 const { t } = useI18n()
 const appStore = useAppStore()
@@ -74,7 +75,7 @@ const groupOptionsBase = ref<SelectOption[]>([])
 async function loadGroups() {
   try {
     const list = await adminAPI.groups.getAll()
-    groupOptionsBase.value = list.map((g) => ({ value: g.id, label: g.name }))
+    groupOptionsBase.value = list.map((g) => ({ value: g.id, label: displayText(g.name) }))
   } catch (err) {
     console.error('[OpsAlertRulesCard] Failed to load groups', err)
     groupOptionsBase.value = []

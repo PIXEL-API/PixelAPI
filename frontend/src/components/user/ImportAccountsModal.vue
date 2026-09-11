@@ -69,6 +69,21 @@
           {{ t('userAccounts.importSwitchToOAuthLogin') }}
         </button>
       </div>
+      <div
+        v-else-if="platformOAuthLoginAvailable"
+        class="flex items-center justify-between gap-3 rounded-lg border border-primary-200 bg-primary-50/70 px-3 py-2.5 dark:border-primary-500/30 dark:bg-primary-500/10"
+      >
+        <span class="text-xs text-primary-800 dark:text-primary-200">
+          {{ t('userAccounts.importPlatformOAuthHint') }}
+        </span>
+        <button
+          type="button"
+          class="shrink-0 text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400"
+          @click="requestPlatformOAuthLogin"
+        >
+          {{ t('userAccounts.importSwitchToPlatformOAuth', { platform: selectedPlatformLabel }) }}
+        </button>
+      </div>
       <div v-if="requiresCredentialImportProxy" class="space-y-2">
         <div class="flex flex-wrap items-center justify-between gap-3">
           <label class="input-label mb-0">{{ t('userAccounts.importProxy') }}</label>
@@ -290,6 +305,7 @@ interface Props {
 interface Emits {
   (e: 'close'): void
   (e: 'imported', payload?: { close: boolean }): void
+  (e: 'create-platform-account', platform: AccountPlatform): void
 }
 
 const props = defineProps<Props>()
@@ -420,6 +436,30 @@ const isPersonalAccessTokenImport = computed(() =>
 
 // OAuth 登录流程只在用户显式切换时进入，不再因 pro 等级自动触发。
 const requiresOAuthLogin = computed(() => selectedImportFlow.value === 'oauth_login')
+
+const platformOAuthLoginAvailable = computed(() =>
+  selectedPlatform.value === 'anthropic' ||
+  selectedPlatform.value === 'gemini' ||
+  selectedPlatform.value === 'antigravity' ||
+  selectedPlatform.value === 'grok'
+)
+
+const selectedPlatformLabel = computed(() => {
+  switch (selectedPlatform.value) {
+    case 'anthropic': return 'Claude'
+    case 'gemini': return 'Gemini'
+    case 'antigravity': return 'Antigravity'
+    case 'grok': return 'Grok'
+    default: return ''
+  }
+})
+
+function requestPlatformOAuthLogin(): void {
+  const platform = selectedPlatform.value
+  if (platformOAuthLoginAvailable.value && platform) {
+    emit('create-platform-account', platform)
+  }
+}
 
 const requiresPersonalAccessTokenProxy = computed(() =>
   isPersonalAccessTokenImport.value &&

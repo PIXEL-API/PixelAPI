@@ -8,7 +8,7 @@
           {{ t('admin.groups.platforms.' + group.platform) }}
         </span>
         <span class="text-gray-400">|</span>
-        <span class="font-medium text-gray-900 dark:text-white">{{ group.name }}</span>
+        <span class="font-medium text-gray-900 dark:text-white">{{ displayText(group.name) }}</span>
         <span class="text-gray-400">|</span>
         <span class="text-gray-600 dark:text-gray-400">
           {{ t('admin.groups.columns.rateMultiplier') }}: {{ group.rate_multiplier }}x
@@ -249,6 +249,7 @@ import BaseDialog from '@/components/common/BaseDialog.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Icon from '@/components/icons/Icon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
+import { displayText } from '@/utils/displayText'
 
 interface LocalEntry extends GroupRateMultiplierEntry {}
 

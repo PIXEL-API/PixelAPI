@@ -10,6 +10,7 @@ import { formatHistoryLabel, sumNumbers } from '../utils/opsFormatters'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
 import { formatNumber } from '@/utils/format'
+import { displayText } from '@/utils/displayText'
 
 ChartJS.register(Title, Tooltip, Legend, LineElement, LinearScale, PointElement, CategoryScale, Filler)
 
@@ -226,7 +227,7 @@ function downloadChart() {
         class="inline-flex items-center gap-2 rounded-full border border-gray-200 bg-white px-3 py-1 text-[11px] font-semibold text-gray-700 hover:bg-gray-50 dark:border-dark-700 dark:bg-dark-900 dark:text-gray-200 dark:hover:bg-dark-800"
         @click="emit('selectGroup', g.group_id)"
       >
-        <span class="max-w-[180px] truncate">{{ g.group_name || `#${g.group_id}` }}</span>
+        <span class="max-w-[180px] truncate">{{ displayText(g.group_name) || `#${g.group_id}` }}</span>
         <span class="text-gray-400 dark:text-gray-500">{{ formatNumber(g.request_count) }}</span>
       </button>
     </div>

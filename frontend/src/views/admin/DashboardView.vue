@@ -301,6 +301,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { displayText } from '@/utils/displayText'
 import { useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 
@@ -543,7 +544,7 @@ const userTrendChartData = computed(() => {
   ]
 
   const datasets = Array.from(userGroups.values()).map((group, idx) => ({
-    label: group.name,
+    label: displayText(group.name),
     data: sortedDates.map((date) => group.data.get(date) || 0),
     borderColor: colors[idx % colors.length],
     backgroundColor: `${colors[idx % colors.length]}20`,

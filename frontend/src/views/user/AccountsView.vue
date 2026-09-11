@@ -416,6 +416,7 @@
       :proxies="userProxies"
       :groups="modalGroups"
       account-scope="user"
+      :initial-platform="createAccountPlatform"
       :allow-proxy="true"
       :allow-billing-rate="false"
       @close="showCreateModal = false"
@@ -500,6 +501,7 @@
       :show="showImportModal"
       @close="showImportModal = false"
       @imported="handleAccountsImported"
+      @create-platform-account="openPlatformAccountCreator"
     />
 
     <AccountTestModal
@@ -610,6 +612,7 @@ const userProxies = ref<Proxy[]>([])
 const userProxiesLoading = ref(false)
 const loading = ref(false)
 const showCreateModal = ref(false)
+const createAccountPlatform = ref<AccountPlatform>('anthropic')
 const showEditModal = ref(false)
 const showImportModal = ref(false)
 const showProxyManager = ref(false)
@@ -1286,6 +1289,13 @@ async function loadUserProxies(
 function openCreateModal(): void {
   // 代理列表由模态发出的 proxy-scope-change 驱动：平台/等级只有模态里才知道，
   // 在这里按空范围预取只会拿到通用代理，平台/等级专属代理永远选不到。
+  createAccountPlatform.value = 'anthropic'
+  showCreateModal.value = true
+}
+
+function openPlatformAccountCreator(platform: AccountPlatform): void {
+  createAccountPlatform.value = platform
+  showImportModal.value = false
   showCreateModal.value = true
 }
 

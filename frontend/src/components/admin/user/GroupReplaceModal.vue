@@ -3,17 +3,17 @@
     <div v-if="oldGroup" class="space-y-4">
       <!-- 提示信息 -->
       <p class="text-sm text-gray-600 dark:text-gray-400">
-        {{ t('admin.users.replaceGroupHint', { old: oldGroup.name }) }}
+        {{ t('admin.users.replaceGroupHint', { old: displayText(oldGroup.name) }) }}
       </p>
 
       <!-- 当前分组 -->
       <div class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-600 dark:bg-dark-800">
         <div class="flex items-center gap-2">
           <Icon name="shield" size="sm" class="text-purple-500" />
-          <span class="font-medium text-gray-900 dark:text-white">{{ oldGroup.name }}</span>
+          <span class="font-medium text-gray-900 dark:text-white">{{ displayText(oldGroup.name) }}</span>
           <Icon name="arrowRight" size="sm" class="ml-auto text-gray-400" />
           <span v-if="selectedGroupId" class="font-medium text-primary-600 dark:text-primary-400">
-            {{ availableGroups.find(g => g.id === selectedGroupId)?.name }}
+            {{ displayText(availableGroups.find(g => g.id === selectedGroupId)?.name) }}
           </span>
           <span v-else class="text-sm text-gray-400">?</span>
         </div>
@@ -44,7 +44,7 @@
             <div v-if="selectedGroupId === group.id" class="h-2 w-2 rounded-full bg-white"></div>
           </div>
           <div class="flex-1">
-            <span class="font-medium text-gray-900 dark:text-white">{{ group.name }}</span>
+            <span class="font-medium text-gray-900 dark:text-white">{{ displayText(group.name) }}</span>
             <span class="ml-2 text-xs text-gray-400">{{ group.platform }}</span>
           </div>
         </label>
@@ -78,6 +78,7 @@
 <script setup lang="ts">
 import { ref, watch, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { displayText } from '@/utils/displayText'
 import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import type { AdminUser, AdminGroup } from '@/types'
