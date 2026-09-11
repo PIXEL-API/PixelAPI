@@ -1,59 +1,51 @@
 <template>
-  <Teleport to="body">
-    <div v-if="show && position">
-      <div class="fixed inset-0 z-[9998]" @click="emit('close')"></div>
-      <div
-        class="fixed z-[9999] w-52 overflow-hidden rounded-xl bg-white shadow-lg ring-1 ring-black/5 dark:bg-dark-800"
-        :style="{ top: position.top + 'px', left: position.left + 'px' }"
-        @click.stop
+  <ActionMenu :show="show" :position="position" @close="emit('close')">
+    <div v-if="account" class="py-1">
+      <button class="menu-item ui-menu-item" @click="emitAction('test')">
+        <Icon name="play" size="sm" class="text-green-500" :stroke-width="2" />
+        {{ t('admin.accounts.testConnection') }}
+      </button>
+      <button class="menu-item ui-menu-item" @click="emitAction('stats')">
+        <Icon name="chart" size="sm" class="text-indigo-500" />
+        {{ t('admin.accounts.viewStats') }}
+      </button>
+      <template v-if="supportsCredentialMaintenance">
+        <button
+          class="menu-item ui-menu-item text-blue-600"
+          :title="reAuthAttachedToRoom ? t('userAccounts.reAuthRoomAttachedHint') : undefined"
+          @click="emitAction('reauth')"
+        >
+          <Icon name="link" size="sm" />
+          {{ t('admin.accounts.reAuthorize') }}
+        </button>
+        <button class="menu-item ui-menu-item text-purple-600" @click="emitAction('refresh-token')">
+          <Icon name="refresh" size="sm" />
+          {{ t('admin.accounts.refreshToken') }}
+        </button>
+      </template>
+      <p
+        v-if="supportsCredentialMaintenance && reAuthAttachedToRoom"
+        class="px-3 pb-2 text-xs leading-snug text-gray-500 dark:text-gray-400"
       >
-        <div v-if="account" class="py-1">
-          <button class="menu-item" @click="emitAction('test')">
-            <Icon name="play" size="sm" class="text-green-500" :stroke-width="2" />
-            {{ t('admin.accounts.testConnection') }}
-          </button>
-          <button class="menu-item" @click="emitAction('stats')">
-            <Icon name="chart" size="sm" class="text-indigo-500" />
-            {{ t('admin.accounts.viewStats') }}
-          </button>
-          <template v-if="supportsCredentialMaintenance">
-            <button
-              class="menu-item text-blue-600"
-              :title="reAuthAttachedToRoom ? t('userAccounts.reAuthRoomAttachedHint') : undefined"
-              @click="emitAction('reauth')"
-            >
-              <Icon name="link" size="sm" />
-              {{ t('admin.accounts.reAuthorize') }}
-            </button>
-            <button class="menu-item text-purple-600" @click="emitAction('refresh-token')">
-              <Icon name="refresh" size="sm" />
-              {{ t('admin.accounts.refreshToken') }}
-            </button>
-          </template>
-          <p
-            v-if="supportsCredentialMaintenance && reAuthAttachedToRoom"
-            class="px-3 pb-2 text-xs leading-snug text-gray-500 dark:text-gray-400"
-          >
-            {{ t('userAccounts.reAuthRoomAttachedHint') }}
-          </p>
-          <button v-if="supportsPrivacy" class="menu-item text-emerald-600" @click="emitAction('set-privacy')">
-            <Icon name="shield" size="sm" />
-            {{ t('admin.accounts.setPrivacy') }}
-          </button>
-          <button class="menu-item text-sky-600" @click="emitAction('moderation')">
-            <Icon name="shield" size="sm" />
-            {{ t('userAccounts.moderationSettings') }}
-          </button>
-        </div>
-      </div>
+        {{ t('userAccounts.reAuthRoomAttachedHint') }}
+      </p>
+      <button v-if="supportsPrivacy" class="menu-item ui-menu-item text-emerald-600" @click="emitAction('set-privacy')">
+        <Icon name="shield" size="sm" />
+        {{ t('admin.accounts.setPrivacy') }}
+      </button>
+      <button class="menu-item ui-menu-item text-sky-600" @click="emitAction('moderation')">
+        <Icon name="shield" size="sm" />
+        {{ t('userAccounts.moderationSettings') }}
+      </button>
     </div>
-  </Teleport>
+  </ActionMenu>
 </template>
 
 <script setup lang="ts">
-import { computed, onUnmounted, watch } from 'vue'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import ActionMenu from '@/components/common/ActionMenu.vue'
 import type { Account } from '@/types'
 
 const props = defineProps<{
@@ -136,25 +128,6 @@ function emitAction(event: 'test' | 'stats' | 'reauth' | 'refresh-token' | 'set-
   emit('close')
 }
 
-function handleKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') emit('close')
-}
-
-watch(
-  () => props.show,
-  (visible) => {
-    if (visible) {
-      window.addEventListener('keydown', handleKeydown)
-    } else {
-      window.removeEventListener('keydown', handleKeydown)
-    }
-  },
-  { immediate: true }
-)
-
-onUnmounted(() => {
-  window.removeEventListener('keydown', handleKeydown)
-})
 </script>
 
 <style scoped>

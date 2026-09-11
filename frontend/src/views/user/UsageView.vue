@@ -1926,3 +1926,151 @@ onUnmounted(() => {
   }
 })
 </script>
+
+<style scoped>
+/* Usage follows the same glass-flow surface language as the landing page. */
+.usage-page {
+  position: relative;
+  isolation: isolate;
+  --usage-deep-blue: 39 86 194;
+  --usage-blue: 74 132 230;
+  --usage-cyan: 38 193 215;
+}
+
+.usage-page::before,
+.usage-page::after {
+  position: absolute;
+  z-index: -1;
+  pointer-events: none;
+  content: '';
+  border-radius: 999px;
+  filter: blur(42px);
+  opacity: 0.68;
+  transform: translateZ(0);
+}
+
+.usage-page::before {
+  top: -8rem;
+  right: 8%;
+  width: min(38vw, 30rem);
+  height: min(20vw, 16rem);
+  background: radial-gradient(circle, rgb(var(--usage-cyan) / 0.17), transparent 70%);
+}
+
+.usage-page::after {
+  bottom: 4rem;
+  left: -8rem;
+  width: min(34vw, 26rem);
+  height: min(28vw, 22rem);
+  background: radial-gradient(circle, rgb(var(--usage-deep-blue) / 0.13), transparent 72%);
+}
+
+.usage-page :deep(.data-stat-card),
+.usage-page :deep(.layout-section-fixed > .card),
+.usage-page :deep(.table-scroll-container),
+.usage-page :deep(.data-pagination) {
+  border-color: rgb(var(--ui-border) / 0.72);
+  background: linear-gradient(
+    135deg,
+    rgb(var(--ui-surface) / 0.84),
+    rgb(var(--ui-surface-elevated) / 0.66)
+  );
+  box-shadow: 0 1rem 2.5rem rgb(42 72 148 / 0.08), inset 0 1px 0 rgb(255 255 255 / 0.44);
+  backdrop-filter: blur(18px) saturate(125%);
+  -webkit-backdrop-filter: blur(18px) saturate(125%);
+  transition:
+    border-color 240ms ease,
+    box-shadow 240ms ease,
+    transform 240ms ease;
+}
+
+.usage-page :deep(.data-stat-card:hover) {
+  border-color: rgb(var(--ui-focus) / 0.46);
+  box-shadow: 0 1.25rem 3rem rgb(42 72 148 / 0.13), inset 0 1px 0 rgb(255 255 255 / 0.55);
+  transform: translateY(-2px);
+}
+
+.usage-page :deep(.data-stat-icon) {
+  border: 1px solid rgb(var(--usage-blue) / 0.14);
+  background: linear-gradient(135deg, rgb(var(--usage-deep-blue) / 0.14), rgb(var(--usage-cyan) / 0.17));
+  color: rgb(var(--ui-brand));
+}
+
+.usage-page :deep(.data-tabs-shell) {
+  border: 1px solid rgb(var(--ui-border) / 0.56);
+  background: rgb(var(--ui-surface-subtle) / 0.64);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.38);
+}
+
+.usage-page :deep(.data-tab) {
+  position: relative;
+  transition: color 220ms ease, background-color 220ms ease, box-shadow 220ms ease;
+}
+
+.usage-page :deep(.data-tab-active) {
+  background: linear-gradient(135deg, rgb(var(--usage-deep-blue) / 0.12), rgb(var(--usage-cyan) / 0.12));
+  box-shadow: 0 0.35rem 1rem rgb(var(--usage-blue) / 0.1), inset 0 1px 0 rgb(255 255 255 / 0.48);
+  color: rgb(var(--ui-brand-strong));
+}
+
+.usage-page :deep(.data-tab-active)::after {
+  position: absolute;
+  right: 1rem;
+  bottom: 0.2rem;
+  left: 1rem;
+  height: 2px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgb(var(--usage-deep-blue)), rgb(var(--usage-cyan)));
+  content: '';
+}
+
+.usage-page :deep(.data-filter-actions .btn),
+.usage-page :deep(.input),
+.usage-page :deep(.select-trigger),
+.usage-page :deep(.date-picker-trigger) {
+  transition: border-color 200ms ease, box-shadow 200ms ease, background-color 200ms ease, transform 200ms ease;
+}
+
+.usage-page :deep(.data-filter-actions .btn:hover:not(:disabled)) {
+  transform: translateY(-1px);
+}
+
+.usage-page :deep(.table-scroll-container) {
+  overflow: hidden;
+}
+
+.usage-page :deep(.table-scroll-container thead) {
+  background: linear-gradient(90deg, rgb(var(--usage-deep-blue) / 0.06), rgb(var(--usage-cyan) / 0.07));
+}
+
+html.dark .usage-page :deep(.data-stat-card),
+html.dark .usage-page :deep(.layout-section-fixed > .card),
+html.dark .usage-page :deep(.table-scroll-container),
+html.dark .usage-page :deep(.data-pagination) {
+  background: linear-gradient(135deg, rgb(var(--ui-surface) / 0.86), rgb(var(--ui-surface-elevated) / 0.72));
+  box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 0.24), inset 0 1px 0 rgb(255 255 255 / 0.06);
+}
+
+html.dark .usage-page::before {
+  opacity: 0.42;
+}
+
+html.dark .usage-page::after {
+  opacity: 0.34;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-page :deep(.data-stat-card),
+  .usage-page :deep(.data-filter-actions .btn),
+  .usage-page :deep(.input),
+  .usage-page :deep(.select-trigger),
+  .usage-page :deep(.date-picker-trigger) {
+    transition: none;
+  }
+
+  .usage-page :deep(.data-stat-card:hover),
+  .usage-page :deep(.data-filter-actions .btn:hover:not(:disabled)) {
+    transform: none;
+  }
+}
+</style>

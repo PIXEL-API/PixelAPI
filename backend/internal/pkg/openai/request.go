@@ -3,6 +3,8 @@ package openai
 import (
 	"regexp"
 	"strings"
+
+	"golang.org/x/net/http/httpguts"
 )
 
 // CodexCLIUserAgentPrefixes matches Codex CLI User-Agent patterns.
@@ -152,6 +154,10 @@ func matchCodexClientHeaderStrictPrefixes(value string, prefixes []string) bool 
 // User-Agent. The ChatGPT Codex backend requires both values to represent the
 // same official client or it responds with 404.
 func PairCodexClientIdentity(userAgent string) (originator string, pairedUA string, ok bool) {
+	// Validate before trimming so control bytes cannot become a valid identity.
+	if !httpguts.ValidHeaderFieldValue(userAgent) {
+		return "", "", false
+	}
 	ua := strings.TrimSpace(userAgent)
 	slash := strings.IndexByte(ua, '/')
 	if slash <= 0 {

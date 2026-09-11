@@ -3379,8 +3379,16 @@ func (s *OpenAIGatewayService) shouldFailoverUpstreamError(statusCode int) bool 
 	}
 }
 
-func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode int, upstreamMsg string, upstreamBody []byte) bool {
+func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(account *Account, statusCode int, upstreamMsg string, upstreamBody []byte) bool {
 	if isOpenAIRequestBodyTooLargeError(statusCode, upstreamMsg, upstreamBody) {
+		return true
+	}
+	// A model_not_found response from an OpenAI-compatible provider can be
+	// account-specific. In managed gateway mode let the handler rotate to the
+	// next eligible account; direct single-account callers keep the upstream
+	// deterministic 400 response.
+	if s != nil && s.accountRepo != nil && account != nil && account.IsOpenAICompatible() && statusCode == http.StatusBadRequest &&
+		isOpenAICompatibleModelNotFound400(upstreamBody) {
 		return true
 	}
 	if s.shouldFailoverUpstreamError(statusCode) {
@@ -3390,6 +3398,27 @@ func (s *OpenAIGatewayService) shouldFailoverOpenAIUpstreamResponse(statusCode i
 		return true
 	}
 	return isOpenAITransientProcessingError(statusCode, upstreamMsg, upstreamBody)
+}
+
+func isOpenAICompatibleModelNotFound400(respBody []byte) bool {
+	code := strings.TrimSpace(extractUpstreamErrorCode(respBody))
+	if code != "" {
+		return strings.EqualFold(code, "model_not_found")
+	}
+
+	msg := strings.ToLower(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
+	if msg == "" && !gjson.ValidBytes(respBody) {
+		msg = strings.ToLower(strings.TrimSpace(string(respBody)))
+	}
+	return strings.Contains(msg, "unknown provider for model") ||
+		strings.Contains(msg, "model not found") ||
+		strings.Contains(msg, "model is not supported")
+}
+
+// IsOpenAICompatibleModelNotFound400 reports an account-specific missing-model
+// response eligible for managed OpenAI-compatible account failover.
+func IsOpenAICompatibleModelNotFound400(respBody []byte) bool {
+	return isOpenAICompatibleModelNotFound400(respBody)
 }
 
 func shouldRetryOpenAIOnSamePoolAccount(account *Account, statusCode int, upstreamMsg string, upstreamBody []byte) bool {
@@ -3572,11 +3601,17 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 			return nil, fmt.Errorf("unsupported OpenCode Go protocol %q for model %q", resolved.Spec.Protocol, resolved.UpstreamModel)
 		}
 	}
+	if account != nil && account.IsCNProvider() && account.IsAnthropicProtocol() {
+		SetActualOpenAIUpstreamEndpoint(c, "/v1/messages")
+		return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "")
+	}
 	if account.Type == AccountTypeAPIKey && imageOnlyResponsesModel {
 		requestErr := fmt.Errorf("/v1/responses does not accept image-only model %q as the top-level model for API Key accounts; use /v1/images/generations, or use a Responses-compatible text model with the image_generation tool", reqModel)
 		return rejectImageOnlyResponsesRequest("model", requestErr)
 	}
-	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	if account.Type == AccountTypeAPIKey &&
+		!(account.IsCNProvider() && account.UsesNativeCNResponses()) &&
+		!openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
 	}
 
@@ -3760,7 +3795,11 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 
 	// 闈為€忎紶妯″紡涓嬶紝instructions 涓虹┖鏃舵敞鍏ラ粯璁ゆ寚浠ゃ€?
 	instructions := requestView.Get("instructions")
-	if !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == "" {
+	// API-key compatible upstreams own their system prompt contract. Injecting
+	// our Codex default changes the request semantics and can break strict
+	// providers; OAuth/Codex paths still receive the required default.
+	if (account == nil || account.Type != AccountTypeAPIKey) &&
+		(!instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == "") {
 		markPatchSet("instructions", "You are a helpful coding assistant.")
 	}
 
@@ -4511,7 +4550,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 				logger.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying non-WSv2 request after %s (account: %s)", reason, account.Name)
 				continue
 			}
-			if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
+			if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody) {
 				upstreamDetail := ""
 				if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 					maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
@@ -4965,7 +5004,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthroughWithOptions(
 			// failover 浠ョ淮鎸佸熀纭€ SLA銆?
 			shouldFailover := shouldFailoverOpenAIPassthroughResponse(resp.StatusCode, upstreamMsg, respBody)
 			if options.useOpenAIUpstreamFailoverPolicy {
-				shouldFailover = s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+				shouldFailover = s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody)
 			}
 			if shouldFailover {
 				return nil, s.handleFailoverErrorResponsePassthrough(ctx, resp, c, account, body)
@@ -6165,6 +6204,11 @@ streamLoop:
 					}
 				} else {
 					s.handleOpenAIModelCapacitySignal(ctx, account, http.StatusBadGateway, resp.Header, dataBytes, failedMessage)
+					if eventType == "response.failed" {
+						// Keep diagnostics before client model/namespace and payload rewrites;
+						// semantic output already committed prevents replay on another account.
+						s.recordOpenAIStreamUpstreamError(c, account, true, upstreamRequestID, "stream_failed", []byte(data), failedMessage)
+					}
 				}
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
@@ -7513,6 +7557,9 @@ func (s *OpenAIGatewayService) handleStreamingResponseWithReasoning(ctx context.
 					}
 				} else {
 					s.handleOpenAIModelCapacitySignal(ctx, account, http.StatusBadGateway, resp.Header, dataBytes, failedMessage)
+					if eventType == "response.failed" {
+						s.recordOpenAIStreamUpstreamError(c, account, false, upstreamRequestID, "stream_failed", dataBytes, failedMessage)
+					}
 				}
 				forceFlushFailedEvent = true
 				sawFailedEvent = true
@@ -8976,8 +9023,11 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 	imageMultiplier := resolveImageRateMultiplier(apiKey, multiplier)
 	videoMultiplier := resolveVideoRateMultiplier(apiKey, multiplier)
 	cost, err = s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, imageMultiplier, videoMultiplier, tokens, serviceTier)
-	if err != nil {
-		return fmt.Errorf("calculate OpenAI usage cost for model %s: %w", billingModel, err)
+	billingCostErr := err
+	if billingCostErr != nil {
+		// Build an explicitly unsettled usage record below; do not invent a
+		// price or apply a successful zero-cost billing command.
+		cost = nil
 	}
 	// response_model is limited to token-only requests. The upstream declaration
 	// may replace the existing baseline only when it has deterministic pricing,
@@ -8988,7 +9038,7 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 		result.UpstreamResponseModelConflict,
 		result.ImageCount > 0 || result.VideoCount > 0 || result.WebSearchCalls > 0 || result.SearchCount > 0 || result.AudioUsage != nil,
 		result.UpstreamResponseModelBillingEligible,
-	); responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
+	); billingCostErr == nil && responseModel != "" && !strings.EqualFold(responseModel, strings.TrimSpace(billingModel)) {
 		if identified, responseChannelPriced := s.hasIdentifiedOpenAIResponsePricing(ctx, responseModel, apiKey); identified {
 			responseCost, responseErr := s.calculateOpenAIRecordUsageCost(ctx, result, apiKey, responseModel, multiplier, imageMultiplier, videoMultiplier, tokens, serviceTier)
 			if responseErr == nil {
@@ -9025,6 +9075,12 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 	durationMs := int(result.Duration.Milliseconds())
 	accountRateMultiplier := account.BillingRateMultiplier()
 	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
+	// A WebSocket connection shares one HTTP context across multiple turns.
+	// Keep each response/turn ID as the billing key instead of collapsing them
+	// under the connection's client request ID.
+	if result.OpenAIWSMode && strings.TrimSpace(result.RequestID) != "" {
+		requestID = strings.TrimSpace(result.RequestID)
+	}
 
 	// 纭畾 RequestedModel锛堟笭閬撴槧灏勫墠鐨勫師濮嬫ā鍨嬶級
 	requestedModel := result.Model
@@ -9047,6 +9103,7 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 		APIKeyID:              apiKey.ID,
 		AccountID:             account.ID,
 		RequestID:             requestID,
+		UpstreamRequestID:     upstreamUsageRequestID(result.ResponseHeaders, result.RequestID),
 		Model:                 result.Model,
 		RequestedModel:        requestedModel,
 		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
@@ -9125,6 +9182,11 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 	if subscription != nil {
 		usageLog.SubscriptionID = &subscription.ID
 	}
+	if billingCostErr != nil {
+		usageLog.BillingError = usageBillingErrorCode(billingCostErr)
+		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
+		return fmt.Errorf("calculate OpenAI usage cost for model %s: %w", billingModel, billingCostErr)
+	}
 
 	// 璁＄畻璐﹀彿缁熻瀹氫环璐圭敤锛堜娇鐢ㄦ渶缁堜笂娓告ā鍨嬪尮閰嶈嚜瀹氫箟瑙勫垯锛?
 	if apiKey.GroupID != nil {
@@ -9168,6 +9230,7 @@ func (s *OpenAIGatewayService) recordUsageOnce(ctx context.Context, input *OpenA
 		// 计费失败不能连用量记录一起丢：账单可以事后补，用量凭证丢了就再也拿不回来。
 		// ActualCost 归零表示「这条用量未产生扣费」，避免对账时被当成已计费。
 		usageLog.ActualCost = 0
+		usageLog.BillingError = usageBillingErrorCode(billingErr)
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.openai_gateway")
 		return billingErr
 	}
@@ -10423,7 +10486,7 @@ func normalizeOpenAIReasoningEffort(raw string) string {
 }
 
 func normalizeOpenAIReasoningEffortForModel(raw, model string) string {
-	if strings.EqualFold(strings.TrimSpace(raw), "max") && isOpenAIGPT56Model(model) {
+	if strings.EqualFold(strings.TrimSpace(raw), "max") && (isOpenAIGPT6AstraModel(model) || isOpenAIGPT56Model(model)) {
 		return "max"
 	}
 	return normalizeOpenAIReasoningEffort(raw)

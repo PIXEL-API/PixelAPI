@@ -613,6 +613,12 @@ onMounted(() => {
   border-radius: 99px;
   background: var(--accent);
   content: "";
+  animation: home-nav-indicator-in 220ms ease-out both;
+}
+
+@keyframes home-nav-indicator-in {
+  from { opacity: 0; transform: scaleX(0.35); }
+  to { opacity: 1; transform: scaleX(1); }
 }
 
 .home-actions {
@@ -1449,6 +1455,270 @@ onMounted(() => {
     animation-iteration-count: 1 !important;
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* Liquid glass refinement: shared atmosphere with the account marketplace. */
+.home-page {
+  --bg: #f6fbff;
+  --surface: rgb(255 255 255 / 0.58);
+  --surface-strong: rgb(255 255 255 / 0.78);
+  --text: #122a4d;
+  --muted: #607791;
+  --line: rgb(40 89 139 / 0.14);
+  --accent: #2e70d7;
+  --accent-2: #2ec8d5;
+  --accent-soft: rgb(222 242 255 / 0.72);
+  --shadow: 0 1.5rem 5rem rgb(24 79 132 / 0.1);
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 8% 12%, rgb(39 211 226 / 0.32), transparent 30%),
+    radial-gradient(circle at 86% 78%, rgb(91 130 239 / 0.24), transparent 31%),
+    linear-gradient(135deg, #f7ffff 0%, #edf7ff 48%, #f8fbff 100%);
+}
+
+.home-page::before {
+  inset: -28%;
+  z-index: -2;
+  background:
+    radial-gradient(circle at 18% 18%, rgb(35 215 226 / 0.38), transparent 26%),
+    radial-gradient(circle at 54% 42%, rgb(75 116 230 / 0.22), transparent 28%),
+    radial-gradient(circle at 82% 78%, rgb(194 242 255 / 0.38), transparent 28%);
+  filter: blur(1rem);
+  animation: ambient-shift 20s ease-in-out infinite alternate;
+}
+
+.home-page::after {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  background-image: radial-gradient(rgb(36 78 103 / 0.055) 0.5px, transparent 0.5px);
+  background-size: 5px 5px;
+  content: '';
+  opacity: 0.16;
+  pointer-events: none;
+}
+
+:global(html.dark .home-page) {
+  --surface: rgb(19 31 44 / 0.6);
+  --surface-strong: rgb(24 38 53 / 0.82);
+  --text: #eef8ff;
+  --muted: #a9c2d9;
+  --line: rgb(174 218 245 / 0.16);
+  --accent: #79caff;
+  --accent-2: #52d9e1;
+  --accent-soft: rgb(27 77 124 / 0.46);
+  --shadow: 0 1.5rem 5rem rgb(0 0 0 / 0.32);
+  background:
+    radial-gradient(circle at 8% 12%, rgb(11 174 206 / 0.2), transparent 30%),
+    radial-gradient(circle at 86% 78%, rgb(39 83 196 / 0.24), transparent 31%),
+    linear-gradient(135deg, #071d2c 0%, #0b2850 50%, #082538 100%);
+}
+
+:global(html.dark .home-page)::after {
+  background-image: radial-gradient(rgb(213 230 245 / 0.09) 0.5px, transparent 0.5px);
+  opacity: 0.14;
+}
+
+.home-nav {
+  min-height: 72px;
+  margin-top: 0.75rem;
+  border: 1px solid rgb(255 255 255 / 0.62);
+  border-radius: 1.25rem;
+  background: rgb(255 255 255 / 0.34);
+  box-shadow: 0 0.75rem 2.5rem rgb(32 73 99 / 0.055), inset 0 1px 0 rgb(255 255 255 / 0.72);
+  padding: 0.55rem 0.75rem;
+  backdrop-filter: blur(1.25rem) saturate(1.2);
+}
+
+:global(html.dark .home-page .home-nav) {
+  border-color: rgb(255 255 255 / 0.11);
+  background: rgb(11 24 36 / 0.38);
+  box-shadow: 0 0.9rem 3rem rgb(0 0 0 / 0.2), inset 0 1px 0 rgb(255 255 255 / 0.07);
+}
+
+.brand {
+  letter-spacing: -0.035em;
+}
+
+.brand-mark,
+.doc-action,
+.icon-action,
+.button.secondary {
+  border-color: rgb(255 255 255 / 0.68);
+  background: rgb(255 255 255 / 0.46);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.75), 0 0.4rem 1rem rgb(33 77 103 / 0.045);
+  backdrop-filter: blur(1rem) saturate(1.15);
+}
+
+.doc-action:hover,
+.icon-action:hover,
+.button.secondary:hover {
+  border-color: rgb(92 176 215 / 0.5);
+  background: rgb(255 255 255 / 0.72);
+  box-shadow: 0 0.6rem 1.4rem rgb(38 111 146 / 0.1), inset 0 1px 0 rgb(255 255 255 / 0.82);
+}
+
+.button.primary {
+  border: 1px solid rgb(255 255 255 / 0.24);
+  background: linear-gradient(135deg, #2252b9, #2675d1 72%, #168fb7);
+  box-shadow: 0 0.75rem 1.7rem rgb(24 91 170 / 0.25), inset 0 1px 0 rgb(255 255 255 / 0.24);
+}
+
+.button.primary:hover {
+  background: linear-gradient(135deg, #2d67ce, #2b8be0 72%, #1aa7c7);
+  box-shadow: 0 0.95rem 2rem rgb(24 91 170 / 0.34), inset 0 1px 0 rgb(255 255 255 / 0.3);
+}
+
+.hero {
+  min-height: 590px;
+  padding-top: 4.25rem;
+}
+
+.eyebrow {
+  border: 1px solid rgb(52 169 215 / 0.28);
+  background: rgb(225 245 255 / 0.62);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.7), 0 0.45rem 1.2rem rgb(48 141 177 / 0.08);
+  color: #176b9e;
+  backdrop-filter: blur(0.8rem);
+}
+
+.home-title {
+  font-family: 'SF Pro Display', 'Noto Sans SC', 'Segoe UI', sans-serif;
+  font-weight: 680;
+  letter-spacing: -0.075em;
+}
+
+.flow-text {
+  background-image: linear-gradient(100deg, #18cbd5 0%, #4d8ff0 32%, #143a83 60%, #25bfd5 84%, #18cbd5 100%);
+  background-size: 280% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+}
+
+.lead {
+  max-width: 575px;
+  letter-spacing: -0.015em;
+}
+
+.visual {
+  min-height: 500px;
+}
+
+.visual::before {
+  position: absolute;
+  inset: 10% 1% 3%;
+  border-radius: 2rem;
+  background: radial-gradient(ellipse at 30% 34%, rgb(80 218 233 / 0.32), transparent 46%), radial-gradient(ellipse at 74% 75%, rgb(92 139 239 / 0.26), transparent 45%);
+  filter: blur(1.6rem);
+  content: '';
+  pointer-events: none;
+}
+
+.console-card {
+  position: relative;
+  overflow: hidden;
+  border-color: rgb(255 255 255 / 0.76);
+  background: rgb(255 255 255 / 0.48);
+  box-shadow: -1.5rem 2.25rem 4.8rem rgb(28 74 100 / 0.12), 0 0.6rem 2rem rgb(109 191 213 / 0.08), inset 0 1px 0 rgb(255 255 255 / 0.86);
+  backdrop-filter: blur(1.5rem) saturate(1.28);
+  animation: console-float 8s ease-in-out infinite;
+}
+
+.console-card::before {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  background: linear-gradient(112deg, rgb(255 255 255 / 0.38), transparent 28%, transparent 68%, rgb(171 237 255 / 0.16));
+  content: '';
+  pointer-events: none;
+}
+
+.console-card:hover {
+  animation-play-state: paused;
+  transform: rotateX(8deg) rotateY(-10deg) rotateZ(2deg) translateY(-10px);
+}
+
+:global(html.dark .home-page .console-card) {
+  border-color: rgb(214 238 250 / 0.15);
+  background: rgb(15 30 43 / 0.6);
+  box-shadow: -1.5rem 2.25rem 4.8rem rgb(0 0 0 / 0.35), 0 0.6rem 2rem rgb(55 166 196 / 0.08), inset 0 1px 0 rgb(255 255 255 / 0.1);
+}
+
+.console-inner {
+  position: relative;
+  z-index: 1;
+}
+
+.metric,
+.chart-card,
+.step-card {
+  border-color: rgb(255 255 255 / 0.62);
+  background: rgb(255 255 255 / 0.5);
+  box-shadow: 0 0.75rem 2rem rgb(31 72 98 / 0.055), inset 0 1px 0 rgb(255 255 255 / 0.72);
+  backdrop-filter: blur(1rem) saturate(1.16);
+}
+
+.metric:hover,
+.step-card:hover {
+  box-shadow: 0 1rem 2rem rgb(31 99 124 / 0.1), inset 0 1px 0 rgb(255 255 255 / 0.82);
+}
+
+.metric-icon {
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.7);
+}
+
+.chart-card {
+  border-radius: 1.25rem;
+}
+
+:global(html.dark .home-page .metric),
+:global(html.dark .home-page .chart-card),
+:global(html.dark .home-page .step-card) {
+  border-color: rgb(213 230 245 / 0.13);
+  background: rgb(20 36 51 / 0.56);
+  box-shadow: 0 1rem 2.5rem rgb(0 0 0 / 0.2), inset 0 1px 0 rgb(255 255 255 / 0.08);
+}
+
+.step-strip {
+  border-color: rgb(255 255 255 / 0.68);
+  background: rgb(255 255 255 / 0.42);
+  box-shadow: 0 1.25rem 4rem rgb(34 78 101 / 0.08), inset 0 1px 0 rgb(255 255 255 / 0.78);
+  backdrop-filter: blur(1.25rem) saturate(1.2);
+}
+
+.step-strip h2 {
+  letter-spacing: -0.045em;
+}
+
+.step-num {
+  box-shadow: 0 0 0 4px rgb(255 255 255 / 0.72), 0 0.35rem 0.8rem rgb(31 113 151 / 0.18);
+}
+
+:global(html.dark .home-page .step-num) {
+  box-shadow: 0 0 0 4px rgb(16 32 46 / 0.86), 0 0.35rem 0.8rem rgb(31 113 151 / 0.24);
+}
+
+@keyframes console-float {
+  0%, 100% { transform: rotateX(12deg) rotateY(-16deg) rotateZ(4deg) translate3d(0, 0, 0); }
+  50% { transform: rotateX(10deg) rotateY(-13deg) rotateZ(3deg) translate3d(0, -0.45rem, 0); }
+}
+
+@media (max-width: 900px) {
+  .console-card {
+    animation: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .console-card {
+    animation: none;
+  }
+
+  .home-nav-links a.router-link-active::after {
+    animation: none;
   }
 }
 </style>

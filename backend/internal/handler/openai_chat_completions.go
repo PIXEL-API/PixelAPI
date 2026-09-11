@@ -446,8 +446,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				}
 			})
 		}
-		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-		finalizeAccountShareRequest(hasBillableUsage || err == nil, func() { recordUsageResult(result) }, accountReleaseFunc)
+		finalizeAccountShareRequest(shouldRecordOpenAIUsage(result, err), func() { recordUsageResult(result) }, accountReleaseFunc)
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
 		if upstreamLatencyMs > 0 && forwardDurationMs > upstreamLatencyMs {
@@ -472,7 +471,7 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		if err != nil {
 			err = h.gatewayService.NormalizeGrokCredentialFailure(c.Request.Context(), c, account, err)
 			var failoverErr *service.UpstreamFailoverError
-			if errors.As(err, &failoverErr) {
+			if !shouldRecordOpenAIUsage(result, err) && errors.As(err, &failoverErr) {
 				if failoverClientGone(c) {
 					return
 				}

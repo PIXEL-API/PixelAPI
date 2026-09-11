@@ -1570,6 +1570,9 @@ func isAllowedOwnedAccountType(platform, accountType string) bool {
 		// opencode 是用户自有 apikey 账号，其余平台仅允许官方 OAuth。
 		return normalized == AccountTypeAPIKey
 	}
+	if IsCNProvider(platform) {
+		return normalized == AccountTypeAPIKey
+	}
 	return normalized == AccountTypeOAuth
 }
 
@@ -1622,6 +1625,9 @@ func validateOwnedAccountSourceScoped(
 	credentials, extra map[string]any,
 	scope ownedAccountSourceScope,
 ) error {
+	if err := validateQwenAccountConfiguration(platform, accountType, credentials); err != nil {
+		return err
+	}
 	if !isAllowedOwnedAccountType(platform, accountType) {
 		return ErrOwnedAccountTypeNotAllowed
 	}
@@ -1648,6 +1654,23 @@ func validateOwnedAccountSourceScoped(
 	}
 	isAgentIdentity := IsOpenAIAgentIdentityCredentials(credentials)
 	isPersonalAccessToken := IsOpenAIPersonalAccessTokenCredentials(credentials)
+	if IsCNProvider(platform) && strings.EqualFold(strings.TrimSpace(accountType), AccountTypeAPIKey) {
+		if !hasNonEmptyStringField(credentials, "api_key") {
+			return ErrOwnedAccountCredentialsInvalid.WithMetadata(map[string]string{"field": "api_key"})
+		}
+		// API Key 及路由配置是此类账号的必要字段；其余内容仍按个人账号规则检查。
+		safetyCredentials := mergeAccountMap(scope.credentialsToScan(credentials), nil)
+		for _, key := range []string{"api_key", "account_mode", "api_protocol", "base_url", "api_base_urls", "zhipu_organization", "zhipu_project"} {
+			delete(safetyCredentials, key)
+		}
+		if field, ok := findDisallowedOwnedAccountField(safetyCredentials); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{"section": "credentials", "field": field})
+		}
+		if field, ok := findDisallowedOwnedAccountField(scope.extraToScan(extra)); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{"section": "extra", "field": field})
+		}
+		return nil
+	}
 	if isPersonalAccessToken {
 		if platform != PlatformOpenAI || strings.ToLower(strings.TrimSpace(accountType)) != AccountTypeOAuth {
 			return ErrOwnedPersonalAccessTokenValidationRequired
@@ -2006,6 +2029,8 @@ func (s *AccountService) ListOwnedSelectableModelIDs(ctx context.Context, platfo
 }
 
 func (s *AccountService) validateOwnedPersonalModelMapping(ctx context.Context, platform string, credentials map[string]any) error {
+	// 个人账号（包括国产 API Key 账号）必须提交显式模型白名单；
+	// 当前活跃渠道定价目录只用于校验白名单中的模型，不能替代白名单。
 	raw, exists := credentials["model_mapping"]
 	if !exists {
 		return ErrOwnedAccountModelMappingInvalid.WithMetadata(map[string]string{"field": "model_mapping"})
@@ -3219,6 +3244,11 @@ func accountDuplicateIdentityKeys(account *Account) []ownedAccountDuplicateKey {
 			return nil
 		}
 		addFolded("opencode.api_key", account.GetCredential("api_key"))
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformQwen:
+		if account.Type != AccountTypeAPIKey {
+			return nil
+		}
+		add(account.Platform+".api_key", account.GetCredential("api_key"))
 	}
 	if len(keys) == 0 {
 		return nil
@@ -3829,7 +3859,7 @@ func (s *AccountService) ConvertOwnedExternalPlacement(ctx context.Context, owne
 		if err != nil {
 			return nil, err
 		}
-		if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode {
+		if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode && !IsCNProvider(account.Platform) {
 			return nil, ErrAccountShareRoomUnknownLevel
 		}
 		modeGroup, err := s.accountShareModeRepo.GetModeGroup(ctx, account.Platform)

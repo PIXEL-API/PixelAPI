@@ -256,7 +256,8 @@ func accountHasExplicitModelMapping(account *Account) bool {
 // isAccountTestablePlatform 判断平台是否支持「测试连接」流程。
 func isAccountTestablePlatform(platform string) bool {
 	switch platform {
-	case PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok, PlatformOpencode, PlatformAnthropic:
+	case PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok, PlatformOpencode, PlatformAnthropic,
+		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformQwen:
 		return true
 	default:
 		return false

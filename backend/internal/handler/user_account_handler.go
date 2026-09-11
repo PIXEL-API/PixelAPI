@@ -34,6 +34,8 @@ type UserAccountHandler struct {
 	oauthService            *service.OAuthService
 	openaiOAuthService      *service.OpenAIOAuthService
 	openaiQuotaService      *service.OpenAIQuotaService
+	cnQuotaService          *service.CNProviderQuotaService
+	cnBalanceService        *service.CNProviderBalanceService
 	userModerationService   *service.UserContentModerationService
 	geminiOAuthService      *service.GeminiOAuthService
 	antigravityOAuthService *service.AntigravityOAuthService
@@ -93,6 +95,11 @@ func (h *UserAccountHandler) SetOpenAIQuotaService(openaiQuotaService *service.O
 	h.openaiQuotaService = openaiQuotaService
 }
 
+func (h *UserAccountHandler) SetCNProviderServices(quota *service.CNProviderQuotaService, balance *service.CNProviderBalanceService) {
+	h.cnQuotaService = quota
+	h.cnBalanceService = balance
+}
+
 func (h *UserAccountHandler) SetUserContentModerationService(userModerationService *service.UserContentModerationService) {
 	h.userModerationService = userModerationService
 }
@@ -124,18 +131,24 @@ type createUserAccountRequest struct {
 }
 
 type importUserAccountCredentialsRequest struct {
-	Contents           []string `json:"contents" binding:"required"`
-	Platform           string   `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity grok opencode"`
-	OpenAIAuthMode     string   `json:"openai_auth_mode" binding:"omitempty,oneof=oauth personal_access_token agent_identity"`
-	AccountLevel       string   `json:"account_level"`
-	ProxyID            *int64   `json:"proxy_id"`
-	ShareMode          string   `json:"share_mode" binding:"omitempty,oneof=private public"`
-	Concurrency        int      `json:"concurrency"`
-	LoadFactor         *int     `json:"load_factor"`
-	Priority           int      `json:"priority"`
-	GroupIDs           []int64  `json:"group_ids"`
-	ExpiresAt          *int64   `json:"expires_at"`
-	AutoPauseOnExpired *bool    `json:"auto_pause_on_expired"`
+	Contents           []string          `json:"contents" binding:"required"`
+	Platform           string            `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity grok opencode kimi zhipu deepseek minimax qwen"`
+	OpenAIAuthMode     string            `json:"openai_auth_mode" binding:"omitempty,oneof=oauth personal_access_token agent_identity"`
+	AccountLevel       string            `json:"account_level"`
+	ProxyID            *int64            `json:"proxy_id"`
+	ShareMode          string            `json:"share_mode" binding:"omitempty,oneof=private public"`
+	Concurrency        int               `json:"concurrency"`
+	LoadFactor         *int              `json:"load_factor"`
+	Priority           int               `json:"priority"`
+	GroupIDs           []int64           `json:"group_ids"`
+	ExpiresAt          *int64            `json:"expires_at"`
+	AutoPauseOnExpired *bool             `json:"auto_pause_on_expired"`
+	AccountMode        string            `json:"account_mode"`
+	APIProtocol        string            `json:"api_protocol"`
+	BaseURL            string            `json:"base_url"`
+	APIBaseURLs        map[string]string `json:"api_base_urls"`
+	ZhipuOrganization  string            `json:"zhipu_organization"`
+	ZhipuProject       string            `json:"zhipu_project"`
 }
 
 type updateUserAccountRequest struct {
@@ -411,8 +424,8 @@ func (h *UserAccountHandler) prepareUserAccountRequest(c *gin.Context, ownerUser
 		return false
 	}
 	// 用户端自有账号仅 opencode 平台放开 apikey 类型，其余平台仍强制 OAuth。
-	if req.Type == service.AccountTypeAPIKey && req.Platform != service.PlatformOpencode {
-		response.BadRequest(c, "API key accounts are only supported for the opencode platform")
+	if req.Type == service.AccountTypeAPIKey && req.Platform != service.PlatformOpencode && !service.IsCNProvider(req.Platform) {
+		response.BadRequest(c, "API key accounts are only supported for OpenCode or CN provider platforms")
 		return false
 	}
 	levelConfigs, err := h.openAIAccountLevelConfigs(c.Request.Context())
@@ -489,6 +502,9 @@ func enrichUserK12CredentialImportSource(source *service.AccountCredentialImport
 }
 
 func credentialImportSourcePlatform(source service.AccountCredentialImportSource) string {
+	if service.IsCNProvider(source.Platform) {
+		return strings.TrimSpace(source.Platform)
+	}
 	switch source.Kind {
 	case service.AccountCredentialImportKindOpenAIRefreshToken:
 		return service.PlatformOpenAI
@@ -1144,21 +1160,33 @@ func (h *UserAccountHandler) ResetOpenAIQuota(c *gin.Context) {
 }
 
 func (h *UserAccountHandler) resolveOwnedAccountID(c *gin.Context) (int64, bool) {
+	account, ok := h.resolveOwnedAccount(c)
+	if !ok {
+		return 0, false
+	}
+	return account.ID, true
+}
+
+// resolveOwnedAccount authenticates and loads the account under the current owner.
+// Callers that already need the account should reuse this value so a second
+// unrestricted GetByID cannot race the ownership check.
+func (h *UserAccountHandler) resolveOwnedAccount(c *gin.Context) (*service.Account, bool) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
 		response.Unauthorized(c, "User not authenticated")
-		return 0, false
+		return nil, false
 	}
 	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		response.BadRequest(c, "Invalid account ID")
-		return 0, false
+		return nil, false
 	}
-	if _, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID); err != nil {
+	account, err := h.accountService.GetOwnedByID(c.Request.Context(), subject.UserID, accountID)
+	if err != nil {
 		response.ErrorFrom(c, err)
-		return 0, false
+		return nil, false
 	}
-	return accountID, true
+	return account, true
 }
 
 func (h *UserAccountHandler) GetStats(c *gin.Context) {
@@ -1372,9 +1400,15 @@ func (h *UserAccountHandler) ImportCredentials(c *gin.Context) {
 		req.Concurrency = userOwnedDefaultConcurrency
 	}
 
-	sources, parseErrors := service.ParseAccountCredentialImportContents(req.Contents)
-	if req.Platform == service.PlatformOpencode {
+	var sources []service.AccountCredentialImportSource
+	var parseErrors []service.AccountCredentialImportError
+	switch {
+	case req.Platform == service.PlatformOpencode:
 		sources, parseErrors = service.ParseOpencodeCredentialImportContents(req.Contents)
+	case service.IsCNProvider(req.Platform):
+		sources, parseErrors = service.ParseCNProviderCredentialImportContents(req.Platform, req.Contents)
+	default:
+		sources, parseErrors = service.ParseAccountCredentialImportContents(req.Contents)
 	}
 	if len(sources) == 0 && len(parseErrors) == 0 {
 		response.BadRequest(c, "No importable account credentials found")
@@ -1494,11 +1528,17 @@ func (h *UserAccountHandler) createOwnedAccountFromCredentialImportSource(
 		ExpiresAt:          userUnixSecondsToTime(defaults.ExpiresAt),
 		AutoPauseOnExpired: defaults.AutoPauseOnExpired,
 	}
+	if service.IsCNProvider(req.Platform) {
+		req.Type = service.AccountTypeAPIKey
+		req.Credentials = cnCredentialImportCredentials(source.Credentials, defaults)
+	}
 	if req.Concurrency <= 0 {
 		req.Concurrency = userOwnedDefaultConcurrency
 	}
 
 	switch source.Kind {
+	case service.AccountCredentialImportKindCNAPIKey:
+		// Already parsed as API-key credentials; no OAuth token exchange is needed.
 	case service.AccountCredentialImportKindOAuthCredentials:
 		if req.Platform == service.PlatformOpenAI {
 			resolvedLevel, err := h.verifyOwnedOpenAIOAuthImportLevel(ctx, ownerUserID, &req, defaults, targetAccountLevel, levelConfigs)

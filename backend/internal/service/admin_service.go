@@ -3580,6 +3580,9 @@ func (s *adminServiceImpl) prepareAccountCreate(ctx context.Context, input *Crea
 	if !IsSupportedAccountPlatform(input.Platform) {
 		return nil, nil, ErrAccountPlatformUnsupported
 	}
+	if err := validateQwenAccountConfiguration(input.Platform, input.Type, input.Credentials); err != nil {
+		return nil, nil, err
+	}
 	if _, err := validateAdminGrokManagedExtra(input.Extra); err != nil {
 		return nil, nil, err
 	}
@@ -3954,6 +3957,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		} else {
 			account.OwnerUserID = input.OwnerUserID
 		}
+	}
+	if err := validateQwenAccountConfiguration(account.Platform, account.Type, account.Credentials); err != nil {
+		return nil, err
 	}
 	// 个人账号创建/变更模型白名单时，必须使用当前定价目录中的 canonical 模型 ID。
 	// 对已有个人账号的无关编辑不重复校验，以免历史脏数据阻断改名、并发等操作；

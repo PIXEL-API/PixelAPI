@@ -2106,6 +2106,11 @@ func TestAccountShareModeListModeGroupsUsesReadOnlyLookup(t *testing.T) {
 		PlatformOpenAI:    {ID: 101, Platform: PlatformOpenAI},
 		PlatformAnthropic: {ID: 202, Platform: PlatformAnthropic},
 		PlatformOpencode:  {ID: 303, Platform: PlatformOpencode},
+		PlatformKimi:      {ID: 404, Platform: PlatformKimi},
+		PlatformZhipu:     {ID: 505, Platform: PlatformZhipu},
+		PlatformDeepseek:  {ID: 606, Platform: PlatformDeepseek},
+		PlatformMiniMax:   {ID: 707, Platform: PlatformMiniMax},
+		PlatformQwen:      {ID: 808, Platform: PlatformQwen},
 	}}
 	svc := &AccountShareModeService{repo: repo}
 
@@ -2113,10 +2118,10 @@ func TestAccountShareModeListModeGroupsUsesReadOnlyLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list mode groups failed: %v", err)
 	}
-	if len(groups) != 3 || groups[0].GroupID != 101 || groups[0].Platform != PlatformOpenAI || groups[1].GroupID != 202 || groups[1].Platform != PlatformAnthropic || groups[2].GroupID != 303 || groups[2].Platform != PlatformOpencode {
+	if len(groups) != 8 || groups[0].GroupID != 101 || groups[0].Platform != PlatformOpenAI || groups[1].GroupID != 202 || groups[1].Platform != PlatformAnthropic || groups[2].GroupID != 303 || groups[2].Platform != PlatformOpencode || groups[3].GroupID != 404 || groups[3].Platform != PlatformKimi || groups[4].GroupID != 505 || groups[4].Platform != PlatformZhipu || groups[5].GroupID != 606 || groups[5].Platform != PlatformDeepseek || groups[6].GroupID != 707 || groups[6].Platform != PlatformMiniMax || groups[7].GroupID != 808 || groups[7].Platform != PlatformQwen {
 		t.Fatalf("unexpected mode groups: %#v", groups)
 	}
-	if len(repo.modeGroupGetCalls) != 3 || repo.modeGroupGetCalls[0] != PlatformOpenAI || repo.modeGroupGetCalls[1] != PlatformAnthropic || repo.modeGroupGetCalls[2] != PlatformOpencode {
+	if len(repo.modeGroupGetCalls) != 8 || repo.modeGroupGetCalls[0] != PlatformOpenAI || repo.modeGroupGetCalls[1] != PlatformAnthropic || repo.modeGroupGetCalls[2] != PlatformOpencode || repo.modeGroupGetCalls[3] != PlatformKimi || repo.modeGroupGetCalls[4] != PlatformZhipu || repo.modeGroupGetCalls[5] != PlatformDeepseek || repo.modeGroupGetCalls[6] != PlatformMiniMax || repo.modeGroupGetCalls[7] != PlatformQwen {
 		t.Fatalf("unexpected read-only lookup calls: %#v", repo.modeGroupGetCalls)
 	}
 	if len(repo.modeGroupEnsureCalls) != 0 {

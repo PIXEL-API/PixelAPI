@@ -61,8 +61,16 @@ type AccountHandler struct {
 	tokenCacheInvalidator     service.TokenCacheInvalidator
 	accountBatchTaskService   *service.AccountBatchTaskService
 	grokImportProber          grokUsageProber
+	cnQuotaService            *service.CNProviderQuotaService
+	cnBalanceService          *service.CNProviderBalanceService
 	publicShareValidation     chan ownedPublicShareValidationJob
 	publicShareValidationOnce sync.Once
+}
+
+// SetCNProviderServices injects the read-only 国产供应商额度/余额探测器。
+func (h *AccountHandler) SetCNProviderServices(quota *service.CNProviderQuotaService, balance *service.CNProviderBalanceService) {
+	h.cnQuotaService = quota
+	h.cnBalanceService = balance
 }
 
 // NewAccountHandler creates a new admin account handler

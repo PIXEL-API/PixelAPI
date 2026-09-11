@@ -41,7 +41,7 @@
         <div
           v-if="isOpen"
           ref="dropdownRef"
-          class="select-dropdown-portal"
+          class="select-dropdown-portal ui-menu"
           :data-ui-skin="uiSkin"
           :data-dialog-focus-owner-id="triggerId"
           :class="[instanceId]"
@@ -90,6 +90,7 @@
               @mouseenter="handleOptionMouseEnter(option, index)"
               :class="[
                 'select-option',
+                'ui-menu-item',
                 isGroupHeaderOption(option) && 'select-option-group',
                 isSelected(option) && 'select-option-selected',
                 isOptionDisabled(option) && !isGroupHeaderOption(option) && 'select-option-disabled',
@@ -223,7 +224,7 @@ const dropdownStyle = computed(() => {
     minWidth: `${geometry.minWidth}px`,
     maxWidth: 'calc(100vw - 2rem)',
     maxHeight: `${geometry.maxHeight}px`,
-    zIndex: '100000020'
+    zIndex: 'var(--ui-z-select, 100000020)'
   }
 
   if (dropdownPosition.value === 'top') {

@@ -1086,3 +1086,40 @@ func TestConvertOwnedExternalPlacementPublicPoolToRoomSkipsIdleGuard(t *testing.
 	require.Equal(t, "active", repo.accounts[1].ExternalPlacement.State)
 	require.Equal(t, AccountExternalPlacementRoom, repo.accounts[1].ExternalPlacement.Target)
 }
+
+func TestConvertOwnedExternalPlacementCNRoomAllowsUnknownAccountLevel(t *testing.T) {
+	ownerUserID := int64(101)
+	repo := newOwnedAgentIdentityRepoStub()
+	repo.accounts[1] = &Account{
+		ID:           1,
+		Name:         "Kimi private account",
+		OwnerUserID:  &ownerUserID,
+		Platform:     PlatformKimi,
+		Type:         AccountTypeAPIKey,
+		AccountLevel: AccountLevelUnknown,
+		Credentials:  map[string]any{"api_key": "test-key"},
+		Extra:        map[string]any{},
+		ShareMode:    AccountShareModePrivate,
+		ShareStatus:  AccountShareStatusApproved,
+		Concurrency:  3,
+		Priority:     1,
+		Status:       StatusActive,
+		Schedulable:  true,
+		GroupIDs:     []int64{ownedAgentIdentityPrivateGroupID},
+	}
+	svc, _ := newOwnedAgentIdentityService(repo)
+
+	result, err := svc.ConvertOwnedExternalPlacement(
+		context.Background(),
+		ownerUserID,
+		1,
+		ConvertAccountExternalPlacementInput{
+			Target:         AccountExternalPlacementRoom,
+			IdempotencyKey: "kimi-unknown-level-room",
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, AccountExternalPlacementRoom, result.Current.Target)
+}

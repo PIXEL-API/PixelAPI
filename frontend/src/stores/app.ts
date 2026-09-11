@@ -380,7 +380,10 @@ export const useAppStore = defineStore("app", () => {
 
     // Prevent duplicate requests
     if (publicSettingsLoading.value) {
-      return publicSettingsRequest;
+      // The owner request logs and normalizes failures below. Callers joining
+      // the in-flight request must receive the same nullable result instead of
+      // reintroducing an unhandled rejection during page navigation.
+      return publicSettingsRequest?.catch(() => null) ?? null;
     }
 
     publicSettingsLoading.value = true;

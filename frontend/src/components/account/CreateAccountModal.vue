@@ -206,12 +206,27 @@
             <Icon name="terminal" size="sm" />
             OpenCode
           </button>
+          <button v-for="option in [
+            { value: 'kimi', label: 'Kimi' },
+            { value: 'zhipu', label: '智谱 GLM' },
+            { value: 'deepseek', label: 'DeepSeek' },
+            { value: 'minimax', label: 'MiniMax' },
+            { value: 'qwen', label: '通义千问' },
+          ]" :key="option.value" type="button"
+            class="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all"
+            :class="form.platform === option.value
+              ? 'bg-white text-blue-600 shadow-sm dark:bg-dark-600 dark:text-blue-400'
+              : 'text-gray-600 hover:text-gray-900 dark:text-gray-400 dark:hover:text-gray-200'"
+            @click="form.platform = option.value as AccountPlatform"
+          >
+            {{ option.label }}
+          </button>
         </div>
       </div>
       <div v-else>
         <label class="input-label">{{ t('admin.accounts.platform') }}</label>
         <div class="input flex min-h-[44px] items-center justify-between bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200">
-          <strong>{{ form.platform === 'openai' ? 'OpenAI' : form.platform === 'anthropic' ? 'Anthropic' : form.platform }}</strong>
+          <strong>{{ platformLabel(form.platform) }}</strong>
           <span class="text-xs text-gray-500 dark:text-dark-400">{{ t('admin.accounts.lockedByRoom') }}</span>
         </div>
       </div>
@@ -1273,9 +1288,15 @@
         </div>
       </div>
 
+      <CNProviderSettings
+        v-if="isCNPlatform(form.platform)"
+        :platform="form.platform"
+        v-model="cnProviderConfig"
+      />
+
       <!-- API Key input (only for apikey type, excluding Antigravity which has its own fields) -->
-      <div v-if="!isUserScope && form.type === 'apikey' && form.platform !== 'antigravity' && form.platform !== 'opencode'" class="space-y-4">
-        <div>
+      <div v-if="( !isUserScope || isCNPlatform(form.platform) ) && form.type === 'apikey' && form.platform !== 'antigravity' && form.platform !== 'opencode'" class="space-y-4">
+        <div v-if="!isCNPlatform(form.platform)">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="apiKeyBaseUrl"
@@ -3588,9 +3609,11 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import CNProviderSettings from '@/components/account/CNProviderSettings.vue'
 import {
   applyHeaderOverride,
   applyInterceptWarmup,
+  defaultCNBaseUrl,
   validateHeaderOverrideRows,
   type HeaderOverrideRow
 } from '@/components/account/credentialsBuilder'
@@ -3646,6 +3669,21 @@ const adminSettingsStore = useAdminSettingsStore()
 
 // OpenCode Go 订阅官方端点，前端锁定不提供 base_url 输入。
 const OPENCODE_DEFAULT_BASE_URL = 'https://opencode.ai/zen/go/v1'
+const CN_PLATFORM_BASE_URLS: Record<string, string> = {
+  kimi: 'https://api.moonshot.cn/v1',
+  zhipu: 'https://open.bigmodel.cn/api/paas/v4',
+  deepseek: 'https://api.deepseek.com',
+  minimax: 'https://api.minimaxi.com/v1',
+  qwen: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+}
+
+function isCNPlatform(platform: AccountPlatform): boolean {
+  return ['kimi', 'zhipu', 'deepseek', 'minimax', 'qwen'].includes(platform)
+}
+
+function platformLabel(platform: AccountPlatform): string {
+  return ({ openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', antigravity: 'Antigravity', grok: 'Grok', opencode: 'OpenCode', kimi: 'Kimi', zhipu: '智谱 GLM', deepseek: 'DeepSeek', minimax: 'MiniMax', qwen: '通义千问' } as Record<string, string>)[platform] || platform
+}
 
 const oauthStepTitle = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.oauth.openai.title')
@@ -3772,6 +3810,7 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
+const cnProviderConfig = ref({ mode: 'payg' as 'payg' | 'coding', protocol: 'chat_completions' as 'adaptive' | 'chat_completions' | 'anthropic' | 'responses', base_url: '', api_base_urls: {} as Record<string, string> })
 const grokCustomBaseUrlEnabled = ref(false)
 const grokBaseUrl = ref('')
 const headerOverrideEnabled = ref(false)
@@ -4467,13 +4506,18 @@ watch(
             ? 'https://api.x.ai/v1'
             : newPlatform === 'opencode'
               ? OPENCODE_DEFAULT_BASE_URL
-              : 'https://api.anthropic.com'
+              : (CN_PLATFORM_BASE_URLS[newPlatform] || 'https://api.anthropic.com')
     // Opencode 仅 apikey（用户端自有账号），无 OAuth / 上游分支。
     if (newPlatform === 'opencode') {
       accountCategory.value = 'apikey'
       addMethod.value = 'oauth'
       antigravityAccountType.value = 'oauth'
       form.type = 'apikey'
+    }
+    if (isCNPlatform(newPlatform as AccountPlatform)) {
+      accountCategory.value = 'apikey'
+      form.type = 'apikey'
+      cnProviderConfig.value = { mode: 'payg', protocol: 'chat_completions', base_url: CN_PLATFORM_BASE_URLS[newPlatform] || '', api_base_urls: {} }
     }
     // Clear model-related settings
     allowedModels.value = []
@@ -5265,7 +5309,7 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
-  if (isUserScope.value && !isOAuthFlow.value && form.platform !== 'opencode') {
+  if (isUserScope.value && !isOAuthFlow.value && form.platform !== 'opencode' && !isCNPlatform(form.platform)) {
     accountCategory.value = 'oauth-based'
     addMethod.value = 'oauth'
     antigravityAccountType.value = 'oauth'
@@ -5457,7 +5501,7 @@ const handleSubmit = async () => {
         ? 'https://generativelanguage.googleapis.com'
         : form.platform === 'grok'
           ? 'https://api.x.ai/v1'
-          : 'https://api.anthropic.com'
+          : (CN_PLATFORM_BASE_URLS[form.platform] || 'https://api.anthropic.com')
 
   // Build credentials with optional model mapping
   const credentials: Record<string, unknown> = {
@@ -5500,6 +5544,19 @@ const handleSubmit = async () => {
   }
   if (!applyTempUnschedConfig(credentials)) {
     return
+  }
+
+  if (isCNPlatform(form.platform)) {
+    credentials.account_mode = cnProviderConfig.value.mode
+    credentials.api_protocol = cnProviderConfig.value.protocol
+    const base = cnProviderConfig.value.base_url.trim()
+    if (cnProviderConfig.value.protocol === 'adaptive') {
+      credentials.api_base_urls = { ...cnProviderConfig.value.api_base_urls }
+      credentials.base_url = (credentials.api_base_urls as Record<string, string>).chat_completions || base
+    } else {
+      credentials.base_url = base || defaultCNBaseUrl(form.platform, cnProviderConfig.value.mode, cnProviderConfig.value.protocol)
+      delete credentials.api_base_urls
+    }
   }
 
   form.credentials = credentials

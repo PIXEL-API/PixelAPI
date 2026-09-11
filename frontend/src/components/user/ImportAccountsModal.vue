@@ -24,6 +24,7 @@
         :selected-platform="selectedPlatform"
         @select="selectPlatform"
       />
+      <CNProviderSettings v-if="selectedPlatform && isCNImportPlatform(selectedPlatform)" v-model="cnImportConfig" :platform="selectedPlatform" />
       <OpenAIAuthModeSelector
         v-if="selectedPlatform === 'openai'"
         :selected-mode="selectedOpenAIAuthMode"
@@ -270,6 +271,7 @@ import {
 } from '@/components/account/personalAccountTemplate'
 import { useAppStore } from '@/stores/app'
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
+import CNProviderSettings from '@/components/account/CNProviderSettings.vue'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { isProxyAccountFull, normalizeProxyAccountCount, normalizeProxyMaxAccounts } from '@/utils/proxyCapacity'
 import { openAIAccountLevelLabel, selectableOpenAIAccountLevels } from '@/utils/openaiAccountLevels'
@@ -299,6 +301,8 @@ const openaiOAuth = useOpenAIOAuth('user')
 
 
 const selectedPlatform = ref<ImportPlatform | ''>('')
+const isCNImportPlatform = (platform: string) => ['kimi', 'zhipu', 'deepseek', 'minimax', 'qwen'].includes(platform)
+const cnImportConfig = ref({ mode: 'payg' as 'payg' | 'coding', protocol: 'chat_completions' as 'adaptive' | 'chat_completions' | 'anthropic' | 'responses', base_url: '', api_base_urls: {} as Record<string, string> })
 const selectedOpenAIAuthMode = ref<OpenAIImportAuthMode>('oauth')
 const selectedAccountLevel = ref<SelectableImportLevel | ''>('')
 const selectedProxyId = ref<number | null>(null)
@@ -604,7 +608,12 @@ const PlatformSelector = defineComponent({
       { value: 'gemini', label: 'Gemini', desc: t('userAccounts.importPlatformGemini') },
       { value: 'antigravity', label: 'Antigravity', desc: t('userAccounts.importPlatformAntigravity') },
       { value: 'grok', label: 'Grok', desc: t('userAccounts.importPlatformGrok') },
-      { value: 'opencode', label: 'OpenCode', desc: t('userAccounts.importPlatformOpencode') }
+      { value: 'opencode', label: 'OpenCode', desc: t('userAccounts.importPlatformOpencode') },
+      { value: 'kimi', label: 'Kimi', desc: 'Kimi API Key' },
+      { value: 'zhipu', label: '智谱 GLM', desc: '智谱 API Key' },
+      { value: 'deepseek', label: 'DeepSeek', desc: 'DeepSeek API Key' },
+      { value: 'minimax', label: 'MiniMax', desc: 'MiniMax API Key' },
+      { value: 'qwen', label: '通义千问', desc: 'Qwen API Key' }
     ]
     return () => h('div', { class: 'space-y-2' }, [
       h('label', { class: 'input-label' }, t('userAccounts.importPlatform')),
@@ -846,6 +855,9 @@ watch(
 function selectPlatform(platform: ImportPlatform): void {
   selectedPlatform.value = platform
   selectedImportFlow.value = 'credential'
+  if (isCNImportPlatform(platform)) {
+    cnImportConfig.value = { mode: 'payg', protocol: 'chat_completions', base_url: '', api_base_urls: {} }
+  }
 }
 
 function selectOpenAIAuthMode(mode: OpenAIImportAuthMode): void {
@@ -955,6 +967,11 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
       return Promise.reject(new Error(t('userAccounts.importGrokAccountLevelRequired')))
     }
     request.account_level = accountLevel
+  } else if (isCNImportPlatform(selectedPlatform.value)) {
+    request.account_mode = cnImportConfig.value.mode
+    request.api_protocol = cnImportConfig.value.protocol
+    request.base_url = cnImportConfig.value.base_url.trim()
+    if (cnImportConfig.value.protocol === 'adaptive') request.api_base_urls = { ...cnImportConfig.value.api_base_urls }
   }
   if (requiresCredentialImportProxy.value) {
     if (!selectedProxyId.value) {

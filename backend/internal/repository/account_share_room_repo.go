@@ -214,7 +214,7 @@ func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Cont
 		return r.GetListingByID(ctx, idempotentListingID, ownerUserID)
 	}
 	accountLevel = service.NormalizeAccountLevel(accountLevel)
-	if accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode {
+	if accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode && !service.IsCNProvider(platform) {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 	if accountStatus != service.StatusActive || !accountSchedulable {
@@ -606,7 +606,7 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 	}
 	roomPlatform := strings.ToLower(strings.TrimSpace(room.Platform))
 	roomAccountLevel := service.NormalizeAccountLevel(room.AccountLevel)
-	if roomAccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode {
+	if roomAccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode && !service.IsCNProvider(roomPlatform) {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 
@@ -628,7 +628,7 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 			})
 			continue
 		}
-		if candidate.Snapshot.AccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode {
+		if candidate.Snapshot.AccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode && !service.IsCNProvider(roomPlatform) {
 			recordFailure(accountID, service.ErrAccountShareRoomUnknownLevel, nil)
 			continue
 		}
@@ -1862,7 +1862,7 @@ func (r *accountShareModeRepository) ConvertExternalPlacement(ctx context.Contex
 	}
 	platform = strings.ToLower(strings.TrimSpace(platform))
 	accountLevel = service.NormalizeAccountLevel(accountLevel)
-	if target == service.AccountExternalPlacementRoom && accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode {
+	if target == service.AccountExternalPlacementRoom && accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode && !service.IsCNProvider(platform) {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 

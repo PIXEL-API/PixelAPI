@@ -331,8 +331,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 				}
 			})
 		}
-		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-		finalizeAccountShareRequest(hasBillableUsage || forwardErr == nil, func() { recordUsageResult(result) }, accountRelease)
+		finalizeAccountShareRequest(shouldRecordOpenAIUsage(result, forwardErr), func() { recordUsageResult(result) }, accountRelease)
 
 		if forwardErr == nil {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, true, nil, account.GetMappedModel(selectionModel))
@@ -341,7 +340,7 @@ func (h *OpenAIGatewayHandler) AlphaSearch(c *gin.Context) {
 		}
 
 		var failoverErr *service.UpstreamFailoverError
-		if !errors.As(forwardErr, &failoverErr) {
+		if shouldRecordOpenAIUsage(result, forwardErr) || !errors.As(forwardErr, &failoverErr) {
 			h.gatewayService.ReportOpenAIAccountScheduleResult(account.ID, false, nil)
 			if failoverClientGone(c) {
 				reqLog.Info("openai_alpha_search.forward_aborted_client_disconnected", zap.Int64("account_id", account.ID))

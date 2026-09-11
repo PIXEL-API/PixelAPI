@@ -1,0 +1,108 @@
+/*
+ * Shared overlay primitives. BaseDialog and Select keep their public class
+ * names for compatibility, while new surfaces can use the semantic names.
+ * This is the single material layer for dialogs, menus, and selects.
+ */
+:root {
+  --ui-z-menu: 100000030;
+  --ui-z-dialog: 100000000;
+  --ui-z-tooltip: 100000040;
+}
+
+html[data-ui-theme='glass-flow'] .ui-overlay,
+html[data-ui-theme='glass-flow'] .modal-overlay,
+html[data-ui-theme='glass-flow'] .dialog-overlay {
+  z-index: var(--ui-z-dialog);
+  background: rgb(10 25 38 / 0.34);
+  backdrop-filter: blur(0.45rem) saturate(1.1);
+}
+
+html.dark[data-ui-theme='glass-flow'] .ui-overlay,
+html.dark[data-ui-theme='glass-flow'] .modal-overlay,
+html.dark[data-ui-theme='glass-flow'] .dialog-overlay {
+  background: rgb(0 5 10 / 0.58);
+}
+
+html[data-ui-theme='glass-flow'] .ui-dialog-panel,
+html[data-ui-theme='glass-flow'] .modal-content,
+html[data-ui-theme='glass-flow'] .dialog-container {
+  border: 1px solid rgb(var(--ui-border) / 0.78);
+  border-radius: 1.25rem;
+  background: linear-gradient(145deg, rgb(var(--ui-surface-elevated) / 0.86), rgb(var(--ui-surface-subtle) / 0.7));
+  box-shadow: var(--ui-shadow-elevated);
+  backdrop-filter: blur(1.35rem) saturate(1.16);
+}
+
+html[data-ui-theme='glass-flow'] .ui-dialog-header,
+html[data-ui-theme='glass-flow'] .modal-header,
+html[data-ui-theme='glass-flow'] .dialog-header,
+html[data-ui-theme='glass-flow'] .ui-dialog-footer,
+html[data-ui-theme='glass-flow'] .modal-footer,
+html[data-ui-theme='glass-flow'] .dialog-footer {
+  border-color: rgb(var(--ui-border) / 0.62);
+}
+
+html[data-ui-theme='glass-flow'] .ui-menu,
+html[data-ui-theme='glass-flow'] .ui-popover-panel,
+html[data-ui-theme='glass-flow'] .dropdown,
+html[data-ui-theme='glass-flow'] .select-dropdown-portal,
+html[data-ui-theme='glass-flow'] .select-dropdown {
+  border: 1px solid rgb(var(--ui-border) / 0.78);
+  border-radius: 0.95rem;
+  background: rgb(var(--ui-surface-elevated) / 0.9);
+  box-shadow: var(--ui-shadow-elevated);
+  backdrop-filter: blur(1.2rem) saturate(1.16);
+}
+
+html[data-ui-theme='glass-flow'] .ui-popover-panel {
+  z-index: var(--ui-z-menu);
+}
+
+html[data-ui-theme='glass-flow'] .ui-popover-backdrop,
+html[data-ui-theme='glass-flow'] .ui-action-menu-backdrop {
+  z-index: calc(var(--ui-z-menu) - 1);
+}
+
+html[data-ui-theme='glass-flow'] .ui-menu-item:hover,
+html[data-ui-theme='glass-flow'] .action-menu-content > div > button {
+  min-height: 2.5rem;
+  border-radius: 0.65rem;
+  transition: background-color 0.16s ease, color 0.16s ease;
+}
+
+html[data-ui-theme='glass-flow'] .ui-menu-item:hover,
+html[data-ui-theme='glass-flow'] .action-menu-content > div > button:hover {
+  background: rgb(var(--ui-surface-hover) / 0.78);
+}
+
+html[data-ui-theme='glass-flow'] .select-dropdown-portal {
+  z-index: var(--ui-z-select) !important;
+}
+
+html[data-ui-theme='glass-flow'] .dropdown-item:hover,
+html[data-ui-theme='glass-flow'] .select-option:hover {
+  background: rgb(var(--ui-surface-hover) / 0.76);
+}
+
+html[data-ui-theme='glass-flow'] .ui-control,
+html[data-ui-theme='glass-flow'] .input {
+  border-color: rgb(var(--ui-border) / 0.82);
+  background: rgb(var(--ui-surface) / 0.5);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.56);
+  backdrop-filter: blur(0.9rem) saturate(1.12);
+}
+
+html[data-ui-theme='glass-flow'] .ui-control:focus,
+html[data-ui-theme='glass-flow'] .input:focus {
+  border-color: rgb(var(--ui-brand) / 0.58);
+  box-shadow: 0 0 0 0.2rem rgb(var(--ui-brand) / 0.1), inset 0 1px 0 rgb(255 255 255 / 0.7);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-theme='glass-flow'] .ui-overlay,
+  html[data-ui-theme='glass-flow'] .ui-dialog-panel,
+  html[data-ui-theme='glass-flow'] .ui-menu,
+  html[data-ui-theme='glass-flow'] .select-dropdown-portal {
+    transition: none !important;
+  }
+}

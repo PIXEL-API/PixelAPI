@@ -67,6 +67,7 @@ func TestProvideCleanup_WithMinimalDependencies_NoPanic(t *testing.T) {
 		nil, // affiliateCodeCycle
 		tokenRefreshSvc,
 		accountExpirySvc,
+		nil, // cnProviderBalanceCheck
 		nil, // proxyExpiry
 		nil, // accountErrorCleanup
 		nil, // conversationAdminReplyTimeout

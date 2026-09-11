@@ -247,6 +247,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 	resultWithUsage := func(clientDisconnect bool, successful bool) *ForwardResult {
 		return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 			RequestID:            requestID,
+			UpstreamRequestID:    upstreamUsageRequestID(resp.Header, requestID),
 			Usage:                usage,
 			BillingUsageComplete: sawMessageStop && billingUsage.complete(),
 			Model:                originalModel,
@@ -425,6 +426,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	resultWithUsage := func(clientDisconnect bool, successful bool) *ForwardResult {
 		return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
 			RequestID:            requestID,
+			UpstreamRequestID:    upstreamUsageRequestID(resp.Header, requestID),
 			Usage:                usage,
 			BillingUsageComplete: sawMessageStop && billingUsage.complete(),
 			Model:                originalModel,

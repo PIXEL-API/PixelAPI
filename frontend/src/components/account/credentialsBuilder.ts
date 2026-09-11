@@ -1,3 +1,5 @@
+import type { CNProviderObservedLimit, CNProviderQuotaWindow } from '@/types'
+
 export function applyInterceptWarmup(
   credentials: Record<string, unknown>,
   enabled: boolean,
@@ -23,6 +25,66 @@ export function isHeaderOverrideCapable(platform: string, type: string): boolean
     return type === 'apikey'
   }
   return platform === 'grok' && (type === 'apikey' || type === 'oauth')
+}
+
+export function cnQuotaCellVisible(platform: string, accountMode: string): boolean {
+  return (platform === 'kimi' || platform === 'zhipu' || platform === 'minimax' || platform === 'qwen') && accountMode === 'coding'
+}
+
+export function cnBalanceCellVisible(platform: string, accountMode: string): boolean {
+  return (platform === 'kimi' || platform === 'deepseek') && accountMode !== 'coding'
+}
+
+export type CnAccountMode = 'payg' | 'coding'
+export type CnProviderPlatform = 'kimi' | 'zhipu' | 'deepseek' | 'minimax' | 'qwen'
+export type CnApiProtocol = 'adaptive' | 'chat_completions' | 'anthropic' | 'responses'
+export type QwenCodingQuotaWindow = CNProviderQuotaWindow
+export type QwenCodingLimitObservation = CNProviderObservedLimit
+
+const QWEN_CODING_QUOTA_WINDOWS: QwenCodingQuotaWindow[] = ['5h', 'weekly', 'monthly']
+
+/** Read upstream limit observations persisted in an account extra snapshot. */
+export function readQwenCodingLimitObservations(
+  extra: Record<string, unknown> | null | undefined
+): QwenCodingLimitObservation[] {
+  if (!extra) return []
+  return QWEN_CODING_QUOTA_WINDOWS.flatMap((window) => {
+    const value = extra[`qwen_coding_${window}_limit`]
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return []
+    const observation = value as Record<string, unknown>
+    if (observation.window !== window || typeof observation.observed_at !== 'string') return []
+    if (Number.isNaN(Date.parse(observation.observed_at))) return []
+    if (observation.retry_at !== undefined && typeof observation.retry_at !== 'string') return []
+    return [{
+      window,
+      observed_at: observation.observed_at,
+      ...(typeof observation.retry_at === 'string' ? { retry_at: observation.retry_at } : {})
+    }]
+  })
+}
+
+export function cnSupportsNativeResponses(platform: string): boolean { return platform === 'kimi' || platform === 'deepseek' || platform === 'minimax' }
+export function defaultCNBaseUrl(platform: string, mode: CnAccountMode, protocol: CnApiProtocol): string {
+  if (protocol === 'anthropic') {
+    if (platform === 'kimi') return mode === 'coding' ? 'https://api.kimi.com/coding' : 'https://api.moonshot.cn/anthropic'
+    if (platform === 'zhipu') return 'https://open.bigmodel.cn/api/anthropic'
+    if (platform === 'deepseek') return 'https://api.deepseek.com/anthropic'
+    if (platform === 'minimax') return 'https://api.minimaxi.com/anthropic'
+    if (platform === 'qwen') return mode === 'coding' ? 'https://coding.dashscope.aliyuncs.com/apps/anthropic' : 'https://dashscope.aliyuncs.com/apps/anthropic'
+  }
+  if (platform === 'kimi') return mode === 'coding' ? 'https://api.kimi.com/coding/v1' : 'https://api.moonshot.cn/v1'
+  if (platform === 'zhipu') return mode === 'coding' ? 'https://open.bigmodel.cn/api/coding/paas/v4' : 'https://open.bigmodel.cn/api/paas/v4'
+  if (platform === 'deepseek') return 'https://api.deepseek.com'
+  if (platform === 'minimax') return 'https://api.minimaxi.com/v1'
+  if (platform === 'qwen') return mode === 'coding' ? 'https://coding.dashscope.aliyuncs.com/v1' : 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+  return ''
+}
+export function defaultCNAdaptiveBaseUrls(platform: CnProviderPlatform, mode: CnAccountMode): Record<'chat_completions' | 'anthropic' | 'responses', string> {
+  return {
+    chat_completions: defaultCNBaseUrl(platform, mode, 'chat_completions'),
+    anthropic: defaultCNBaseUrl(platform, mode, 'anthropic'),
+    responses: cnSupportsNativeResponses(platform) ? defaultCNBaseUrl(platform, mode, 'responses') : ''
+  }
 }
 
 const HEADER_OVERRIDE_BLOCKED_NAMES = new Set([

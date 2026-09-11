@@ -276,14 +276,18 @@ const roomDisplayName = computed(() => (
 
 const roomPlatform = computed<AccountPlatform>(() => {
   const platform = props.listing?.platform
-  if (platform === 'anthropic') return 'anthropic'
-  if (platform === 'opencode') return 'opencode'
+  if (platform === 'anthropic' || platform === 'opencode' || platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' || platform === 'minimax' || platform === 'qwen') return platform
   return 'openai'
 })
 
 const roomPlatformLabel = computed(() => {
   if (roomPlatform.value === 'anthropic') return 'Anthropic'
   if (roomPlatform.value === 'opencode') return 'Opencode'
+  if (roomPlatform.value === 'kimi') return 'Kimi'
+  if (roomPlatform.value === 'zhipu') return '智谱 GLM'
+  if (roomPlatform.value === 'deepseek') return 'DeepSeek'
+  if (roomPlatform.value === 'minimax') return 'MiniMax'
+  if (roomPlatform.value === 'qwen') return '通义千问'
   return 'OpenAI'
 })
 

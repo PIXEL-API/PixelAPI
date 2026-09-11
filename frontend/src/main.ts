@@ -6,13 +6,16 @@ import i18n, { initI18n } from './i18n'
 import { useAppStore } from '@/stores/app'
 import { updateFavicon } from '@/utils/branding'
 import './style.css'
+import { activateTheme, readThemeId } from './theme-kit'
 
 function initThemeClass() {
   const savedTheme = localStorage.getItem('theme')
   const shouldUseDark =
     savedTheme === 'dark' ||
     (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  document.documentElement.classList.toggle('dark', shouldUseDark)
+  // Keep theme selection in one runtime entry so swapping the theme suite does
+  // not require touching individual pages or overlay components.
+  activateTheme(readThemeId(), shouldUseDark ? 'dark' : 'light')
 }
 
 async function bootstrap() {

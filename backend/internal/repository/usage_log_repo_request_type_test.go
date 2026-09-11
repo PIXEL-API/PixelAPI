@@ -237,6 +237,8 @@ func TestUsageLogRepositoryCreateSyncRequestTypeAndLegacyFields(t *testing.T) {
 			sqlmock.AnyArg(), // billing_tier
 			sqlmock.AnyArg(), // billing_mode
 			sqlmock.AnyArg(), // account_stats_cost
+			sqlmock.AnyArg(), // upstream_request_id
+			sqlmock.AnyArg(), // billing_error
 			createdAt,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(99), createdAt))
@@ -324,6 +326,8 @@ func TestUsageLogRepositoryCreate_PersistsServiceTier(t *testing.T) {
 			sqlmock.AnyArg(), // billing_tier
 			sqlmock.AnyArg(), // billing_mode
 			sqlmock.AnyArg(), // account_stats_cost
+			sqlmock.AnyArg(), // upstream_request_id
+			sqlmock.AnyArg(), // billing_error
 			createdAt,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}).AddRow(int64(100), createdAt))
@@ -376,18 +380,24 @@ func TestExecUsageLogInsertNoResult_PersistsRequestedModel(t *testing.T) {
 }
 
 func TestPrepareUsageLogInsert_ArgCountMatchesTypes(t *testing.T) {
+	upstreamRequestID := "upstream-arg-count"
+	billingError := service.UsageBillingErrorPricingMissing
 	prepared := prepareUsageLogInsert(&service.UsageLog{
-		UserID:         1,
-		APIKeyID:       2,
-		AccountID:      3,
-		RequestID:      "req-arg-count",
-		Model:          "gpt-5",
-		RequestedModel: "gpt-5",
-		CreatedAt:      time.Date(2025, 1, 5, 12, 0, 0, 0, time.UTC),
+		UserID:            1,
+		APIKeyID:          2,
+		AccountID:         3,
+		RequestID:         "req-arg-count",
+		UpstreamRequestID: &upstreamRequestID,
+		BillingError:      &billingError,
+		Model:             "gpt-5",
+		RequestedModel:    "gpt-5",
+		CreatedAt:         time.Date(2025, 1, 5, 12, 0, 0, 0, time.UTC),
 	})
 
-	require.Len(t, prepared.args, 54)
+	require.Len(t, prepared.args, 56)
 	require.Len(t, prepared.args, len(usageLogInsertArgTypes))
+	require.Equal(t, sql.NullString{String: upstreamRequestID, Valid: true}, prepared.args[53])
+	require.Equal(t, sql.NullString{String: billingError, Valid: true}, prepared.args[54])
 }
 
 func TestPrepareUsageLogInsert_PersistsImageInputUsage(t *testing.T) {
@@ -419,6 +429,11 @@ func TestUsageBillingUsageLogInsertQuery_ArgCountMatchesPreparedInsert(t *testin
 	})
 
 	query := usageBillingUsageLogInsertQuery()
+	require.Contains(t, query, "WHERE usage_logs.billing_error IS NOT NULL")
+	require.Contains(t, query, "AND usage_logs.user_id = EXCLUDED.user_id")
+	require.Contains(t, query, "AND usage_logs.account_id = EXCLUDED.account_id")
+	require.Contains(t, query, "actual_cost = EXCLUDED.actual_cost")
+	require.Contains(t, query, "billing_error = EXCLUDED.billing_error")
 	matches := placeholderPattern.FindAllString(query, -1)
 	seen := make(map[int]struct{}, len(matches))
 	maxPlaceholder := 0
@@ -967,9 +982,15 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_tier
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
+			sql.NullString{Valid: true, String: "upstream-request-1"},                    // upstream_request_id
+			sql.NullString{Valid: true, String: service.UsageBillingErrorPricingMissing}, // billing_error
 			now,
 		}})
 		require.NoError(t, err)
+		require.NotNil(t, log.UpstreamRequestID)
+		require.Equal(t, "upstream-request-1", *log.UpstreamRequestID)
+		require.NotNil(t, log.BillingError)
+		require.Equal(t, service.UsageBillingErrorPricingMissing, *log.BillingError)
 		require.NotNil(t, log.UpstreamResponseModel)
 		require.Equal(t, "gpt-5-2026-08-07", *log.UpstreamResponseModel)
 		require.NotNil(t, log.UpstreamModelMismatch)
@@ -1026,6 +1047,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_tier
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
+			sql.NullString{},  // upstream_request_id
+			sql.NullString{},  // billing_error
 			now,
 		}})
 		require.NoError(t, err)
@@ -1085,6 +1108,8 @@ func TestScanUsageLogRequestTypeAndLegacyFallback(t *testing.T) {
 			sql.NullString{},  // billing_tier
 			sql.NullString{},  // billing_mode
 			sql.NullFloat64{}, // account_stats_cost
+			sql.NullString{},  // upstream_request_id
+			sql.NullString{},  // billing_error
 			now,
 		}})
 		require.NoError(t, err)

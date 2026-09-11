@@ -31,6 +31,9 @@ func openAIAccountShareModeRequestContext(c *gin.Context, apiKey *service.APIKey
 
 func openAICompatibleRoutingPlatform(apiKey *service.APIKey) string {
 	if apiKey != nil && apiKey.Group != nil {
+		if service.IsCNProvider(apiKey.Group.Platform) {
+			return apiKey.Group.Platform
+		}
 		switch apiKey.Group.Platform {
 		case service.PlatformGrok:
 			return service.PlatformGrok
@@ -43,7 +46,7 @@ func openAICompatibleRoutingPlatform(apiKey *service.APIKey) string {
 
 func openAICompatibleRequestContext(ctx context.Context, apiKey *service.APIKey) context.Context {
 	routingPlatform := openAICompatibleRoutingPlatform(apiKey)
-	if routingPlatform != service.PlatformGrok && routingPlatform != service.PlatformOpencode {
+	if routingPlatform == service.PlatformOpenAI {
 		return ctx
 	}
 	if ctx == nil {

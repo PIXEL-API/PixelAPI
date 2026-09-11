@@ -1275,6 +1275,11 @@ func applyOpencodeGoResolvedModelToResult(result *OpenAIForwardResult, resolved 
 
 func (s *OpenAIGatewayService) resolveOpenAIAPIKeyResponsesURL(account *Account) (string, error) {
 	baseURL := account.GetOpenAIBaseURL()
+	if account.IsCNProvider() && account.GetAPIProtocol() == APIProtocolAdaptive {
+		if protocolURL := account.GetCNProtocolBaseURL(APIProtocolResponses); strings.TrimSpace(protocolURL) != "" {
+			baseURL = protocolURL
+		}
+	}
 	if account.IsOpencode() {
 		baseURL = account.GetOpencodeBaseURL()
 	}
@@ -1285,5 +1290,15 @@ func (s *OpenAIGatewayService) resolveOpenAIAPIKeyResponsesURL(account *Account)
 	if err != nil {
 		return "", err
 	}
-	return buildOpenAIResponsesURL(validatedURL), nil
+	return buildOpenAIResponsesURLForPlatform(account.Platform, validatedURL), nil
+}
+
+// buildOpenAIResponsesURLForPlatform handles DeepSeek's native Responses
+// endpoint, which is /responses without the usual /v1 prefix. Other providers
+// retain the standard OpenAI-compatible URL construction.
+func buildOpenAIResponsesURLForPlatform(platform, base string) string {
+	if platform == PlatformDeepseek {
+		return buildOpenAIEndpointURL(base, "/responses")
+	}
+	return buildOpenAIResponsesURL(base)
 }

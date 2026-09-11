@@ -10,7 +10,21 @@ import type {
   UsageProgress
 } from '@/types'
 
-export type AccountSharePlatform = 'openai' | 'anthropic' | 'opencode'
+/** Platforms that can participate in account-share rooms.
+ *
+ * Keep this union aligned with the server's account-share mode groups.  The
+ * additional providers are OpenAI-compatible consumer pools, so they share
+ * the same room lifecycle and billing contract as the original platforms.
+ */
+export type AccountSharePlatform =
+  | 'openai'
+  | 'anthropic'
+  | 'opencode'
+  | 'kimi'
+  | 'zhipu'
+  | 'deepseek'
+  | 'minimax'
+  | 'qwen'
 
 export type AccountShareRoomLifecycleStatus =
   | 'active'
@@ -778,7 +792,7 @@ export interface UpdateAccountShareListingRequest {
 
 export interface AccountShareListingFilters {
   tab?: AccountShareListingTab
-  platform?: 'openai' | 'anthropic' | 'opencode'
+  platform?: AccountSharePlatform
   seat_limit?: number
   seat_limits?: number[]
   search?: string

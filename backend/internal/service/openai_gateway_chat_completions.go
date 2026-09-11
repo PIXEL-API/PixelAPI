@@ -92,9 +92,33 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			return nil, fmt.Errorf("unsupported OpenCode Go protocol %q for model %q", resolved.Spec.Protocol, resolved.UpstreamModel)
 		}
 	}
+	// 国产平台默认使用原生 Chat Completions。只有明确选择 responses，或
+	// adaptive 平台实际具备原生 Responses 时，才进入下方 Responses 桥接。
+	if account.IsCNProvider() {
+		switch account.GetAPIProtocol() {
+		case APIProtocolAnthropic:
+			SetActualOpenAIUpstreamEndpoint(c, "/v1/messages")
+			return s.forwardChatCompletionsViaNativeAnthropic(ctx, c, account, body, defaultMappedModel)
+		case APIProtocolChatCompletions:
+			return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+		case APIProtocolAdaptive:
+			// Adaptive accounts may receive a Responses-shaped payload on the
+			// Chat endpoint (Cursor compatibility). Keep native Responses capable
+			// providers on the established Responses forwarding path; providers
+			// without native Responses use the raw Chat Completions endpoint.
+			isResponsesShape := !gjson.GetBytes(body, "messages").Exists() && gjson.GetBytes(body, "input").Exists()
+			if !isResponsesShape || !account.SupportsNativeCNResponses() {
+				return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+			}
+			// Fall through so the Responses-shaped body is preserved by the
+			// existing Responses forwarding path below.
+		}
+	}
 	// OpenCode Go 的协议由映射后的最终模型目录决定。普通 OpenAI API Key 的
 	// 账号级 Responses 探测/强制模式不得覆盖已经完成的 OpenCode 路由决策。
-	if account.Type == AccountTypeAPIKey && !account.IsOpencode() && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	if account.Type == AccountTypeAPIKey && !account.IsOpencode() &&
+		!(account.IsCNProvider() && account.UsesNativeCNResponses()) &&
+		!openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -336,7 +360,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
+		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody) {
 			upstreamDetail := ""
 			if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
 				maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
@@ -543,7 +567,7 @@ func (s *OpenAIGatewayService) handleChatBufferedStreamingResponse(
 			UpstreamOutTok: usage.OutputTokens,
 		})
 		writeChatCompletionsError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
-		return resultForOpenAICompatFailure(c, requestID, usage, originalModel, billingModel, upstreamModel, finalResponse.ServiceTier, false, startTime),
+		return resultForOpenAICompatFailure(c, requestID, resp.Header, usage, originalModel, billingModel, upstreamModel, finalResponse.ServiceTier, false, startTime),
 			fmt.Errorf("openai cyber_policy: %s", clientMsg)
 	}
 	if strings.EqualFold(strings.TrimSpace(finalResponse.Status), "failed") {
@@ -969,6 +993,7 @@ func writeChatCompletionsStreamError(c *gin.Context, errType, message string) bo
 func resultForOpenAICompatFailure(
 	c *gin.Context,
 	requestID string,
+	headers http.Header,
 	usage OpenAIUsage,
 	model string,
 	billingModel string,
@@ -979,6 +1004,7 @@ func resultForOpenAICompatFailure(
 ) *OpenAIForwardResult {
 	return &OpenAIForwardResult{
 		RequestID:                     requestID,
+		ResponseHeaders:               headers.Clone(),
 		Usage:                         usage,
 		Model:                         model,
 		BillingModel:                  billingModel,

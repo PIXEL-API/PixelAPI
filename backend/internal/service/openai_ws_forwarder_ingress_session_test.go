@@ -3,11 +3,13 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1419,6 +1421,169 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	require.NotEqual(t, "client-conversation", captureDialer.lastHeaders.Get("conversation_id"))
 	require.Empty(t, captureDialer.lastHeaders.Get(openAIWSTurnStateHeader))
 	require.Equal(t, 2, ownerCache.ImmutableBindCalls(), "owner must be committed once before exposure and refreshed once at the first terminal event")
+}
+
+func TestOpenAIGatewayService_PassthroughQuotaReconnectPreservesTurns(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	quota := fmt.Sprintf(`{"type":"error","error":{"type":"usage_limit_reached","code":"rate_limit_exceeded","message":"quota exhausted","resets_at":%d}}`, time.Now().Add(time.Hour).Unix())
+	const terminal = `{"type":"response.completed","response":{"id":"resp_quota_first","model":"gpt-5.1","usage":{"input_tokens":7,"output_tokens":3}}}`
+	const delta = `{"type":"response.output_text.delta","delta":"partial"}`
+	for _, tc := range []struct {
+		name          string
+		firstTurn     bool
+		partialOutput bool
+		event         string
+		reconnect     bool
+		cooldowns     int
+	}{
+		{name: "later quota before output", event: quota, reconnect: true, cooldowns: 1},
+		{name: "later quota after output", event: quota, partialOutput: true},
+		{name: "ordinary error stays visible", event: `{"type":"error","error":{"code":"invalid_request_error","message":"invalid input"}}`},
+		{name: "first quota stays visible", firstTurn: true, event: quota, cooldowns: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var dials atomic.Int32
+			upstreamWrites := make(chan []byte, 4)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				dials.Add(1)
+				conn, err := coderws.Accept(w, r, nil)
+				if err != nil {
+					return
+				}
+				defer conn.CloseNow()
+				for turn := 0; ; turn++ {
+					_, payload, err := conn.Read(r.Context())
+					if err != nil {
+						return
+					}
+					upstreamWrites <- payload
+					if turn == 0 && !tc.firstTurn {
+						err = conn.Write(r.Context(), coderws.MessageText, []byte(terminal))
+					} else {
+						if tc.partialOutput {
+							err = conn.Write(r.Context(), coderws.MessageText, []byte(delta))
+						}
+						if err == nil {
+							err = conn.Write(r.Context(), coderws.MessageText, []byte(tc.event))
+						}
+					}
+					if err != nil {
+						return
+					}
+				}
+			}))
+			defer upstream.Close()
+
+			cfg := newOpenAIWSV2TestConfig()
+			cfg.Security.URLAllowlist.Enabled = false
+			cfg.Security.URLAllowlist.AllowInsecureHTTP = true
+			cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
+			account := &Account{
+				ID: 452, Platform: PlatformOpenAI, Type: AccountTypeAPIKey,
+				Status: StatusActive, Schedulable: true, Concurrency: 1,
+				Credentials: map[string]any{"api_key": "sk-test", "base_url": upstream.URL},
+				Extra:       map[string]any{"openai_apikey_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough},
+			}
+			repo := &openAIWSRateLimitSignalRepo{}
+			svc := &OpenAIGatewayService{
+				cfg: cfg, httpUpstream: &httpUpstreamRecorder{}, cache: &stubGatewayCache{},
+				openaiWSResolver: NewOpenAIWSProtocolResolver(cfg), toolCorrector: NewCodexToolCorrector(),
+				rateLimitService: &RateLimitService{accountRepo: repo},
+			}
+			type settlement struct {
+				turn   int
+				result *OpenAIForwardResult
+				err    error
+			}
+			settled := make(chan settlement, 4)
+			var acquired atomic.Int32
+			hooks := &OpenAIWSIngressHooks{
+				BeforeTurn: func(int) error { acquired.Add(1); return nil },
+				AfterTurn: func(turn int, result *OpenAIForwardResult, err error) {
+					settled <- settlement{turn, result, err}
+				},
+			}
+			serverDone := make(chan error, 1)
+			gateway := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				conn, err := coderws.Accept(w, r, nil)
+				if err != nil {
+					serverDone <- err
+					return
+				}
+				defer conn.CloseNow()
+				c, _ := gin.CreateTestContext(httptest.NewRecorder())
+				c.Request = r
+				groupID := int64(901)
+				c.Set("api_key", &APIKey{ID: 900, GroupID: &groupID})
+				_, first, err := conn.Read(r.Context())
+				if err == nil {
+					err = svc.ProxyResponsesWebSocketFromClient(r.Context(), c, conn, account, "sk-test", first, hooks)
+				}
+				serverDone <- err
+			}))
+			defer gateway.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			client, _, err := coderws.Dial(ctx, "ws"+strings.TrimPrefix(gateway.URL, "http"), nil)
+			require.NoError(t, err)
+			defer client.CloseNow()
+			require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","input":[]}`)))
+			if !tc.firstTurn {
+				_, payload, err := client.Read(ctx)
+				require.NoError(t, err)
+				require.JSONEq(t, terminal, string(payload))
+				require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.1","previous_response_id":"resp_quota_first","input":[]}`)))
+			}
+			if tc.partialOutput {
+				_, payload, err := client.Read(ctx)
+				require.NoError(t, err)
+				require.JSONEq(t, delta, string(payload))
+			}
+			_, payload, readErr := client.Read(ctx)
+			if tc.reconnect {
+				require.Equal(t, coderws.StatusTryAgainLater, coderws.CloseStatus(readErr), "client must receive 1013, not an abnormal EOF")
+			} else {
+				require.NoError(t, readErr)
+				require.JSONEq(t, tc.event, string(payload))
+				require.NoError(t, client.Close(coderws.StatusNormalClosure, "done"))
+			}
+			select {
+			case err = <-serverDone:
+				if tc.reconnect {
+					var closeErr *OpenAIWSClientCloseError
+					require.ErrorAs(t, err, &closeErr)
+					require.Equal(t, coderws.StatusTryAgainLater, closeErr.StatusCode())
+				}
+			case <-ctx.Done():
+				t.Fatal("gateway did not release the websocket turn")
+			}
+			turns := 2
+			if tc.firstTurn {
+				turns = 1
+			}
+			require.Equal(t, int32(1), dials.Load(), "passthrough must not replay a rejected turn on another connection")
+			require.Nil(t, svc.openaiWSPool)
+			require.Equal(t, int32(turns), acquired.Load())
+			require.Len(t, upstreamWrites, turns)
+			require.Len(t, settled, turns, "each acquired turn must settle/release exactly once")
+			if !tc.firstTurn {
+				first := <-settled
+				require.Equal(t, 1, first.turn)
+				require.NoError(t, first.err)
+				require.NotNil(t, first.result)
+				require.Equal(t, 7, first.result.Usage.InputTokens)
+				require.Equal(t, 3, first.result.Usage.OutputTokens)
+				require.True(t, first.result.BillingUsageComplete)
+				<-upstreamWrites
+				require.Equal(t, "resp_quota_first", gjson.GetBytes(<-upstreamWrites, "previous_response_id").String())
+			}
+			failed := <-settled
+			require.Equal(t, turns, failed.turn)
+			require.Error(t, failed.err)
+			require.Nil(t, failed.result, "failed turn must not inherit the completed turn's usage")
+			require.Len(t, repo.rateLimitCalls, tc.cooldowns)
+		})
+	}
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughBillingFailureStillDeliversTerminal(t *testing.T) {

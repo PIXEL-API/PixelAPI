@@ -1,14 +1,19 @@
 <template>
-  <div class="relative flex min-h-screen flex-col bg-gray-50 dark:bg-dark-950">
+  <div class="key-usage-page relative flex min-h-screen flex-col bg-gray-50 dark:bg-dark-950">
     <!-- Header (same pattern as HomeView) -->
     <header class="relative z-20 px-6 py-4">
-      <nav class="mx-auto flex max-w-6xl items-center justify-between">
+      <nav class="usage-nav mx-auto flex max-w-6xl items-center justify-between">
         <router-link to="/home" class="flex items-center gap-3">
-          <div class="h-10 w-10 overflow-hidden rounded-xl shadow-md">
-            <img :src="siteLogo || '/logo.png'" alt="Logo" class="h-full w-full object-contain" />
+          <div class="usage-logo-mark h-10 w-10 overflow-hidden rounded-xl shadow-md">
+            <img v-if="siteLogo" :src="siteLogo" alt="" class="h-full w-full object-contain" />
+            <span v-else aria-hidden="true">S</span>
           </div>
           <span class="text-lg font-semibold tracking-tight text-gray-900 dark:text-white">{{ siteName }}</span>
         </router-link>
+        <div class="usage-nav-links" aria-label="站点导航">
+          <router-link to="/home">首页</router-link>
+          <router-link to="/key-usage">用量</router-link>
+        </div>
         <div class="flex items-center gap-3">
           <LocaleSwitcher />
           <a
@@ -449,10 +454,10 @@ function getDateParams(): string {
 
 const CIRCUMFERENCE = 2 * Math.PI * 68
 const RING_GRADIENTS = [
-  { from: '#6b9bf0', to: '#b8d2fb' },
-  { from: '#6366F1', to: '#A5B4FC' },
-  { from: '#10B981', to: '#6EE7B7' },
-  { from: '#F59E0B', to: '#FCD34D' },
+  { from: '#2c79d8', to: '#61d5e0' },
+  { from: '#4054c9', to: '#8ba7ff' },
+  { from: '#16b9c9', to: '#8be7f0' },
+  { from: '#4e7ff3', to: '#9fd8ff' },
 ]
 
 const ringAnimated = ref(false)
@@ -836,6 +841,158 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+/* Glass-flow public page layer: keep usage visually aligned with the home page. */
+.key-usage-page {
+  --usage-text: #172f63;
+  --usage-muted: #637b9f;
+  --usage-line: rgb(86 134 205 / 0.16);
+  --usage-surface: rgb(255 255 255 / 0.56);
+  --usage-surface-strong: rgb(255 255 255 / 0.78);
+  --usage-accent: #3477d8;
+  --usage-accent-cyan: #16b9c9;
+  color: var(--usage-text);
+  background:
+    radial-gradient(circle at 6% 18%, rgb(41 211 220 / 0.22), transparent 30%),
+    radial-gradient(circle at 88% 62%, rgb(87 124 240 / 0.2), transparent 34%),
+    linear-gradient(135deg, #f5fcff 0%, #f5f7ff 52%, #eff9ff 100%) !important;
+}
+
+.usage-nav {
+  min-height: 72px;
+  padding: 0.55rem 0.75rem;
+  border: 1px solid rgb(255 255 255 / 0.7);
+  border-radius: 1.25rem;
+  background: rgb(255 255 255 / 0.42);
+  box-shadow: 0 0.75rem 2.5rem rgb(45 90 145 / 0.08), inset 0 1px 0 rgb(255 255 255 / 0.82);
+  backdrop-filter: blur(1.25rem) saturate(1.18);
+}
+
+.usage-logo-mark {
+  display: grid;
+  place-items: center;
+  border: 1px solid rgb(255 255 255 / 0.72);
+  background: linear-gradient(135deg, rgb(42 207 224 / 0.82), rgb(49 104 216 / 0.9));
+  color: white;
+  font-size: 1.15rem;
+  font-weight: 800;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.4), 0 0.45rem 1rem rgb(35 108 186 / 0.16);
+}
+
+.usage-nav-links {
+  display: flex;
+  align-items: center;
+  gap: 2.25rem;
+  margin-left: auto;
+  margin-right: auto;
+  color: var(--usage-muted);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.usage-nav-links a {
+  position: relative;
+  padding: 0.7rem 0.15rem;
+  transition: color 180ms ease, transform 180ms ease;
+}
+
+.usage-nav-links a:hover,
+.usage-nav-links a.router-link-active {
+  color: var(--usage-accent);
+}
+
+.usage-nav-links a:hover {
+  transform: translateY(-1px);
+}
+
+.usage-nav-links a.router-link-active::after {
+  position: absolute;
+  right: 0.15rem;
+  bottom: 0.15rem;
+  left: 0.15rem;
+  height: 2px;
+  border-radius: 99px;
+  background: linear-gradient(90deg, var(--usage-accent), var(--usage-accent-cyan));
+  box-shadow: 0 0 0.7rem rgb(22 185 201 / 0.42);
+  content: '';
+  animation: usage-nav-indicator-in 220ms ease-out both;
+}
+
+.key-usage-page main > div > div,
+.key-usage-page main > div > div > div,
+.key-usage-page main > div > div > div > div {
+  border-color: var(--usage-line);
+  box-shadow: 0 1rem 2.5rem rgb(45 90 145 / 0.07), inset 0 1px 0 rgb(255 255 255 / 0.74);
+  backdrop-filter: blur(1.1rem) saturate(1.12);
+}
+
+.key-usage-page input,
+.key-usage-page button,
+.key-usage-page [class*='bg-white'] {
+  transition: border-color 180ms ease, box-shadow 180ms ease, background-color 180ms ease, transform 180ms ease;
+}
+
+.key-usage-page .input-ring:focus {
+  border-color: var(--usage-accent-cyan);
+  box-shadow: 0 0 0 3px rgb(22 185 201 / 0.16), 0 0.5rem 1.4rem rgb(41 125 191 / 0.08);
+}
+
+.key-usage-page .bg-primary-500 {
+  background: linear-gradient(135deg, #2f68c9, #3477d8 56%, #16b9c9) !important;
+  box-shadow: 0 0.6rem 1.35rem rgb(46 111 205 / 0.2), inset 0 1px 0 rgb(255 255 255 / 0.22);
+}
+
+.key-usage-page .bg-primary-500:hover,
+.key-usage-page .hover\\:bg-primary-600:hover {
+  background: linear-gradient(135deg, #3b7be0, #3c91e4 56%, #26c9d5) !important;
+}
+
+.key-usage-page .text-gray-900,
+.key-usage-page .text-gray-700 {
+  color: var(--usage-text);
+}
+
+.key-usage-page .text-gray-500,
+.key-usage-page .text-gray-400 {
+  color: var(--usage-muted);
+}
+
+@keyframes usage-nav-indicator-in {
+  from { opacity: 0; transform: scaleX(0.35); }
+  to { opacity: 1; transform: scaleX(1); }
+}
+
+:global(.dark) .key-usage-page {
+  --usage-text: #e8f1ff;
+  --usage-muted: #a8bdd8;
+  --usage-line: rgb(139 188 235 / 0.16);
+  --usage-surface: rgb(18 35 57 / 0.58);
+  --usage-surface-strong: rgb(19 38 62 / 0.78);
+  --usage-accent: #79a8ff;
+  --usage-accent-cyan: #55dce4;
+  background:
+    radial-gradient(circle at 8% 16%, rgb(30 169 203 / 0.18), transparent 30%),
+    radial-gradient(circle at 86% 70%, rgb(66 75 190 / 0.26), transparent 36%),
+    linear-gradient(135deg, #0b1b32 0%, #101d42 54%, #0a293e 100%) !important;
+}
+
+:global(.dark) .usage-nav {
+  border-color: rgb(173 217 255 / 0.14);
+  background: rgb(14 31 52 / 0.52);
+  box-shadow: 0 0.9rem 3rem rgb(0 0 0 / 0.24), inset 0 1px 0 rgb(255 255 255 / 0.08);
+}
+
+@media (max-width: 640px) {
+  .usage-nav-links {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .usage-nav-links a.router-link-active::after {
+    animation: none;
+  }
+}
+
 /* Input focus ring */
 .input-ring {
   transition: box-shadow 0.2s ease, border-color 0.2s ease;

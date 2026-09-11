@@ -22,11 +22,15 @@ func ClientRequestID() gin.HandlerFunc {
 		}
 
 		if v := c.Request.Context().Value(ctxkey.ClientRequestID); v != nil {
+			if id, ok := v.(string); ok && strings.TrimSpace(id) != "" {
+				c.Header("X-Client-Request-ID", strings.TrimSpace(id))
+			}
 			c.Next()
 			return
 		}
 
 		id := uuid.New().String()
+		c.Header("X-Client-Request-ID", id)
 		ctx := context.WithValue(c.Request.Context(), ctxkey.ClientRequestID, id)
 		requestLogger := logger.FromContext(ctx).With(zap.String("client_request_id", strings.TrimSpace(id)))
 		ctx = logger.IntoContext(ctx, requestLogger)

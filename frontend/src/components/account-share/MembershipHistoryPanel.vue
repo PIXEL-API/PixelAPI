@@ -355,6 +355,12 @@ function formatPercentPair(first?: number, second?: number): string {
 function platformLabel(platform: string): string {
   if (platform === 'openai') return 'OpenAI'
   if (platform === 'anthropic') return 'Anthropic'
+  if (platform === 'opencode') return 'OpenCode'
+  if (platform === 'kimi') return 'Kimi'
+  if (platform === 'zhipu') return '智谱 GLM'
+  if (platform === 'deepseek') return 'DeepSeek'
+  if (platform === 'minimax') return 'MiniMax'
+  if (platform === 'qwen') return '通义千问'
   return platform || '未知平台'
 }
 

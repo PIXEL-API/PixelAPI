@@ -28,6 +28,7 @@ func RegisterAdminRoutes(
 
 		// 账号管理
 		registerAccountRoutes(admin, h)
+		registerCNProviderRoutes(admin, h)
 		registerAccountSharePolicyRoutes(admin, h)
 		registerAccountShareQuotaRoutes(admin, h)
 
@@ -112,6 +113,14 @@ func RegisterAdminRoutes(
 
 		// 「有个想法」内容治理
 		registerIdeasRoutes(admin, h)
+	}
+}
+
+func registerCNProviderRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	providers := admin.Group("/cn-providers/accounts")
+	{
+		providers.GET("/:id/quota", h.Admin.Account.QueryCNProviderQuota)
+		providers.GET("/:id/balance", h.Admin.Account.QueryCNProviderBalance)
 	}
 }
 
@@ -440,6 +449,8 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		accounts.POST("/:id/clear-error", h.Admin.Account.ClearError)
 		accounts.POST("/:id/revert-proxy-fallback", h.Admin.Account.RevertProxyFallback)
 		accounts.GET("/:id/usage", h.Admin.Account.GetUsage)
+		accounts.GET("/:id/cn-quota", h.Admin.Account.QueryCNProviderQuota)
+		accounts.GET("/:id/cn-balance", h.Admin.Account.QueryCNProviderBalance)
 		accounts.GET("/:id/today-stats", h.Admin.Account.GetTodayStats)
 		accounts.POST("/today-stats/batch", h.Admin.Account.GetBatchTodayStats)
 		accounts.POST("/:id/clear-rate-limit", h.Admin.Account.ClearRateLimit)

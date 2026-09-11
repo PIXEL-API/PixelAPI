@@ -155,6 +155,8 @@ func ProvideAdminAccountHandler(
 	tokenCacheInvalidator service.TokenCacheInvalidator,
 	accountBatchTaskService *service.AccountBatchTaskService,
 	grokQuotaService *service.GrokQuotaService,
+	cnQuotaService *service.CNProviderQuotaService,
+	cnBalanceService *service.CNProviderBalanceService,
 ) *admin.AccountHandler {
 	h := admin.NewAccountHandler(
 		adminService,
@@ -176,6 +178,7 @@ func ProvideAdminAccountHandler(
 	h.SetGrokOAuthService(grokOAuthService)
 	h.SetGrokTokenProvider(grokTokenProvider)
 	h.SetGrokImportProber(grokQuotaService)
+	h.SetCNProviderServices(cnQuotaService, cnBalanceService)
 	return h
 }
 
@@ -214,6 +217,8 @@ func ProvideUserAccountHandler(
 	sessionLimitCache service.SessionLimitCache,
 	rpmCache service.RPMCache,
 	accountBatchTaskService *service.AccountBatchTaskService,
+	cnQuotaService *service.CNProviderQuotaService,
+	cnBalanceService *service.CNProviderBalanceService,
 ) *UserAccountHandler {
 	h := NewUserAccountHandler(
 		accountService,
@@ -232,6 +237,7 @@ func ProvideUserAccountHandler(
 	h.SetGrokOAuthService(grokOAuthService)
 	h.SetGrokTokenProvider(grokTokenProvider)
 	h.SetRuntimeCapacityProviders(concurrencyService, sessionLimitCache, rpmCache)
+	h.SetCNProviderServices(cnQuotaService, cnBalanceService)
 	return h
 }
 

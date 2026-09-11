@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/textproto"
 	"net/url"
@@ -958,7 +959,8 @@ type GatewayConfig struct {
 	// OpenAIHTTP2: OpenAI HTTP 上游协议策略（默认启用 HTTP/2，可按代理能力回退 HTTP/1.1）
 	OpenAIHTTP2 GatewayOpenAIHTTP2Config `mapstructure:"openai_http2"`
 	// Grok: Grok 专用网关能力开关。密码授权默认关闭，只有显式启用时才对管理员暴露。
-	Grok GatewayGrokConfig `mapstructure:"grok"`
+	Grok        GatewayGrokConfig        `mapstructure:"grok"`
+	CNProviders GatewayCNProvidersConfig `mapstructure:"cn_providers"`
 
 	// HTTP 上游连接池配置（性能优化：支持高并发场景调优）
 	// MaxIdleConns: 所有主机的最大空闲连接总数
@@ -1044,6 +1046,13 @@ type GatewayOpenAIResponsesBodyBudgetConfig struct {
 	WaitTimeoutSeconds int   `mapstructure:"wait_timeout_seconds"`
 	ReadTimeoutSeconds int   `mapstructure:"read_timeout_seconds"`
 	RetryAfterSeconds  int   `mapstructure:"retry_after_seconds"`
+}
+
+// GatewayCNProvidersConfig controls provider balance and coding quota probes.
+type GatewayCNProvidersConfig struct {
+	BalanceCheckEnabled         bool    `mapstructure:"balance_check_enabled"`
+	BalanceThreshold            float64 `mapstructure:"balance_threshold"`
+	BalanceCheckIntervalMinutes int     `mapstructure:"balance_check_interval_minutes"`
 }
 
 // GatewayGrokConfig Grok 专用网关配置。
@@ -2329,6 +2338,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.grok.free_quota_soft_gate_percent", 95)
 	viper.SetDefault("gateway.grok.free_quota_window_hours", 24)
 	viper.SetDefault("gateway.grok.free_quota_stats_cache_seconds", 60)
+	viper.SetDefault("gateway.cn_providers.balance_check_enabled", true)
+	viper.SetDefault("gateway.cn_providers.balance_threshold", 0.5)
+	viper.SetDefault("gateway.cn_providers.balance_check_interval_minutes", 10)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
 	viper.SetDefault("gateway.openai_ws.mode_router_v2_enabled", false)
@@ -3400,6 +3412,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.Grok.FreeQuotaStatsCacheSeconds < 0 {
 		return fmt.Errorf("gateway.grok.free_quota_stats_cache_seconds must be non-negative")
+	}
+	if math.IsNaN(c.Gateway.CNProviders.BalanceThreshold) || math.IsInf(c.Gateway.CNProviders.BalanceThreshold, 0) || c.Gateway.CNProviders.BalanceThreshold < 0 {
+		return fmt.Errorf("gateway.cn_providers.balance_threshold must be finite and non-negative")
+	}
+	if c.Gateway.CNProviders.BalanceCheckEnabled && c.Gateway.CNProviders.BalanceCheckIntervalMinutes <= 0 {
+		return fmt.Errorf("gateway.cn_providers.balance_check_interval_minutes must be positive when enabled")
 	}
 	if c.Gateway.MaxLineSize < 0 {
 		return fmt.Errorf("gateway.max_line_size must be non-negative")

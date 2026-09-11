@@ -28,10 +28,19 @@ func TestSupportedUserPrivateGroupPlatformsIncludesAllAccountPlatforms(t *testin
 		PlatformAntigravity,
 		PlatformGrok,
 		PlatformOpencode,
+		PlatformKimi,
+		PlatformZhipu,
+		PlatformDeepseek,
+		PlatformMiniMax,
+		PlatformQwen,
 	}, SupportedUserPrivateGroupPlatforms())
 	require.True(t, IsSupportedUserPrivateGroupPlatform(PlatformGrok))
 	require.True(t, IsSupportedUserPrivateGroupPlatform(" Grok "))
 	require.True(t, IsSupportedUserPrivateGroupPlatform(PlatformOpencode))
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformQwen} {
+		require.True(t, IsSupportedUserPrivateGroupPlatform(platform))
+		require.True(t, defaultPrivateGroupAllowMessagesDispatch(platform))
+	}
 	for _, platform := range SupportedUserPrivateGroupPlatforms() {
 		require.True(t, IsSupportedAccountPlatform(platform))
 	}

@@ -125,9 +125,18 @@ type RelayOptions struct {
 	OnTurnComplete         func(turn RelayTurnResult)
 	BeforeUpstreamFrame    func(ctx context.Context, msgType coderws.MessageType, payload []byte, responseID string) error
 	BeforeTerminalFrame    func(ctx context.Context, turn RelayTurnResult) error
-	BeforeClientFrame      func(ctx context.Context, msgType coderws.MessageType, payload []byte) error
-	OnTrace                func(event RelayTraceEvent)
-	Now                    func() time.Time
+	// BeforeWriteClient runs after a frame has been read from upstream and
+	// immediately before it is exposed to the client. wroteDownstream is scoped
+	// to the current response.create turn, so a quota error on a later turn can
+	// be recovered without mistaking an earlier turn's output for this turn's.
+	BeforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error
+	// BeforeRelayCancel runs while the relay still owns the client socket and
+	// before it cancels the read/write goroutines. Callers may use it to send a
+	// protocol close frame for a classified client-visible failure.
+	BeforeRelayCancel func(exit RelayExit)
+	BeforeClientFrame func(ctx context.Context, msgType coderws.MessageType, payload []byte) error
+	OnTrace           func(event RelayTraceEvent)
+	Now               func() time.Time
 }
 
 type RelayTraceEvent struct {
@@ -153,6 +162,11 @@ type relayState struct {
 	settledImageCount    int
 	billingUsageComplete bool
 	terminalResponseIDs  map[[sha256.Size]byte]struct{}
+	// The high bits identify the current client response.create turn and the
+	// low bit records whether that turn wrote anything downstream. A generation
+	// prevents a delayed write from an older turn from marking a newer turn.
+	turnOutputState   atomic.Uint64
+	beforeWriteClient func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error
 }
 
 type relayExitSignal struct {
@@ -312,7 +326,7 @@ func Relay(
 		firstMessageType = coderws.MessageText
 	}
 	startAt := nowFn()
-	state := &relayState{requestModel: result.RequestModel, imageCounter: newImageOutputCounter()}
+	state := &relayState{requestModel: result.RequestModel, imageCounter: newImageOutputCounter(), beforeWriteClient: options.BeforeWriteClient}
 	onTrace := options.OnTrace
 
 	relayCtx, relayCancel := context.WithCancel(ctx)
@@ -338,6 +352,18 @@ func Relay(
 		writeCtx, cancel := context.WithTimeout(relayCtx, writeTimeout)
 		defer cancel()
 		return upstreamConn.WriteFrame(writeCtx, msgType, payload)
+	}
+	writeClientFrameUpstream := func(msgType coderws.MessageType, payload []byte) error {
+		if isClientResponseCreateFrame(msgType, payload) {
+			for {
+				old := state.turnOutputState.Load()
+				generation := old &^ uint64(1)
+				if state.turnOutputState.CompareAndSwap(old, generation+2) {
+					break
+				}
+			}
+		}
+		return writeUpstream(msgType, payload)
 	}
 	writeClient := func(msgType coderws.MessageType, payload []byte) error {
 		writeCtx, cancel := context.WithTimeout(frameCommitCtx, writeTimeout)
@@ -367,7 +393,7 @@ func Relay(
 			return result, &RelayExit{Stage: "before_client_frame", Err: err}
 		}
 	}
-	if err := writeUpstream(firstMessageType, firstClientMessage); err != nil {
+	if err := writeClientFrameUpstream(firstMessageType, firstClientMessage); err != nil {
 		result.Duration = nowFn().Sub(startAt)
 		emitRelayTrace(onTrace, RelayTraceEvent{
 			Stage:        "write_first_message_failed",
@@ -392,7 +418,7 @@ func Relay(
 	clientDone := make(chan struct{})
 	go func() {
 		defer close(clientDone)
-		runClientToUpstream(relayCtx, clientConn, writeUpstream, markActivity, clientToUpstreamFrames, options.BeforeClientFrame, onTrace, exitCh)
+		runClientToUpstream(relayCtx, clientConn, writeClientFrameUpstream, markActivity, clientToUpstreamFrames, options.BeforeClientFrame, onTrace, exitCh)
 	}()
 	upstreamDone := make(chan struct{})
 	go func() {
@@ -420,6 +446,13 @@ func Relay(
 	go runIdleWatchdog(relayCtx, nowFn, options.IdleTimeout, &lastActivity, onTrace, exitCh)
 
 	firstExit := <-exitCh
+	if options.BeforeRelayCancel != nil {
+		options.BeforeRelayCancel(RelayExit{
+			Stage:           firstExit.stage,
+			Err:             firstExit.err,
+			WroteDownstream: firstExit.wroteDownstream,
+		})
+	}
 	emitRelayTrace(onTrace, RelayTraceEvent{
 		Stage:           "first_exit",
 		Direction:       relayDirectionFromStage(firstExit.stage),
@@ -538,6 +571,10 @@ func Relay(
 	return result, nil
 }
 
+func isClientResponseCreateFrame(msgType coderws.MessageType, payload []byte) bool {
+	return msgType == coderws.MessageText && strings.TrimSpace(gjson.GetBytes(payload, "type").String()) == "response.create"
+}
+
 func runClientToUpstream(
 	ctx context.Context,
 	clientConn FrameConn,
@@ -632,6 +669,9 @@ func runUpstreamToClient(
 			return
 		}
 		markActivity()
+		// Capture the turn before hooks can release its lifecycle and let the
+		// client begin another turn. A delayed old write must not mark that turn.
+		turnOutputSnapshot := state.turnOutputState.Load()
 		observedEvent := observedUpstreamEvent{}
 		switch msgType {
 		case coderws.MessageText:
@@ -744,6 +784,20 @@ func runUpstreamToClient(
 			markActivity()
 			continue
 		}
+		if state.beforeWriteClient != nil {
+			if optionsBeforeWriteErr := state.beforeWriteClient(msgType, payload, turnOutputSnapshot&1 == 1); optionsBeforeWriteErr != nil {
+				emitRelayTrace(onTrace, RelayTraceEvent{
+					Stage:           "before_client_write_failed",
+					Direction:       "upstream_to_client",
+					MessageType:     relayMessageTypeString(msgType),
+					PayloadBytes:    len(payload),
+					WroteDownstream: wroteDownstream,
+					Error:           optionsBeforeWriteErr.Error(),
+				})
+				exitCh <- relayExitSignal{stage: "before_client_write", err: optionsBeforeWriteErr, wroteDownstream: wroteDownstream}
+				return
+			}
+		}
 		if err := writeClient(msgType, payload); err != nil {
 			writeErr := err
 			if terminalHookErr != nil {
@@ -761,6 +815,7 @@ func runUpstreamToClient(
 			return
 		}
 		wroteDownstream = true
+		state.turnOutputState.CompareAndSwap(turnOutputSnapshot, turnOutputSnapshot|1)
 		if forwardedFrames != nil {
 			forwardedFrames.Add(1)
 		}

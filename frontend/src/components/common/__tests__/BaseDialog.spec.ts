@@ -66,6 +66,18 @@ describe('BaseDialog focus management', () => {
     document.body.classList.remove('modal-open')
   })
 
+  it('exposes the shared theme-kit hooks without removing compatibility classes', async () => {
+    mountDialog({ show: true, title: 'Theme hook dialog' })
+    await nextTick()
+
+    const overlay = document.body.querySelector<HTMLElement>('.modal-overlay')!
+    const panel = document.body.querySelector<HTMLElement>('.modal-content')!
+    expect(overlay.classList.contains('ui-overlay')).toBe(true)
+    expect(panel.classList.contains('ui-dialog-panel')).toBe(true)
+    expect(panel.querySelector('.modal-header')?.classList.contains('ui-dialog-header')).toBe(true)
+    expect(panel.querySelector('.modal-body')?.classList.contains('ui-dialog-body')).toBe(true)
+  })
+
   it('wraps Tab and Shift+Tab inside the top dialog', async () => {
     mountDialog(
       { show: true, title: 'Dialog' },

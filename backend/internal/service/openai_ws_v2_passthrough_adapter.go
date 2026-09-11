@@ -554,6 +554,12 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	// 可直接 Store/Load 而无需额外封装。
 	var requestServiceTierPtr atomic.Pointer[string]
 	requestServiceTierPtr.Store(extractOpenAIServiceTierFromBody(firstClientMessage))
+	var requestModelPtr atomic.Pointer[string]
+	storeTurnModel := func(model string) {
+		model = strings.TrimSpace(model)
+		requestModelPtr.Store(&model)
+	}
+	storeTurnModel(requestModel)
 	imageBillingConfigStore := &openAIResponseImageBillingConfigStore{}
 	imageBillingConfigStore.Store(resolveOpenAIResponseImageBillingConfigFromBody(openAIResponsesEndpoint, requestModel, firstClientMessage))
 
@@ -796,6 +802,14 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				// turn's service tier or image billing configuration.
 				requestServiceTierPtr.Store(extractOpenAIServiceTierFromBody(payload))
 				frameModel := strings.TrimSpace(gjson.GetBytes(payload, "model").String())
+				quotaModel := frameModel
+				if quotaModel == "" {
+					quotaModel = capturedSessionModel
+				}
+				if quotaModel == "" {
+					quotaModel = requestModel
+				}
+				storeTurnModel(quotaModel)
 				if frameModel == "" {
 					frameModel = requestModel
 				}
@@ -870,6 +884,47 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					return openaiwsv2.NewTerminalForwardThenCloseError(hookErr)
 				}
 				return nil
+			},
+			BeforeWriteClient: func(msgType coderws.MessageType, payload []byte, wroteDownstream bool) error {
+				if account.Platform != PlatformOpenAI || msgType != coderws.MessageText {
+					return nil
+				}
+				eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+				if eventType != "error" || wroteDownstream {
+					return nil
+				}
+				codeRaw, errTypeRaw, errMsgRaw := parseOpenAIWSErrorEventFields(payload)
+				if !isOpenAIWSRateLimitError(codeRaw, errTypeRaw, errMsgRaw) {
+					return nil
+				}
+				effectiveModel := requestModel
+				if modelPtr := requestModelPtr.Load(); modelPtr != nil {
+					effectiveModel = strings.TrimSpace(*modelPtr)
+				}
+				s.persistOpenAIWSRateLimitSignal(ctx, account, effectiveModel, handshakeHeaders, payload, codeRaw, errTypeRaw, errMsgRaw)
+				// A later turn cannot be replayed safely on this live passthrough
+				// socket: the upstream has already rejected the turn before exposing
+				// output. Ask the client to reconnect so it can establish fresh state.
+				if completedTurns.Load() > 0 {
+					return NewOpenAIWSClientCloseError(
+						coderws.StatusTryAgainLater,
+						"upstream rate limit exceeded; please reconnect",
+						errors.New("later passthrough turn was rate limited before output"),
+					)
+				}
+				return nil
+			},
+			BeforeRelayCancel: func(exit openaiwsv2.RelayExit) {
+				if exit.Stage != "before_client_write" {
+					return
+				}
+				var closeErr *OpenAIWSClientCloseError
+				if !errors.As(exit.Err, &closeErr) || closeErr == nil || closeErr.StatusCode() != coderws.StatusTryAgainLater {
+					return
+				}
+				reason := truncateString(closeErr.Reason(), 120)
+				_ = clientConn.Close(coderws.StatusTryAgainLater, reason)
+				_ = clientConn.CloseNow()
 			},
 			OnTurnComplete: func(turn openaiwsv2.RelayTurnResult) {
 				turnResult := buildCompletedTurnResult(turn)
@@ -1015,7 +1070,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		relayErr,
 		relayExit.WroteDownstream,
 	)
-	if cause := turnLifecycle.activeCause(); cause != nil {
+	// A classified pre-write failure closes the client before relay teardown.
+	// The resulting cancellation is cleanup, not the cause of this failed turn.
+	if cause := turnLifecycle.activeCause(); cause != nil && relayExit.Stage != "before_client_write" {
 		turnErr = wrapOpenAIWSIngressTurnError(relayExit.Stage, cause, relayExit.WroteDownstream)
 	}
 	_, _, _ = turnLifecycle.finishWithError(buildUnsettledTurnResult(), turnErr)

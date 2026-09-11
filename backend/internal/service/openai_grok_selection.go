@@ -16,6 +16,9 @@ func openAICompatiblePlatformFromContext(ctx context.Context) string {
 		case PlatformOpencode:
 			return PlatformOpencode
 		}
+		if platform, _ := ctx.Value(ctxkey.ForcePlatform).(string); IsCNProvider(platform) {
+			return platform
+		}
 	}
 	return PlatformOpenAI
 }

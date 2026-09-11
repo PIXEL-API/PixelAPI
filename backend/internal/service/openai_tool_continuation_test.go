@@ -1,10 +1,31 @@
 package service
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 )
+
+func TestNamedFunctionCallOutputValidationMatchesRawAnalysis(t *testing.T) {
+	for _, body := range []string{
+		`{"input":[{"type":"function_call_output","name":"external_tool","output":"result"}]}`,
+		`{"previous_response_id":"resp_1","input":[{"type":"function_call_output","name":"external_tool","output":"result"}]}`,
+		`{"input":[{"type":"function_call_output","name":"external_tool","call_id":"call_1","output":"result"},{"type":"item_reference","id":"call_1"}]}`,
+	} {
+		var request map[string]any
+		require.NoError(t, json.Unmarshal([]byte(body), &request))
+		analysis, err := AnalyzeOpenAIResponsesRequest([]byte(body))
+		require.NoError(t, err)
+		validation := ValidateFunctionCallOutputContext(request)
+		require.Equal(t, analysis.FunctionCallOutputValidation, validation)
+		require.Equal(t, validation.HasFunctionCallOutputMissingCallID,
+			AnalyzeToolContinuationSignals(request).HasFunctionCallOutputMissingCallID)
+		if _, hasPrevious := request["previous_response_id"]; hasPrevious {
+			require.True(t, validation.HasFunctionCallOutputMissingCallID, "previous_response_id cannot replace a tool call identifier")
+		}
+	}
+}
 
 func TestNeedsToolContinuationSignals(t *testing.T) {
 	// 覆盖所有触发续链的信号来源，确保判定逻辑完整。

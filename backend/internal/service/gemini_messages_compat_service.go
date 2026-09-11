@@ -1093,12 +1093,33 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	imageSize := s.extractImageSize(body)
+	resultWithUsage := func(usage *ClaudeUsage, firstTokenMs *int, completed bool) *ForwardResult {
+		if usage == nil {
+			usage = &ClaudeUsage{}
+		}
+		imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
+		return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
+			RequestID:         requestID,
+			UpstreamRequestID: upstreamUsageRequestID(resp.Header, requestID),
+			Usage:             *usage,
+			Model:             originalModel,
+			UpstreamModel:     mappedModel,
+			Stream:            req.Stream,
+			Duration:          time.Since(startTime),
+			FirstTokenMs:      firstTokenMs,
+			ImageCount:        imageCount,
+			ImageSize:         imageSize,
+		}, completed)
+	}
 	if req.Stream {
 		if resp != nil {
 			resp.Request = nil
 		}
 		streamRes, err := s.handleStreamingResponse(c, resp, startTime, originalModel)
 		if err != nil {
+			if streamRes != nil && claudeUsageHasBillableTokens(streamRes.usage) {
+				return resultWithUsage(streamRes.usage, streamRes.firstTokenMs, false), err
+			}
 			return nil, err
 		}
 		usage = streamRes.usage
@@ -1107,7 +1128,11 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		if useUpstreamStream {
 			collected, usageObj, completed, err := collectGeminiSSE(resp.Body, true)
 			if err != nil {
-				return nil, s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Failed to read upstream stream")
+				responseErr := s.writeClaudeError(c, http.StatusBadGateway, "upstream_error", "Failed to read upstream stream")
+				if claudeUsageHasBillableTokens(usageObj) {
+					return resultWithUsage(usageObj, nil, false), responseErr
+				}
+				return nil, responseErr
 			}
 			collectedBytes, _ := json.Marshal(collected)
 			upstreamResponseModelObserverFromContext(c).ObserveGemini(collectedBytes)
@@ -1129,20 +1154,7 @@ func (s *GeminiMessagesCompatService) Forward(ctx context.Context, c *gin.Contex
 		}
 	}
 
-	// 图片生成计费
-	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
-
-	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
-		RequestID:     requestID,
-		Usage:         *usage,
-		Model:         originalModel,
-		UpstreamModel: mappedModel,
-		Stream:        req.Stream,
-		Duration:      time.Since(startTime),
-		FirstTokenMs:  firstTokenMs,
-		ImageCount:    imageCount,
-		ImageSize:     imageSize,
-	}, (!req.Stream && !useUpstreamStream) || observedUpstreamResponseModelProtocolComplete(c)), nil
+	return resultWithUsage(usage, firstTokenMs, (!req.Stream && !useUpstreamStream) || observedUpstreamResponseModelProtocolComplete(c)), nil
 }
 
 func isGeminiSignatureRelatedError(respBody []byte) bool {
@@ -1483,13 +1495,14 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 			estimated := estimateGeminiCountTokens(body)
 			c.JSON(http.StatusOK, map[string]any{"totalTokens": estimated})
 			return &ForwardResult{
-				RequestID:     requestID,
-				Usage:         ClaudeUsage{},
-				Model:         originalModel,
-				UpstreamModel: mappedModel,
-				Stream:        false,
-				Duration:      time.Since(startTime),
-				FirstTokenMs:  nil,
+				RequestID:         requestID,
+				UpstreamRequestID: upstreamUsageRequestID(resp.Header, requestID),
+				Usage:             ClaudeUsage{},
+				Model:             originalModel,
+				UpstreamModel:     mappedModel,
+				Stream:            false,
+				Duration:          time.Since(startTime),
+				FirstTokenMs:      nil,
 			}, nil
 		}
 
@@ -1598,6 +1611,24 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 	var usage *ClaudeUsage
 	var firstTokenMs *int
 	imageSize := s.extractImageSize(body)
+	resultWithUsage := func(usage *ClaudeUsage, firstTokenMs *int, completed bool) *ForwardResult {
+		if usage == nil {
+			usage = &ClaudeUsage{}
+		}
+		imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
+		return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
+			RequestID:         requestID,
+			UpstreamRequestID: upstreamUsageRequestID(resp.Header, requestID),
+			Usage:             *usage,
+			Model:             originalModel,
+			UpstreamModel:     mappedModel,
+			Stream:            stream,
+			Duration:          time.Since(startTime),
+			FirstTokenMs:      firstTokenMs,
+			ImageCount:        imageCount,
+			ImageSize:         imageSize,
+		}, completed)
+	}
 
 	if stream {
 		if resp != nil {
@@ -1606,6 +1637,9 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		body = nil
 		streamRes, err := s.handleNativeStreamingResponse(c, resp, startTime, isOAuth)
 		if err != nil {
+			if streamRes != nil && claudeUsageHasBillableTokens(streamRes.usage) {
+				return resultWithUsage(streamRes.usage, streamRes.firstTokenMs, false), err
+			}
 			return nil, err
 		}
 		usage = streamRes.usage
@@ -1614,7 +1648,11 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		if useUpstreamStream {
 			collected, usageObj, completed, err := collectGeminiSSE(resp.Body, isOAuth)
 			if err != nil {
-				return nil, s.writeGoogleError(c, http.StatusBadGateway, "Failed to read upstream stream")
+				responseErr := s.writeGoogleError(c, http.StatusBadGateway, "Failed to read upstream stream")
+				if claudeUsageHasBillableTokens(usageObj) {
+					return resultWithUsage(usageObj, nil, false), responseErr
+				}
+				return nil, responseErr
 			}
 			b, _ := json.Marshal(collected)
 			upstreamResponseModelObserverFromContext(c).ObserveGemini(b)
@@ -1637,20 +1675,7 @@ func (s *GeminiMessagesCompatService) ForwardNative(ctx context.Context, c *gin.
 		usage = &ClaudeUsage{}
 	}
 
-	// 图片生成计费
-	imageCount := resolveGeminiImageCount(c, originalModel, mappedModel)
-
-	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
-		RequestID:     requestID,
-		Usage:         *usage,
-		Model:         originalModel,
-		UpstreamModel: mappedModel,
-		Stream:        stream,
-		Duration:      time.Since(startTime),
-		FirstTokenMs:  firstTokenMs,
-		ImageCount:    imageCount,
-		ImageSize:     imageSize,
-	}, (!stream && !useUpstreamStream) || observedUpstreamResponseModelProtocolComplete(c)), nil
+	return resultWithUsage(usage, firstTokenMs, (!stream && !useUpstreamStream) || observedUpstreamResponseModelProtocolComplete(c)), nil
 }
 
 // checkErrorPolicyInLoop 在重试循环内预检查错误策略。
@@ -2139,10 +2164,16 @@ func (s *GeminiMessagesCompatService) handleStreamingResponse(c *gin.Context, re
 	seenToolJSON := ""
 
 	reader := bufio.NewReader(resp.Body)
+	var terminalReadErr error
 	for {
+		if terminalReadErr != nil {
+			return &geminiStreamResult{usage: &usage, firstTokenMs: firstTokenMs}, fmt.Errorf("stream read error: %w", terminalReadErr)
+		}
 		line, err := reader.ReadString('\n')
 		if err != nil && !errors.Is(err, io.EOF) {
-			return nil, fmt.Errorf("stream read error: %w", err)
+			// ReadString can return the final usage line together with an error.
+			// Parse those bytes before reporting the transport failure.
+			terminalReadErr = err
 		}
 
 		if !strings.HasPrefix(line, "data:") {
@@ -2453,7 +2484,7 @@ func collectGeminiSSE(body io.Reader, isOAuth bool) (map[string]any, *ClaudeUsag
 			break
 		}
 		if err != nil {
-			return nil, nil, false, err
+			return mergeCollectedTextParts(pickGeminiCollectResult(last, lastWithParts), collectedTextParts), usage, false, err
 		}
 	}
 
@@ -2759,7 +2790,7 @@ func (s *GeminiMessagesCompatService) handleNativeStreamingResponse(c *gin.Conte
 			break
 		}
 		if err != nil {
-			return nil, err
+			return &geminiNativeStreamResult{usage: usage, firstTokenMs: firstTokenMs}, err
 		}
 	}
 

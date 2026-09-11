@@ -964,8 +964,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				}
 			})
 		}
-		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-		finalizeAccountShareRequest(hasBillableUsage, func() { recordUsageResult(result) }, accountReleaseFunc)
+		finalizeAccountShareRequest(shouldRecordOpenAIUsage(result, err), func() { recordUsageResult(result) }, accountReleaseFunc)
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
 		if upstreamLatencyMs > 0 && forwardDurationMs > upstreamLatencyMs {
@@ -990,7 +989,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if err != nil {
 			err = h.gatewayService.NormalizeGrokCredentialFailure(c.Request.Context(), c, account, err)
 			var failoverErr *service.UpstreamFailoverError
-			if errors.As(err, &failoverErr) {
+			// A result has already entered billing. Retrying that attempt would
+			// create another upstream charge under the same local request.
+			if !shouldRecordOpenAIUsage(result, err) && errors.As(err, &failoverErr) {
 				if failoverClientGone(c) {
 					reqLog.Info("openai.failover_aborted_client_disconnected",
 						zap.Int64("account_id", account.ID),
@@ -1698,8 +1699,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 				}
 			})
 		}
-		hasBillableUsage := service.OpenAIForwardResultHasBillableUsage(result)
-		finalizeAccountShareRequest(hasBillableUsage, func() { recordUsageResult(result) }, accountReleaseFunc)
+		finalizeAccountShareRequest(shouldRecordOpenAIUsage(result, err), func() { recordUsageResult(result) }, accountReleaseFunc)
 		upstreamLatencyMs, _ := getContextInt64(c, service.OpsUpstreamLatencyMsKey)
 		responseLatencyMs := forwardDurationMs
 		if upstreamLatencyMs > 0 && forwardDurationMs > upstreamLatencyMs {
@@ -1724,7 +1724,7 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		if err != nil {
 			err = h.gatewayService.NormalizeGrokCredentialFailure(c.Request.Context(), c, account, err)
 			var failoverErr *service.UpstreamFailoverError
-			if errors.As(err, &failoverErr) {
+			if !shouldRecordOpenAIUsage(result, err) && errors.As(err, &failoverErr) {
 				if failoverClientGone(c) {
 					reqLog.Info("openai_messages.failover_aborted_client_disconnected",
 						zap.Int64("account_id", account.ID),
@@ -3232,6 +3232,12 @@ func (h *OpenAIGatewayHandler) handleFailoverExhausted(c *gin.Context, failoverE
 	}
 	statusCode := failoverErr.StatusCode
 	responseBody := failoverErr.ResponseBody
+	if statusCode == http.StatusBadRequest && service.IsOpenAICompatibleModelNotFound400(responseBody) && !streamStarted {
+		upstreamMsg := service.SanitizeUpstreamErrorMessage(service.ExtractUpstreamErrorMessage(responseBody))
+		service.SetOpsUpstreamError(c, statusCode, upstreamMsg, "")
+		service.WriteOpenAIUpstreamClientError(c, statusCode, responseBody, upstreamMsg)
+		return
+	}
 
 	// 先检查透传规则
 	if h.errorPassthroughService != nil && len(responseBody) > 0 {

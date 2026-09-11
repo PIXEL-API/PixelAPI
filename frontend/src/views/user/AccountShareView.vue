@@ -3039,17 +3039,32 @@ const ACCOUNT_SHARE_TRANSIENT_STATUS_REFRESH_INTERVAL_MS = 8_000
 const ACCOUNT_SHARE_PLATFORM_OPTIONS: Array<{ value: AccountSharePlatform; label: string }> = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
-  { value: 'opencode', label: 'Opencode' }
+  { value: 'opencode', label: 'Opencode' },
+  { value: 'kimi', label: 'Kimi（月之暗面）' },
+  { value: 'zhipu', label: '智谱 GLM' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'minimax', label: 'MiniMax' },
+  { value: 'qwen', label: '通义千问' }
 ]
 const ACCOUNT_NAME_BASE_BY_PLATFORM: Record<AccountSharePlatform, string> = {
   openai: 'OpenAI房间',
   anthropic: 'Anthropic房间',
-  opencode: 'Opencode房间'
+  opencode: 'Opencode房间',
+  kimi: 'Kimi房间',
+  zhipu: '智谱房间',
+  deepseek: 'DeepSeek房间',
+  minimax: 'MiniMax房间',
+  qwen: '通义千问房间'
 }
 const ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM: Record<AccountSharePlatform, string> = {
   openai: 'OpenAI账号模式',
   anthropic: 'Anthropic账号模式',
-  opencode: 'Opencode账号模式'
+  opencode: 'Opencode账号模式',
+  kimi: 'Kimi账号模式',
+  zhipu: '智谱账号模式',
+  deepseek: 'DeepSeek账号模式',
+  minimax: 'MiniMax账号模式',
+  qwen: '通义千问账号模式'
 }
 const ACCOUNT_SHARE_RECOMMENDATION_LIMIT = 10
 const ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE = 5
@@ -3294,8 +3309,9 @@ function filterForListingTab(tab: AccountShareListingTab): FilterOption {
 }
 
 function normalizeListingPlatform(value: unknown): AccountSharePlatform {
-  if (value === 'anthropic') return 'anthropic'
-  if (value === 'opencode') return 'opencode'
+  if (ACCOUNT_SHARE_PLATFORM_OPTIONS.some(option => option.value === value)) {
+    return value as AccountSharePlatform
+  }
   return 'openai'
 }
 
@@ -3634,27 +3650,52 @@ const savingIdleTimeoutId = ref<number | null>(null)
 const modeGroupIDsByPlatform = reactive<Record<AccountSharePlatform, number>>({
   openai: 0,
   anthropic: 0,
-  opencode: 0
+  opencode: 0,
+  kimi: 0,
+  zhipu: 0,
+  deepseek: 0,
+  minimax: 0,
+  qwen: 0
 })
 const modeApiKeysByPlatform = reactive<Record<AccountSharePlatform, ApiKey[]>>({
   openai: [],
   anthropic: [],
-  opencode: []
+  opencode: [],
+  kimi: [],
+  zhipu: [],
+  deepseek: [],
+  minimax: [],
+  qwen: []
 })
 const modeKeysLoadingByPlatform = reactive<Record<AccountSharePlatform, boolean>>({
   openai: false,
   anthropic: false,
-  opencode: false
+  opencode: false,
+  kimi: false,
+  zhipu: false,
+  deepseek: false,
+  minimax: false,
+  qwen: false
 })
 const modeKeysLoadedByPlatform = reactive<Record<AccountSharePlatform, boolean>>({
   openai: false,
   anthropic: false,
-  opencode: false
+  opencode: false,
+  kimi: false,
+  zhipu: false,
+  deepseek: false,
+  minimax: false,
+  qwen: false
 })
 const modeKeysErrorByPlatform = reactive<Record<AccountSharePlatform, string>>({
   openai: '',
   anthropic: '',
-  opencode: ''
+  opencode: '',
+  kimi: '',
+  zhipu: '',
+  deepseek: '',
+  minimax: '',
+  qwen: ''
 })
 const knownListings = ref<AccountShareListing[]>([])
 const searchQuery = ref(initialListingPreferences.search)
@@ -4095,7 +4136,11 @@ const eligibleOwnedAccounts = computed(() => (
       if (account.platform.trim().toLowerCase() !== createPlatform.value) return false
       if (account.status !== 'active' || !account.schedulable) return false
       if (!Number.isFinite(Number(account.concurrency)) || Number(account.concurrency) <= 0) return false
-      if (createPlatform.value !== 'opencode' && (!account.account_level || account.account_level.trim().toLowerCase() === 'unknown')) return false
+      // Account level is only meaningful for the subscription based OpenAI and
+      // Anthropic pools.  Kimi, Zhipu, DeepSeek and MiniMax API accounts do not
+      // expose a level, so an empty/unknown value must not hide valid accounts.
+      if ((createPlatform.value === 'openai' || createPlatform.value === 'anthropic')
+        && (!account.account_level || account.account_level.trim().toLowerCase() === 'unknown')) return false
       if (account.external_placement && account.external_placement.state !== 'active') return false
       const placementTarget = resolveAccountExternalPlacementTarget(account)
       if (placementTarget === 'room') {
@@ -7182,13 +7227,18 @@ async function loadModeKeys(): Promise<void> {
     if (requestSeq !== modeKeysRequestSeq) return
     for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS) {
       const groupID = Number(modeGroups.find(group => group.platform === option.value)?.group_id || 0)
-      if (!Number.isSafeInteger(groupID) || groupID <= 0) {
-        throw new Error(`${option.label} 账号模式分组映射无效`)
+      modeGroupIDsByPlatform[option.value] = Number.isSafeInteger(groupID) && groupID > 0 ? groupID : 0
+      // A deployment may enable new providers incrementally. Keep existing
+      // platforms usable when a provider's mode group is not configured yet;
+      // that tab will explain the missing mapping and remain non-joinable.
+      if (modeGroupIDsByPlatform[option.value] <= 0) {
+        modeKeysErrorByPlatform[option.value] = `${option.label}账号模式分组尚未配置`
+        modeKeysLoadingByPlatform[option.value] = false
       }
-      modeGroupIDsByPlatform[option.value] = groupID
     }
 
-    const results = await Promise.allSettled(ACCOUNT_SHARE_PLATFORM_OPTIONS.map(async option => {
+    const configuredOptions = ACCOUNT_SHARE_PLATFORM_OPTIONS.filter(option => modeGroupIDsByPlatform[option.value] > 0)
+    const results = await Promise.allSettled(configuredOptions.map(async option => {
       const platform = option.value
       try {
         const accountModeGroupID = modeGroupIDsByPlatform[platform]
@@ -7208,7 +7258,7 @@ async function loadModeKeys(): Promise<void> {
 
     if (requestSeq !== modeKeysRequestSeq) return
     results.forEach((result, index) => {
-      const platform = ACCOUNT_SHARE_PLATFORM_OPTIONS[index].value
+      const platform = configuredOptions[index].value
       if (result.status === 'fulfilled') return
 
       modeApiKeysByPlatform[platform] = []

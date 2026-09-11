@@ -1,5 +1,5 @@
 import { mount } from '@vue/test-utils'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import TotpLoginModal from '@/components/auth/TotpLoginModal.vue'
 
 const { showErrorMock } = vi.hoisted(() => ({
@@ -19,8 +19,17 @@ vi.mock('@/stores', () => ({
 }))
 
 describe('TotpLoginModal', () => {
+  let dialogRoot: HTMLDivElement
+
   beforeEach(() => {
     showErrorMock.mockReset()
+    dialogRoot = document.createElement('div')
+    dialogRoot.id = 'dialog-root'
+    document.body.appendChild(dialogRoot)
+  })
+
+  afterEach(() => {
+    dialogRoot.remove()
   })
 
   it('sends verification errors to toast and does not render inline red text', async () => {

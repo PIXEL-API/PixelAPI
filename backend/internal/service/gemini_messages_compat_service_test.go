@@ -41,6 +41,93 @@ func (s *geminiCompatHTTPUpstreamStub) DoWithTLS(req *http.Request, proxyURL str
 	return s.Do(req, proxyURL, accountID, accountConcurrency)
 }
 
+// Return the last bytes and the transport error in the same read, without a
+// trailing newline, as can happen when an upstream SSE connection is truncated.
+type geminiInterruptedReader struct{ *strings.Reader }
+
+func (r geminiInterruptedReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	if r.Len() == 0 {
+		return n, io.ErrUnexpectedEOF
+	}
+	return n, err
+}
+
+func TestGeminiInterruptedStreamPreservesObservedUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const payload = `{"candidates":[{"content":{"parts":[{"text":"partial"}]}}],"usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":30,"cachedContentTokenCount":20}}`
+	for _, mode := range []string{"collect_native", "collect_oauth", "stream_native", "stream_claude"} {
+		t.Run(mode, func(t *testing.T) {
+			data := payload
+			if mode == "collect_oauth" || mode == "stream_claude" {
+				data = `{"response":` + payload + `}`
+			}
+			body := geminiInterruptedReader{strings.NewReader("data: " + data)}
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/", nil)
+			resp := &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(body)}
+			svc := &GeminiMessagesCompatService{}
+			var usage *ClaudeUsage
+			var err error
+			switch mode {
+			case "collect_native", "collect_oauth":
+				var completed bool
+				_, usage, completed, err = collectGeminiSSE(body, mode == "collect_oauth")
+				require.False(t, completed)
+			case "stream_native":
+				var result *geminiNativeStreamResult
+				result, err = svc.handleNativeStreamingResponse(c, resp, time.Now(), false)
+				require.NotNil(t, result)
+				usage = result.usage
+			case "stream_claude":
+				var result *geminiStreamResult
+				result, err = svc.handleStreamingResponse(c, resp, time.Now(), "gemini-3-pro")
+				require.NotNil(t, result)
+				usage = result.usage
+			}
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			require.NotNil(t, usage)
+			require.Equal(t, 100, usage.InputTokens)
+			require.Equal(t, 30, usage.OutputTokens)
+			require.Equal(t, 20, usage.CacheReadInputTokens)
+		})
+	}
+}
+
+func TestGeminiForwardNativeReturnsBillablePartialResultOnReadError(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, withUsage := range []bool{true, false} {
+		t.Run(fmt.Sprintf("usage=%t", withUsage), func(t *testing.T) {
+			payload := `{"candidates":[{"content":{"parts":[{"text":"partial"}]}}]}`
+			if withUsage {
+				payload = `{"usageMetadata":{"promptTokenCount":120,"candidatesTokenCount":30}}`
+			}
+			httpStub := &geminiCompatHTTPUpstreamStub{response: &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": {"text/event-stream"}, "X-Client-Request-Id": {"upstream-client"}, "X-Request-Id": {"provider-id"}},
+				Body:       io.NopCloser(geminiInterruptedReader{strings.NewReader("data: " + payload)}),
+			}}
+			svc := &GeminiMessagesCompatService{httpUpstream: httpStub, cfg: &config.Config{}}
+			account := &Account{ID: 101, Platform: PlatformGemini, Type: AccountTypeAPIKey, Credentials: map[string]any{"api_key": "test-key"}}
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-3-pro:streamGenerateContent", nil)
+			result, err := svc.ForwardNative(context.Background(), c, account, "gemini-3-pro", "streamGenerateContent", true, []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`))
+			require.ErrorIs(t, err, io.ErrUnexpectedEOF)
+			require.Equal(t, 1, httpStub.calls)
+			if !withUsage {
+				require.Nil(t, result, "unknown usage must not be fabricated for a failed request")
+				return
+			}
+			require.NotNil(t, result)
+			require.Equal(t, 120, result.Usage.InputTokens)
+			require.Equal(t, 30, result.Usage.OutputTokens)
+			require.NotNil(t, result.UpstreamRequestID)
+			require.Equal(t, "upstream-client", *result.UpstreamRequestID)
+			require.False(t, result.UpstreamResponseModelBillingEligible)
+		})
+	}
+}
+
 func TestCollectGeminiSSEProtocolCompletion(t *testing.T) {
 	t.Parallel()
 

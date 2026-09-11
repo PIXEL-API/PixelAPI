@@ -16,11 +16,11 @@ func shouldAutoInjectPromptCacheKeyForCompat(model string) bool {
 	canonical := canonicalizeOpenAIModelAliasSpelling(trimmed)
 	// Only auto-inject for GPT-5/Codex-compatible OAuth paths; normalizeCodexModel
 	// falls back to gpt-5.4 for unknown models, so prefilter first.
-	if !strings.Contains(trimmed, "gpt-5") && !strings.Contains(trimmed, "codex") && !strings.HasPrefix(canonical, "gpt-5") {
+	if !strings.Contains(trimmed, "gpt-5") && !strings.Contains(trimmed, "gpt-6") && !strings.Contains(trimmed, "codex") && !strings.HasPrefix(canonical, "gpt-5") && !strings.HasPrefix(canonical, "gpt-6") {
 		return false
 	}
 	normalized := strings.TrimSpace(strings.ToLower(normalizeCodexModel(trimmed)))
-	return strings.HasPrefix(normalized, "gpt-5") || strings.Contains(normalized, "codex")
+	return strings.HasPrefix(normalized, "gpt-5") || strings.HasPrefix(normalized, "gpt-6") || strings.Contains(normalized, "codex")
 }
 
 func deriveCompatPromptCacheKey(req *apicompat.ChatCompletionsRequest, mappedModel string) string {

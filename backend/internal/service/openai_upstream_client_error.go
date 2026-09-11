@@ -50,6 +50,12 @@ func writeOpenAIUpstreamClientError(c *gin.Context, statusCode int, body []byte,
 	c.JSON(statusCode, gin.H{"error": errorPayload})
 }
 
+// WriteOpenAIUpstreamClientError preserves a structured deterministic upstream
+// client error after managed account failover is exhausted.
+func WriteOpenAIUpstreamClientError(c *gin.Context, statusCode int, body []byte, upstreamMsg string) {
+	writeOpenAIUpstreamClientError(c, statusCode, body, upstreamMsg)
+}
+
 func writeOpenAICompactSSEClientError(c *gin.Context, statusCode int, errorPayload gin.H) {
 	if c == nil {
 		return

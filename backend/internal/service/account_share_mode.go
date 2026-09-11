@@ -29,6 +29,11 @@ const (
 	AccountShareModeGroupPlatformOpenAI    = PlatformOpenAI
 	AccountShareModeGroupPlatformAnthropic = PlatformAnthropic
 	AccountShareModeGroupPlatformOpencode  = PlatformOpencode
+	AccountShareModeGroupPlatformKimi      = PlatformKimi
+	AccountShareModeGroupPlatformZhipu     = PlatformZhipu
+	AccountShareModeGroupPlatformDeepseek  = PlatformDeepseek
+	AccountShareModeGroupPlatformMiniMax   = PlatformMiniMax
+	AccountShareModeGroupPlatformQwen      = PlatformQwen
 
 	AccountShareListingStatusActive = "active"
 	AccountShareListingStatusPaused = "paused"
@@ -2003,14 +2008,32 @@ func (s *AccountShareModeService) ListModeGroups(ctx context.Context) ([]Account
 	if s == nil || s.repo == nil {
 		return nil, ErrAccountShareModeGroupUnavailable
 	}
-	platforms := [...]string{PlatformOpenAI, PlatformAnthropic, PlatformOpencode}
+	platforms := [...]string{
+		PlatformOpenAI,
+		PlatformAnthropic,
+		PlatformOpencode,
+		PlatformKimi,
+		PlatformZhipu,
+		PlatformDeepseek,
+		PlatformMiniMax,
+		PlatformQwen,
+	}
 	groups := make([]AccountShareModeGroup, 0, len(platforms))
 	for _, platform := range platforms {
 		group, err := s.repo.GetModeGroup(ctx, platform)
 		if err != nil {
+			if IsCNProvider(platform) && errors.Is(err, ErrAccountShareModeGroupUnavailable) {
+				continue
+			}
 			return nil, err
 		}
 		if group == nil || group.ID <= 0 {
+			// 国产平台的模式分组可以随平台功能逐步启用。缺少配置时跳过
+			// 该平台，保留已有账号广场平台继续工作；数据库查询错误仍然
+			// 直接返回，避免把真实故障伪装成未配置。
+			if IsCNProvider(platform) {
+				continue
+			}
 			return nil, ErrAccountShareModeGroupUnavailable
 		}
 		groups = append(groups, AccountShareModeGroup{GroupID: group.ID, Platform: platform})
@@ -2508,8 +2531,8 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 		}
 		accountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
 	}
-	// opencode 是 apikey-only 平台，没有账号等级概念，account_level 恒为 unknown，允许上架。
-	if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode {
+	// OpenCode 与国产 API Key 平台没有账号等级概念，account_level 可为 unknown，允许上架。
+	if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode && !IsCNProvider(account.Platform) {
 		return nil, ErrAccountShareRoomUnknownLevel
 	}
 	if err := validateAccountShareListingConfig(
@@ -5174,6 +5197,16 @@ func normalizeAccountShareListingPlatform(platform string) string {
 		return PlatformAnthropic
 	case PlatformOpencode:
 		return PlatformOpencode
+	case PlatformKimi:
+		return PlatformKimi
+	case PlatformZhipu:
+		return PlatformZhipu
+	case PlatformDeepseek:
+		return PlatformDeepseek
+	case PlatformMiniMax:
+		return PlatformMiniMax
+	case PlatformQwen:
+		return PlatformQwen
 	default:
 		return ""
 	}

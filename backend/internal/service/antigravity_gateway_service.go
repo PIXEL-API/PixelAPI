@@ -1783,14 +1783,15 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	}
 
 	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
-		RequestID:        requestID,
-		Usage:            *usage,
-		Model:            originalModel,
-		UpstreamModel:    billingModel,
-		Stream:           claudeReq.Stream,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
+		RequestID:         requestID,
+		UpstreamRequestID: upstreamUsageRequestID(resp.Header, requestID),
+		Usage:             *usage,
+		Model:             originalModel,
+		UpstreamModel:     billingModel,
+		Stream:            claudeReq.Stream,
+		Duration:          time.Since(startTime),
+		FirstTokenMs:      firstTokenMs,
+		ClientDisconnect:  clientDisconnect,
 	}, observedUpstreamResponseModelProtocolComplete(c)), nil
 }
 
@@ -2481,16 +2482,17 @@ handleSuccess:
 	}
 
 	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
-		RequestID:        requestID,
-		Usage:            *usage,
-		Model:            originalModel,
-		UpstreamModel:    billingModel,
-		Stream:           stream,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
-		ImageCount:       imageCount,
-		ImageSize:        imageSize,
+		RequestID:         requestID,
+		UpstreamRequestID: upstreamUsageRequestID(resp.Header, requestID),
+		Usage:             *usage,
+		Model:             originalModel,
+		UpstreamModel:     billingModel,
+		Stream:            stream,
+		Duration:          time.Since(startTime),
+		FirstTokenMs:      firstTokenMs,
+		ClientDisconnect:  clientDisconnect,
+		ImageCount:        imageCount,
+		ImageSize:         imageSize,
 	}, observedUpstreamResponseModelProtocolComplete(c)), nil
 }
 
@@ -4341,9 +4343,7 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 		c.Status(resp.StatusCode)
 		_, _ = c.Writer.Write(respBody)
 
-		return &ForwardResult{
-			Model: originalModel,
-		}, nil
+		return nil, fmt.Errorf("upstream rejected request with status %d", resp.StatusCode)
 	}
 
 	// 处理成功响应（流式/非流式）
@@ -4387,11 +4387,13 @@ func (s *AntigravityGatewayService) ForwardUpstream(ctx context.Context, c *gin.
 	logger.LegacyPrintf("service.antigravity_gateway", "%s status=success duration_ms=%d", prefix, duration.Milliseconds())
 
 	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
-		Model:            originalModel,
-		Stream:           claudeReq.Stream,
-		Duration:         duration,
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
+		Model:             originalModel,
+		RequestID:         resp.Header.Get("x-request-id"),
+		UpstreamRequestID: upstreamUsageRequestID(resp.Header, resp.Header.Get("x-request-id")),
+		Stream:            claudeReq.Stream,
+		Duration:          duration,
+		FirstTokenMs:      firstTokenMs,
+		ClientDisconnect:  clientDisconnect,
 		Usage: ClaudeUsage{
 			InputTokens:              usage.InputTokens,
 			OutputTokens:             usage.OutputTokens,

@@ -24,6 +24,24 @@ const (
 	PlatformAntigravity = "antigravity"
 	PlatformGrok        = "grok"
 	PlatformOpencode    = "opencode"
+	PlatformKimi        = "kimi"
+	PlatformZhipu       = "zhipu"
+	PlatformDeepseek    = "deepseek"
+	PlatformMiniMax     = "minimax"
+	PlatformQwen        = "qwen"
+	PlatformComposite   = "composite"
+)
+
+const (
+	AccountModePayG   = "payg"
+	AccountModeCoding = "coding"
+)
+
+const (
+	APIProtocolChatCompletions = "chat_completions"
+	APIProtocolAnthropic       = "anthropic"
+	APIProtocolResponses       = "responses"
+	APIProtocolAdaptive        = "adaptive"
 )
 
 // Account type constants

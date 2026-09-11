@@ -179,11 +179,12 @@ func (s *OpenAIGatewayService) ForwardGrokVoice(
 	writeGrokMediaResponse(c, resp, data, s.responseHeaderFilter)
 	elapsed := time.Since(started)
 	return &OpenAIForwardResult{
-		RequestID:     StableGrokAudioBillingRequestID(requestID),
-		Model:         baseEndpoint,
-		UpstreamModel: baseEndpoint,
-		Duration:      elapsed,
-		AudioUsage:    estimateGrokVoiceAudioUsageFromSnapshot(baseEndpoint, requestUsage, data, elapsed),
+		RequestID:       StableGrokAudioBillingRequestID(requestID),
+		ResponseHeaders: resp.Header.Clone(),
+		Model:           baseEndpoint,
+		UpstreamModel:   baseEndpoint,
+		Duration:        elapsed,
+		AudioUsage:      estimateGrokVoiceAudioUsageFromSnapshot(baseEndpoint, requestUsage, data, elapsed),
 	}, nil
 }
 

@@ -3,13 +3,44 @@ import {
   applyInterceptWarmup,
   applyPlanType,
   buildHeaderOverridesObject,
+  cnSupportsNativeResponses,
+  defaultCNAdaptiveBaseUrls,
+  defaultCNBaseUrl,
   isCustomGrokBaseUrl,
   parseHeaderOverridesJson,
+  readQwenCodingLimitObservations,
   readPlanType,
   serializeHeaderOverrideRows,
   splitHeaderOverridesObject,
   validateHeaderOverrideRows
 } from '../credentialsBuilder'
+
+describe('Qwen Coding Plan defaults and observations', () => {
+  it('uses the official PAYG and Coding endpoints for each supported protocol', () => {
+    expect(defaultCNBaseUrl('qwen', 'payg', 'chat_completions')).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1')
+    expect(defaultCNBaseUrl('qwen', 'coding', 'chat_completions')).toBe('https://coding.dashscope.aliyuncs.com/v1')
+    expect(defaultCNBaseUrl('qwen', 'payg', 'anthropic')).toBe('https://dashscope.aliyuncs.com/apps/anthropic')
+    expect(defaultCNBaseUrl('qwen', 'coding', 'anthropic')).toBe('https://coding.dashscope.aliyuncs.com/apps/anthropic')
+    expect(cnSupportsNativeResponses('qwen')).toBe(false)
+    expect(defaultCNAdaptiveBaseUrls('qwen', 'coding')).toEqual({
+      chat_completions: 'https://coding.dashscope.aliyuncs.com/v1',
+      anthropic: 'https://coding.dashscope.aliyuncs.com/apps/anthropic',
+      responses: ''
+    })
+  })
+
+  it('reads only valid Qwen upstream observations from account extra', () => {
+    expect(readQwenCodingLimitObservations({
+      qwen_coding_5h_limit: { window: '5h', observed_at: '2026-09-11T01:00:00Z', retry_at: '2026-09-11T02:00:00Z' },
+      qwen_coding_weekly_limit: { window: 'weekly', observed_at: '2026-09-10T01:00:00Z' },
+      qwen_coding_monthly_limit: { window: 'monthly', observed_at: 'not-a-date' },
+      qwen_coding_invalid_limit: { window: '5h', observed_at: '2026-09-11T01:00:00Z' }
+    })).toEqual([
+      { window: '5h', observed_at: '2026-09-11T01:00:00Z', retry_at: '2026-09-11T02:00:00Z' },
+      { window: 'weekly', observed_at: '2026-09-10T01:00:00Z' }
+    ])
+  })
+})
 
 describe('applyInterceptWarmup', () => {
   it('create + enabled=true: should set intercept_warmup_requests to true', () => {

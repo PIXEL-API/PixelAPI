@@ -573,7 +573,10 @@ func ensureUsageBillingLog(ctx context.Context, tx *sql.Tx, cmd *service.UsageBi
 	query := usageBillingUsageLogInsertQuery()
 	if err := scanSingleRow(ctx, tx, query, prepared.args, &log.ID, &log.CreatedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) && prepared.requestID != "" {
-			if err := scanSingleRow(ctx, tx, "SELECT id, created_at FROM usage_logs WHERE request_id = $1 AND api_key_id = $2", []any{prepared.requestID, log.APIKeyID}, &log.ID, &log.CreatedAt); err != nil {
+			if err := scanSingleRow(ctx, tx, "SELECT id, created_at FROM usage_logs WHERE request_id = $1 AND api_key_id = $2 AND user_id = $3 AND account_id = $4", []any{prepared.requestID, log.APIKeyID, log.UserID, log.AccountID}, &log.ID, &log.CreatedAt); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return 0, service.ErrUsageBillingRequestConflict
+				}
 				return 0, err
 			}
 			log.RateMultiplier = prepared.rateMultiplier
@@ -641,6 +644,8 @@ func usageBillingUsageLogInsertQuery() string {
 			billing_tier,
 			billing_mode,
 			account_stats_cost,
+			upstream_request_id,
+			billing_error,
 			created_at
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9,
@@ -648,9 +653,63 @@ func usageBillingUsageLogInsertQuery() string {
 			$12, $13, $14, $15,
 			$16, $17, $18, $19,
 			$20, $21, $22, $23, $24, $25,
-			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54
+			$26, $27, $28, $29, $30, $31, $32, $33, $34, $35, $36, $37, $38, $39, $40, $41, $42, $43, $44, $45, $46, $47, $48, $49, $50, $51, $52, $53, $54, $55, $56
 		)
-		ON CONFLICT (request_id, api_key_id) DO NOTHING
+		ON CONFLICT (request_id, api_key_id) DO UPDATE SET
+			model = EXCLUDED.model,
+			requested_model = EXCLUDED.requested_model,
+			upstream_model = EXCLUDED.upstream_model,
+			upstream_response_model = EXCLUDED.upstream_response_model,
+			upstream_model_mismatch = EXCLUDED.upstream_model_mismatch,
+			group_id = EXCLUDED.group_id,
+			subscription_id = EXCLUDED.subscription_id,
+			input_tokens = EXCLUDED.input_tokens,
+			output_tokens = EXCLUDED.output_tokens,
+			cache_creation_tokens = EXCLUDED.cache_creation_tokens,
+			cache_read_tokens = EXCLUDED.cache_read_tokens,
+			cache_creation_5m_tokens = EXCLUDED.cache_creation_5m_tokens,
+			cache_creation_1h_tokens = EXCLUDED.cache_creation_1h_tokens,
+			image_output_tokens = EXCLUDED.image_output_tokens,
+			image_output_cost = EXCLUDED.image_output_cost,
+			image_input_tokens = EXCLUDED.image_input_tokens,
+			image_input_cost = EXCLUDED.image_input_cost,
+			input_cost = EXCLUDED.input_cost,
+			output_cost = EXCLUDED.output_cost,
+			cache_creation_cost = EXCLUDED.cache_creation_cost,
+			cache_read_cost = EXCLUDED.cache_read_cost,
+			total_cost = EXCLUDED.total_cost,
+			actual_cost = EXCLUDED.actual_cost,
+			rate_multiplier = EXCLUDED.rate_multiplier,
+			rate_multiplier_source = EXCLUDED.rate_multiplier_source,
+			account_rate_multiplier = EXCLUDED.account_rate_multiplier,
+			billing_type = EXCLUDED.billing_type,
+			request_type = EXCLUDED.request_type,
+			stream = EXCLUDED.stream,
+			openai_ws_mode = EXCLUDED.openai_ws_mode,
+			duration_ms = EXCLUDED.duration_ms,
+			first_token_ms = EXCLUDED.first_token_ms,
+			user_agent = EXCLUDED.user_agent,
+			ip_address = EXCLUDED.ip_address,
+			image_count = EXCLUDED.image_count,
+			image_size = EXCLUDED.image_size,
+			video_count = EXCLUDED.video_count,
+			video_resolution = EXCLUDED.video_resolution,
+			video_duration_seconds = EXCLUDED.video_duration_seconds,
+			service_tier = EXCLUDED.service_tier,
+			reasoning_effort = EXCLUDED.reasoning_effort,
+			inbound_endpoint = EXCLUDED.inbound_endpoint,
+			upstream_endpoint = EXCLUDED.upstream_endpoint,
+			cache_ttl_overridden = EXCLUDED.cache_ttl_overridden,
+			channel_id = EXCLUDED.channel_id,
+			model_mapping_chain = EXCLUDED.model_mapping_chain,
+			billing_tier = EXCLUDED.billing_tier,
+			billing_mode = EXCLUDED.billing_mode,
+			account_stats_cost = EXCLUDED.account_stats_cost,
+			upstream_request_id = EXCLUDED.upstream_request_id,
+			billing_error = EXCLUDED.billing_error
+		WHERE usage_logs.billing_error IS NOT NULL
+			AND usage_logs.user_id = EXCLUDED.user_id
+			AND usage_logs.account_id = EXCLUDED.account_id
 		RETURNING id, created_at
 	`
 }

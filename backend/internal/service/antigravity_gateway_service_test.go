@@ -135,6 +135,25 @@ func (s *httpUpstreamStub) DoWithTLS(_ *http.Request, _ string, _ int64, _ int, 
 	return s.resp, s.err
 }
 
+func TestAntigravityForwardUpstreamRejectionDoesNotProduceBillingResult(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const rejection = `{"error":{"type":"invalid_request_error","message":"invalid request"}}`
+	svc := &AntigravityGatewayService{httpUpstream: &httpUpstreamStub{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": {"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(rejection)),
+	}}}
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	account := &Account{ID: 101, Type: AccountTypeAPIKey, Credentials: map[string]any{"base_url": "https://upstream.example", "api_key": "test-key"}}
+	result, err := svc.ForwardUpstream(context.Background(), c, account, []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}]}`))
+	require.ErrorContains(t, err, "status 400")
+	require.Nil(t, result, "an upstream rejection must not trigger per-request billing")
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.JSONEq(t, rejection, w.Body.String())
+}
+
 type queuedHTTPUpstreamStub struct {
 	responses     []*http.Response
 	errors        []error

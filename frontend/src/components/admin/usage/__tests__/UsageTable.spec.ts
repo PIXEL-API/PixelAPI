@@ -4,6 +4,9 @@ import { nextTick } from 'vue'
 
 import UsageTable from '../UsageTable.vue'
 
+const { copyToClipboard } = vi.hoisted(() => ({ copyToClipboard: vi.fn() }))
+vi.mock('@/composables/useClipboard', () => ({ useClipboard: () => ({ copyToClipboard }) }))
+
 const messages: Record<string, string> = {
   'usage.costDetails': 'Cost Breakdown',
   'admin.usage.inputCost': 'Input Cost',
@@ -34,6 +37,10 @@ const messages: Record<string, string> = {
   'admin.usage.outputTokens': 'Output Tokens',
   'admin.usage.cacheReadTokens': 'Cache Read Tokens',
   'admin.usage.cacheCreationTokens': 'Cache Creation Tokens',
+  'admin.usage.billingUnsettled': 'Unsettled',
+  'admin.usage.billingPricingMissing': 'Missing pricing: usage retained, no charge applied',
+  'admin.usage.copyUpstreamRequestId': 'Copy upstream request ID',
+  'admin.usage.upstreamRequestIdCopied': 'Upstream request ID copied',
 }
 
 vi.mock('vue-i18n', async () => {
@@ -54,6 +61,7 @@ const DataTableStub = {
         <slot name="cell-model" :row="row" :value="row.model" />
         <slot name="cell-tokens" :row="row" />
         <slot name="cell-cost" :row="row" />
+        <slot name="cell-upstream_request_id" :row="row" />
       </div>
     </div>
   `,
@@ -72,6 +80,26 @@ describe('admin UsageTable tooltip', () => {
       height: 20,
       toJSON: () => ({}),
     } as DOMRect)
+  })
+
+  it('marks unpriced usage as unsettled and copies the upstream ID instead of the billing key', async () => {
+    const row = {
+      request_id: 'client:local-billing-key',
+      upstream_request_id: 'upstream-reconciliation-id',
+      billing_error: 'pricing_missing',
+      model: 'upstream-model',
+      actual_cost: 0, total_cost: 0, rate_multiplier: 1,
+      input_tokens: 10, output_tokens: 6, cache_creation_tokens: 0, cache_read_tokens: 0,
+    }
+    const wrapper = mount(UsageTable, {
+      props: { data: [row], columns: [] },
+      global: { stubs: { DataTable: DataTableStub, EmptyState: true, Icon: true, Teleport: true } },
+    })
+    expect(wrapper.text()).toContain('Unsettled')
+    expect(wrapper.find('[title="Missing pricing: usage retained, no charge applied"]').exists()).toBe(true)
+    await wrapper.get('[aria-label="Copy upstream request ID"]').trigger('click')
+    expect(copyToClipboard).toHaveBeenCalledWith('upstream-reconciliation-id', 'Upstream request ID copied')
+    wrapper.unmount()
   })
 
   it('shows service tier and billing breakdown in cost tooltip', async () => {

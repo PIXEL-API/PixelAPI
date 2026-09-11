@@ -232,6 +232,17 @@ func (s *GatewayService) debugModelRoutingEnabled() bool {
 	return s.debugModelRouting.Load()
 }
 
+// modelRoutingAppliesToTargetPlatform keeps model_routing enabled for the
+// platforms whose account selection supports explicit primary/failover lists.
+func modelRoutingAppliesToTargetPlatform(platform string) bool {
+	return platform == PlatformAnthropic || platform == PlatformOpenAI
+}
+
+func modelRoutingAppliesToPlatform(targetPlatform, groupPlatform string) bool {
+	return modelRoutingAppliesToTargetPlatform(targetPlatform) &&
+		(groupPlatform == targetPlatform || groupPlatform == PlatformComposite)
+}
+
 func (s *GatewayService) debugClaudeMimicEnabled() bool {
 	if s == nil {
 		return false
@@ -584,6 +595,7 @@ type ClaudeUsage struct {
 // ForwardResult 转发结果
 type ForwardResult struct {
 	RequestID            string
+	UpstreamRequestID    *string
 	Usage                ClaudeUsage
 	BillingUsageComplete bool
 	Model                string
@@ -1948,7 +1960,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		return nil, err
 	}
 	preferOAuth := platform == PlatformGemini
-	if s.debugModelRoutingEnabled() && platform == PlatformAnthropic && requestedModel != "" {
+	if s.debugModelRoutingEnabled() && requestedModel != "" && modelRoutingAppliesToTargetPlatform(platform) {
 		logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] load-aware enabled: group_id=%v model=%s session=%s platform=%s", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), platform)
 	}
 
@@ -1996,7 +2008,7 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 	// 获取模型路由配置（仅 anthropic 平台）
 	var routingAccountIDs []int64
-	if group != nil && requestedModel != "" && group.Platform == PlatformAnthropic {
+	if group != nil && requestedModel != "" && modelRoutingAppliesToPlatform(platform, group.Platform) {
 		routingAccountIDs = group.GetRoutingAccountIDs(requestedModel)
 		if s.debugModelRoutingEnabled() {
 			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] context group routing: group_id=%d model=%s enabled=%v rules=%d matched_ids=%v session=%s sticky_account=%d",
@@ -2770,7 +2782,7 @@ func (s *GatewayService) ResolveGroupByID(ctx context.Context, groupID int64) (*
 }
 
 func (s *GatewayService) routingAccountIDsForRequest(ctx context.Context, groupID *int64, requestedModel string, platform string) []int64 {
-	if groupID == nil || requestedModel == "" || platform != PlatformAnthropic {
+	if groupID == nil || requestedModel == "" || !modelRoutingAppliesToTargetPlatform(platform) {
 		return nil
 	}
 	group, err := s.resolveGroupByID(ctx, *groupID)
@@ -2781,7 +2793,7 @@ func (s *GatewayService) routingAccountIDsForRequest(ctx context.Context, groupI
 		return nil
 	}
 	// Preserve existing behavior: model routing only applies to anthropic groups.
-	if group.Platform != PlatformAnthropic {
+	if !modelRoutingAppliesToPlatform(platform, group.Platform) {
 		if s.debugModelRoutingEnabled() {
 			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] skip: non-anthropic group platform: group_id=%d group_platform=%s model=%s", group.ID, group.Platform, requestedModel)
 		}
@@ -6201,14 +6213,15 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				)
 				if streamingResultHasBillableUsage(streamResult) {
 					return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
-						RequestID:        resp.Header.Get("x-request-id"),
-						Usage:            *streamResult.usage,
-						Model:            originalModel,
-						UpstreamModel:    mappedModel,
-						Stream:           reqStream,
-						Duration:         time.Since(startTime),
-						FirstTokenMs:     streamResult.firstTokenMs,
-						ClientDisconnect: streamResult.clientDisconnect,
+						RequestID:         resp.Header.Get("x-request-id"),
+						UpstreamRequestID: upstreamUsageRequestID(resp.Header, resp.Header.Get("x-request-id")),
+						Usage:             *streamResult.usage,
+						Model:             originalModel,
+						UpstreamModel:     mappedModel,
+						Stream:            reqStream,
+						Duration:          time.Since(startTime),
+						FirstTokenMs:      streamResult.firstTokenMs,
+						ClientDisconnect:  streamResult.clientDisconnect,
 					}, false), &BillableStreamUsageError{Err: err}
 				}
 				return nil, &UpstreamFailoverError{
@@ -6218,14 +6231,15 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			}
 			if streamingResultHasBillableUsage(streamResult) {
 				return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
-					RequestID:        resp.Header.Get("x-request-id"),
-					Usage:            *streamResult.usage,
-					Model:            originalModel,
-					UpstreamModel:    mappedModel,
-					Stream:           reqStream,
-					Duration:         time.Since(startTime),
-					FirstTokenMs:     streamResult.firstTokenMs,
-					ClientDisconnect: streamResult.clientDisconnect,
+					RequestID:         resp.Header.Get("x-request-id"),
+					UpstreamRequestID: upstreamUsageRequestID(resp.Header, resp.Header.Get("x-request-id")),
+					Usage:             *streamResult.usage,
+					Model:             originalModel,
+					UpstreamModel:     mappedModel,
+					Stream:            reqStream,
+					Duration:          time.Since(startTime),
+					FirstTokenMs:      streamResult.firstTokenMs,
+					ClientDisconnect:  streamResult.clientDisconnect,
 				}, false), &BillableStreamUsageError{Err: err}
 			}
 			return nil, err
@@ -6241,14 +6255,15 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 
 	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
-		RequestID:        resp.Header.Get("x-request-id"),
-		Usage:            *usage,
-		Model:            originalModel, // 使用原始模型用于计费和日志
-		UpstreamModel:    mappedModel,
-		Stream:           reqStream,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
+		RequestID:         resp.Header.Get("x-request-id"),
+		UpstreamRequestID: upstreamUsageRequestID(resp.Header, resp.Header.Get("x-request-id")),
+		Usage:             *usage,
+		Model:             originalModel, // 使用原始模型用于计费和日志
+		UpstreamModel:     mappedModel,
+		Stream:            reqStream,
+		Duration:          time.Since(startTime),
+		FirstTokenMs:      firstTokenMs,
+		ClientDisconnect:  clientDisconnect,
 	}, true), nil
 }
 
@@ -6498,14 +6513,15 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		if err != nil {
 			if streamingResultHasBillableUsage(streamResult) {
 				return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
-					RequestID:        resp.Header.Get("x-request-id"),
-					Usage:            *streamResult.usage,
-					Model:            input.OriginalModel,
-					UpstreamModel:    input.RequestModel,
-					Stream:           input.RequestStream,
-					Duration:         time.Since(input.StartTime),
-					FirstTokenMs:     streamResult.firstTokenMs,
-					ClientDisconnect: streamResult.clientDisconnect,
+					RequestID:         resp.Header.Get("x-request-id"),
+					UpstreamRequestID: upstreamUsageRequestID(resp.Header, resp.Header.Get("x-request-id")),
+					Usage:             *streamResult.usage,
+					Model:             input.OriginalModel,
+					UpstreamModel:     input.RequestModel,
+					Stream:            input.RequestStream,
+					Duration:          time.Since(input.StartTime),
+					FirstTokenMs:      streamResult.firstTokenMs,
+					ClientDisconnect:  streamResult.clientDisconnect,
 				}, false), &BillableStreamUsageError{Err: err}
 			}
 			return nil, err
@@ -6532,14 +6548,15 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 	}
 
 	return applyObservedUpstreamResponseModelToForwardResult(c, &ForwardResult{
-		RequestID:        resp.Header.Get("x-request-id"),
-		Usage:            *usage,
-		Model:            input.OriginalModel,
-		UpstreamModel:    input.RequestModel,
-		Stream:           input.RequestStream,
-		Duration:         time.Since(input.StartTime),
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
+		RequestID:         resp.Header.Get("x-request-id"),
+		UpstreamRequestID: upstreamUsageRequestID(resp.Header, resp.Header.Get("x-request-id")),
+		Usage:             *usage,
+		Model:             input.OriginalModel,
+		UpstreamModel:     input.RequestModel,
+		Stream:            input.RequestStream,
+		Duration:          time.Since(input.StartTime),
+		FirstTokenMs:      firstTokenMs,
+		ClientDisconnect:  clientDisconnect,
 	}, true), nil
 }
 
@@ -7239,14 +7256,15 @@ func (s *GatewayService) forwardBedrock(
 		if err != nil {
 			if streamingResultHasBillableUsage(streamResult) {
 				return &ForwardResult{
-					RequestID:        resp.Header.Get("x-amzn-requestid"),
-					Usage:            *streamResult.usage,
-					Model:            reqModel,
-					UpstreamModel:    mappedModel,
-					Stream:           true,
-					Duration:         time.Since(startTime),
-					FirstTokenMs:     streamResult.firstTokenMs,
-					ClientDisconnect: streamResult.clientDisconnect,
+					RequestID:         resp.Header.Get("x-amzn-requestid"),
+					UpstreamRequestID: upstreamUsageRequestID(resp.Header, resp.Header.Get("x-amzn-requestid")),
+					Usage:             *streamResult.usage,
+					Model:             reqModel,
+					UpstreamModel:     mappedModel,
+					Stream:            true,
+					Duration:          time.Since(startTime),
+					FirstTokenMs:      streamResult.firstTokenMs,
+					ClientDisconnect:  streamResult.clientDisconnect,
 				}, &BillableStreamUsageError{Err: err}
 			}
 			return nil, err
@@ -7273,14 +7291,15 @@ func (s *GatewayService) forwardBedrock(
 	}
 
 	return &ForwardResult{
-		RequestID:        resp.Header.Get("x-amzn-requestid"),
-		Usage:            *usage,
-		Model:            reqModel,
-		UpstreamModel:    mappedModel,
-		Stream:           reqStream,
-		Duration:         time.Since(startTime),
-		FirstTokenMs:     firstTokenMs,
-		ClientDisconnect: clientDisconnect,
+		RequestID:         resp.Header.Get("x-amzn-requestid"),
+		UpstreamRequestID: upstreamUsageRequestID(resp.Header, resp.Header.Get("x-amzn-requestid")),
+		Usage:             *usage,
+		Model:             reqModel,
+		UpstreamModel:     mappedModel,
+		Stream:            reqStream,
+		Duration:          time.Since(startTime),
+		FirstTokenMs:      firstTokenMs,
+		ClientDisconnect:  clientDisconnect,
 	}, nil
 }
 
@@ -8537,6 +8556,12 @@ func sanitizeStreamError(err error) string {
 // 支持 Claude 风格的错误格式：{"type":"error","error":{"type":"...","message":"..."}}
 func ExtractUpstreamErrorMessage(body []byte) string {
 	return extractUpstreamErrorMessage(body)
+}
+
+// SanitizeUpstreamErrorMessage redacts sensitive query values before an
+// upstream error is recorded or returned to a client.
+func SanitizeUpstreamErrorMessage(message string) string {
+	return sanitizeUpstreamErrorMessage(message)
 }
 
 func extractUpstreamErrorMessage(body []byte) string {
@@ -9895,7 +9920,7 @@ func finalizeLegacyUsageBillingWallet(p *postUsageBillingParams, deps *billingDe
 }
 
 func resolveUsageBillingRequestID(ctx context.Context, upstreamRequestID string) string {
-	if requestID := strings.TrimSpace(upstreamRequestID); requestID != "" {
+	if requestID := strings.TrimSpace(upstreamRequestID); isForcedUsageBillingRequestID(requestID) {
 		return requestID
 	}
 	if ctx != nil {
@@ -9906,7 +9931,20 @@ func resolveUsageBillingRequestID(ctx context.Context, upstreamRequestID string)
 			return "local:" + strings.TrimSpace(requestID)
 		}
 	}
+	if requestID := strings.TrimSpace(upstreamRequestID); requestID != "" {
+		return requestID
+	}
 	return "generated:" + generateRequestID()
+}
+
+// Ordinary HTTP calls use the gateway-generated client request ID so an
+// upstream that reuses response IDs cannot collapse independent charges.
+// Durable media/search events retain their IDs across polling or callbacks.
+func isForcedUsageBillingRequestID(requestID string) bool {
+	return strings.HasPrefix(requestID, "web_search:") ||
+		strings.HasPrefix(requestID, "grok-video:") ||
+		strings.HasPrefix(requestID, "grok_audio:") ||
+		strings.HasPrefix(requestID, "grok_realtime:")
 }
 
 func resolveUsageBillingPayloadFingerprint(ctx context.Context, requestPayloadHash string) string {
@@ -10627,6 +10665,16 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 	// 计算费用
 	cost, err := s.calculateRecordUsageCost(ctx, result, apiKey, billingModel, multiplier, opts)
 	if err != nil {
+		billingType := BillingTypeBalance
+		if apiKey.Group != nil && apiKey.Group.IsSubscriptionType() {
+			billingType = BillingTypeSubscription
+		}
+		// Preserve the measured usage, but keep the original error visible.
+		// Missing pricing must never become a successful zero-cost settlement.
+		usageLog := s.buildRecordUsageLog(ctx, input, result, apiKey, user, account, subscription,
+			requestedModel, multiplier, rateMultiplierSource, account.BillingRateMultiplier(), billingType, cacheTTLOverridden, nil, opts)
+		usageLog.BillingError = usageBillingErrorCode(err)
+		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 		return err
 	}
 	// response_model is an explicit opt-in for token-only requests. The
@@ -10723,6 +10771,7 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 		// 计费失败不能连用量记录一起丢：账单可以事后补，用量凭证丢了就再也拿不回来。
 		// ActualCost 归零表示「这条用量未产生扣费」，避免对账时被当成已计费。
 		usageLog.ActualCost = 0
+		usageLog.BillingError = usageBillingErrorCode(billingErr)
 		writeUsageLogBestEffort(ctx, s.usageLogRepo, usageLog, "service.gateway")
 		return billingErr
 	}
@@ -10972,6 +11021,10 @@ func (s *GatewayService) buildRecordUsageLog(
 ) *UsageLog {
 	durationMs := int(result.Duration.Milliseconds())
 	requestID := resolveUsageBillingRequestID(ctx, result.RequestID)
+	upstreamRequestID := result.UpstreamRequestID
+	if upstreamRequestID == nil {
+		upstreamRequestID = optionalTrimmedStringPtr(result.RequestID)
+	}
 	sentModel := upstreamSentModel(result.Model, result.UpstreamModel)
 	if result.UpstreamResponseModelConflict {
 		slog.Warn("upstream_response_model_conflict",
@@ -10987,6 +11040,7 @@ func (s *GatewayService) buildRecordUsageLog(
 		APIKeyID:              apiKey.ID,
 		AccountID:             account.ID,
 		RequestID:             requestID,
+		UpstreamRequestID:     upstreamRequestID,
 		Model:                 result.Model,
 		RequestedModel:        requestedModel,
 		UpstreamModel:         optionalNonEqualStringPtr(result.UpstreamModel, result.Model),
@@ -11174,6 +11228,26 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return fmt.Errorf("parse request: empty request")
 	}
 
+	// 国产供应商只有 Anthropic 或 adaptive 协议才具备原生 Anthropic
+	// count_tokens 转发能力。
+	// 这条请求仍由 GatewayHandler 完成统一的计费资格、账号选择及共享账号
+	// 生命周期处理；这里只负责把请求按原生 Anthropic 协议转发出去。
+	if account != nil && account.IsCNProvider() {
+		// count_tokens is an Anthropic endpoint. Adaptive accounts choose the
+		// protocol per endpoint, so they use the native Anthropic path here too
+		// when an Anthropic base URL is configured. Qwen's official Anthropic
+		// endpoint only implements /v1/messages and has no count_tokens API.
+		if account.Platform == PlatformQwen {
+			s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for Qwen")
+			return nil
+		}
+		if !account.IsAnthropicProtocol() && !account.IsAdaptiveAPIProtocol() {
+			s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for this platform")
+			return nil
+		}
+		return s.forwardCountTokensViaNativeAnthropic(ctx, c, account, parsed.Body)
+	}
+
 	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
 		passthroughBody := parsed.Body
 		if reqModel := parsed.Model; reqModel != "" {
@@ -11357,6 +11431,141 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 
 	// 透传成功响应
 	c.Data(resp.StatusCode, "application/json", respBody)
+	return nil
+}
+
+// forwardCountTokensViaNativeAnthropic 转发国产供应商原生 Anthropic
+// count_tokens 请求。请求体保持 Anthropic 结构，只应用账号模型映射；响应
+// 仅接受供应商返回的 input_tokens 字段，避免把不兼容的响应静默当成成功。
+func (s *GatewayService) forwardCountTokensViaNativeAnthropic(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+) error {
+	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	if model == "" {
+		s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", "model is required")
+		return fmt.Errorf("count_tokens: missing model in request")
+	}
+	if mapped := account.GetMappedModel(model); mapped != model {
+		rewritten, err := sjson.SetBytes(body, "model", mapped)
+		if err != nil {
+			s.countTokensError(c, http.StatusInternalServerError, "api_error", "Failed to rewrite model")
+			return fmt.Errorf("count_tokens: rewrite model: %w", err)
+		}
+		body = rewritten
+	}
+
+	apiKey := strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
+	if apiKey == "" {
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Account api_key is missing")
+		return fmt.Errorf("count_tokens: account %d missing api_key", account.ID)
+	}
+	baseURL := strings.TrimSpace(account.GetAnthropicProtocolBaseURL())
+	if baseURL == "" {
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Account Anthropic base url is missing")
+		return fmt.Errorf("count_tokens: account %d has no anthropic protocol base url", account.ID)
+	}
+	validatedURL, err := s.validateUpstreamBaseURL(baseURL)
+	if err != nil {
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Invalid account base url")
+		return fmt.Errorf("count_tokens: invalid base_url: %w", err)
+	}
+	targetURL := strings.TrimSuffix(buildOpenAIMessagesURL(validatedURL), "/messages") + "/messages/count_tokens"
+	upstreamReq, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	if err != nil {
+		s.countTokensError(c, http.StatusInternalServerError, "api_error", "Failed to build request")
+		return fmt.Errorf("count_tokens: build request: %w", err)
+	}
+
+	// 只转发 Anthropic 客户端允许的请求头，并清除入站认证后注入账号密钥。
+	if c != nil && c.Request != nil {
+		for key, values := range c.Request.Header {
+			lowerKey := strings.ToLower(strings.TrimSpace(key))
+			if !allowedHeaders[lowerKey] {
+				continue
+			}
+			wireKey := resolveWireCasing(key)
+			for _, value := range values {
+				addHeaderRaw(upstreamReq.Header, wireKey, value)
+			}
+		}
+	}
+	upstreamReq.Header.Del("authorization")
+	upstreamReq.Header.Del("x-api-key")
+	upstreamReq.Header.Del("x-goog-api-key")
+	upstreamReq.Header.Del("cookie")
+	setAnthropicAPIKeyAuthHeader(upstreamReq.Header, account, apiKey)
+	if getHeaderRaw(upstreamReq.Header, "content-type") == "" {
+		setHeaderRaw(upstreamReq.Header, "content-type", "application/json")
+	}
+	if getHeaderRaw(upstreamReq.Header, "anthropic-version") == "" {
+		setHeaderRaw(upstreamReq.Header, "anthropic-version", "2023-06-01")
+	}
+	account.ApplyHeaderOverrides(upstreamReq.Header)
+
+	proxyURL := ""
+	if account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	if s.httpUpstream == nil {
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "HTTP upstream is not configured")
+		return fmt.Errorf("count_tokens: http upstream is not configured")
+	}
+	upstreamReq = upstreamReq.WithContext(WithHTTPUpstreamProfile(upstreamReq.Context(), HTTPUpstreamProfileOpenAI))
+	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	if err != nil {
+		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(err.Error()), "")
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
+		return fmt.Errorf("count_tokens: upstream request failed: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	respBody, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, func(*gin.Context) {
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream response too large")
+	})
+	if err != nil {
+		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
+			s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
+		}
+		return fmt.Errorf("count_tokens: read response: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		if s.rateLimitService != nil {
+			s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+		}
+		message := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
+		setOpsUpstreamError(c, resp.StatusCode, message, "")
+		s.countTokensError(c, resp.StatusCode, "upstream_error", "Upstream request failed")
+		return fmt.Errorf("count_tokens: upstream error: %d", resp.StatusCode)
+	}
+	inputTokens := gjson.GetBytes(respBody, "input_tokens")
+	validInputTokens := gjson.ValidBytes(respBody) && inputTokens.Exists() && inputTokens.Type == gjson.Number
+	if validInputTokens {
+		raw := strings.TrimSpace(inputTokens.Raw)
+		// Anthropic's count response is an unsigned integer. Reject decimal,
+		// exponent, negative, non-finite, and overflowing representations rather
+		// than allowing gjson.Int() to truncate or saturate them.
+		if raw == "" {
+			validInputTokens = false
+		} else {
+			for _, r := range raw {
+				if r < '0' || r > '9' {
+					validInputTokens = false
+					break
+				}
+			}
+			if validInputTokens {
+				_, parseErr := strconv.ParseUint(raw, 10, 64)
+				validInputTokens = parseErr == nil
+			}
+		}
+	}
+	if !validInputTokens {
+		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream response missing input_tokens")
+		return fmt.Errorf("count_tokens: response missing input_tokens field")
+	}
+	c.Data(http.StatusOK, "application/json", respBody)
 	return nil
 }
 

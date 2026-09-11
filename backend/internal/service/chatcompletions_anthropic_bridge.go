@@ -1119,6 +1119,11 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
 	}
 	baseURL := strings.TrimSpace(account.GetOpenAIBaseURL())
+	if account.IsCNProvider() && account.IsAnthropicProtocol() {
+		// This compatibility bridge emits Chat Completions. An Anthropic
+		// protocol base must therefore not be used to construct /chat/completions.
+		baseURL = strings.TrimSpace(account.GetOpenAIFormatBaseURL())
+	}
 	if account.IsOpencode() {
 		baseURL = account.GetOpencodeBaseURL()
 	} else if baseURL == "" {
@@ -1179,7 +1184,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		_ = resp.Body.Close()
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
+		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{Platform: account.Platform, AccountID: account.ID, AccountName: account.Name, UpstreamStatusCode: resp.StatusCode, UpstreamRequestID: resp.Header.Get("x-request-id"), Kind: "failover", Message: upstreamMsg})
 			s.handleOpenAIAccountUpstreamErrorForModel(ctx, account, originalModel, resp.StatusCode, resp.Header, respBody)
 			return nil, newOpenAIUpstreamFailoverError(

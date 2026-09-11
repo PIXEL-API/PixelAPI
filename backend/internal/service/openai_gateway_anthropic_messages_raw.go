@@ -22,8 +22,8 @@ import (
 const opencodeMessagesRawEndpoint = "/v1/messages"
 
 // forwardAsRawAnthropicMessages 将 Anthropic Messages 请求体原样 POST 到
-// OpenCode Go 的 /messages 端点。opencode 账号只走这条 raw 转发路径，不做
-// Anthropic → OpenAI 协议转换，计费通过解析 Anthropic usage 映射到 OpenAIUsage。
+// OpenCode 或国产平台的原生 /messages 端点，不做协议转换，计费通过解析
+// Anthropic usage 映射到 OpenAIUsage。
 func (s *OpenAIGatewayService) forwardAsRawAnthropicMessages(
 	ctx context.Context,
 	c *gin.Context,
@@ -32,7 +32,11 @@ func (s *OpenAIGatewayService) forwardAsRawAnthropicMessages(
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
-	SetActualOpenAIUpstreamEndpoint(c, opencodeMessagesRawEndpoint)
+	endpoint := opencodeMessagesRawEndpoint
+	if account.IsCNProvider() {
+		endpoint = "/v1/messages"
+	}
+	SetActualOpenAIUpstreamEndpoint(c, endpoint)
 
 	originalModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
 	if originalModel == "" {
@@ -61,6 +65,9 @@ func (s *OpenAIGatewayService) forwardAsRawAnthropicMessages(
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
 	}
 	baseURL := account.GetOpencodeBaseURL()
+	if account.IsCNProvider() {
+		baseURL = account.GetAnthropicProtocolBaseURL()
+	}
 	validatedURL, err := s.validateUpstreamBaseURL(baseURL)
 	if err != nil {
 		return nil, err
@@ -74,7 +81,7 @@ func (s *OpenAIGatewayService) forwardAsRawAnthropicMessages(
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 	upstreamReq.Header.Set("Content-Type", "application/json")
-	// opencode 的 /messages 端点是 Anthropic 兼容，用 x-api-key 鉴权（不是 Authorization: Bearer）。
+	// opencode 和国产平台的原生 Anthropic 端点默认使用 x-api-key 鉴权。
 	// 实测 Bearer 会被上游判为 "Missing API key"。
 	upstreamReq.Header.Set("x-api-key", token)
 	upstreamReq.Header.Set("anthropic-version", "2023-06-01")
@@ -129,7 +136,7 @@ func (s *OpenAIGatewayService) forwardAsRawAnthropicMessages(
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
+		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,

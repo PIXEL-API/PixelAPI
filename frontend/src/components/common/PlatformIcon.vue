@@ -25,6 +25,27 @@
       d="M9.27 15.29l7.978-5.897c.391-.29.95-.177 1.137.272.98 2.369.542 5.215-1.41 7.169-1.951 1.954-4.667 2.382-7.149 1.406l-2.711 1.257c3.889 2.661 8.611 2.003 11.562-.953 2.341-2.344 3.066-5.539 2.388-8.42l.006.007c-.983-4.232.242-5.924 2.75-9.383.06-.082.12-.164.179-.248l-3.301 3.305v-.01L9.267 15.292M7.623 16.723c-2.792-2.67-2.31-6.801.071-9.184 1.761-1.763 4.647-2.483 7.166-1.425l2.705-1.25a7.808 7.808 0 00-1.829-1A8.975 8.975 0 005.984 5.83c-2.533 2.536-3.33 6.436-1.962 9.764 1.022 2.487-.653 4.246-2.34 6.022-.599.63-1.199 1.259-1.682 1.925l7.62-6.815"
     />
   </svg>
+  <!-- Kimi / Moonshot logo mark -->
+  <svg v-else-if="platform === 'kimi'" :class="sizeClass" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M4 5.5A3.5 3.5 0 0 1 7.5 2h9A3.5 3.5 0 0 1 20 5.5v8.9a3.5 3.5 0 0 1-3.5 3.5h-4.2l-4.6 3.2v-3.2H7.5A3.5 3.5 0 0 1 4 14.4V5.5Z" fill="currentColor" />
+    <path d="m8 7 3.5 3.5L15 7m-3.5 3.5V15" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+  <!-- Zhipu / GLM logo mark -->
+  <svg v-else-if="platform === 'zhipu'" :class="sizeClass" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M12 2.5 20 6v6.8c0 4.4-3.3 7.4-8 8.7-4.7-1.3-8-4.3-8-8.7V6l8-3.5Z" fill="currentColor" />
+    <path d="M8 8.5h8l-6 7h6" stroke="white" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+  <!-- DeepSeek logo mark -->
+  <svg v-else-if="platform === 'deepseek'" :class="sizeClass" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <path d="M4 13.2c0-5 3.7-8.7 8.3-8.7 4.3 0 7.7 2.9 7.7 7.1 0 4.9-4 8-8.4 8-2.4 0-4.5-.8-6.1-2.1" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" />
+    <path d="M7.2 8.1c1.1 1.1 2.6 1.7 4.1 1.7 1.8 0 3.4-.8 4.4-2.1M9 14.1h.01M14.7 14.1h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+  </svg>
+  <!-- MiniMax logo mark -->
+  <svg v-else-if="platform === 'minimax'" :class="sizeClass" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+    <rect x="3" y="3" width="18" height="18" rx="5" fill="currentColor" />
+    <path d="M7 15V9l5 4 5-4v6" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+  </svg>
+  <span v-else-if="platform === 'qwen'" :class="sizeClass" aria-hidden="true">Q</span>
   <!-- Fallback: generic platform icon -->
   <svg v-else :class="sizeClass" fill="currentColor" viewBox="0 0 24 24">
     <path
@@ -35,10 +56,10 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { GroupPlatform } from '@/types'
-
 interface Props {
-  platform?: GroupPlatform
+  /** Kept as a string so newly added provider platforms can render before the
+   * shared account/group type declarations are updated. */
+  platform?: string
   size?: 'xs' | 'sm' | 'md' | 'lg'
 }
 

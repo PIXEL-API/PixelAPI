@@ -193,6 +193,12 @@ export interface ImportCredentialContentsRequest {
   group_ids?: number[]
   expires_at?: number | null
   auto_pause_on_expired?: boolean
+  account_mode?: 'payg' | 'coding'
+  api_protocol?: 'adaptive' | 'chat_completions' | 'anthropic' | 'responses'
+  base_url?: string
+  api_base_urls?: Record<string, string>
+  zhipu_organization?: string
+  zhipu_project?: string
 }
 
 export interface ImportCredentialError {

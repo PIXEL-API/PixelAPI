@@ -642,8 +642,9 @@ const addableCandidateCount = computed(() => (
 
 const canCreateCompatibleAccount = computed(() => {
   const platform = normalizeComparableValue(props.listing?.platform)
-  return (platform === 'openai' || platform === 'anthropic' || platform === 'opencode')
-    && (platform === 'opencode' || isKnownLevel(props.listing?.account_level))
+  const allowsUnknownLevel = platform === 'opencode' || platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' || platform === 'minimax' || platform === 'qwen'
+  return (platform === 'openai' || platform === 'anthropic' || allowsUnknownLevel)
+    && (allowsUnknownLevel || isKnownLevel(props.listing?.account_level))
 })
 
 const allVisibleMembersSelected = computed(() => (

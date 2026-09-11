@@ -6,12 +6,36 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 )
 
 var ErrUsageBillingRequestIDRequired = errors.New("usage billing request_id is required")
 var ErrUsageBillingRequestConflict = errors.New("usage billing request fingerprint conflict")
+
+const (
+	UsageBillingErrorPricingMissing = "pricing_missing"
+	UsageBillingErrorFailed         = "billing_failed"
+)
+
+// SUB2API returns its gateway-generated correlation ID separately from the
+// model provider's x-request-id. Retain that ID for cross-gateway reconciliation.
+// Other providers keep the request ID already extracted by their adapter.
+func upstreamUsageRequestID(headers http.Header, providerRequestID string) *string {
+	if id := strings.TrimSpace(headers.Get("x-client-request-id")); id != "" {
+		return &id
+	}
+	return optionalTrimmedStringPtr(providerRequestID)
+}
+
+func usageBillingErrorCode(err error) *string {
+	code := UsageBillingErrorFailed
+	if isUsagePricingUnavailableError(err) {
+		code = UsageBillingErrorPricingMissing
+	}
+	return &code
+}
 
 // UsageBillingCommand describes one billable request that must be applied at most once.
 type UsageBillingCommand struct {

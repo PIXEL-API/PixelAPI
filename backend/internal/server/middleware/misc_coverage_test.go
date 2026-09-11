@@ -27,13 +27,17 @@ func TestClientRequestID_GeneratesWhenMissing(t *testing.T) {
 		id, ok := v.(string)
 		require.True(t, ok)
 		require.NotEmpty(t, id)
+		require.Equal(t, id, c.Writer.Header().Get("X-Client-Request-ID"))
 		c.Status(http.StatusOK)
 	})
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/t", nil)
+	req.Header.Set("X-Client-Request-ID", "untrusted-client-id")
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
+	require.NotEmpty(t, w.Header().Get("X-Client-Request-ID"))
+	require.NotEqual(t, "untrusted-client-id", w.Header().Get("X-Client-Request-ID"))
 }
 
 func TestClientRequestID_PreservesExisting(t *testing.T) {
@@ -53,6 +57,7 @@ func TestClientRequestID_PreservesExisting(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), ctxkey.ClientRequestID, "keep"))
 	r.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, "keep", w.Header().Get("X-Client-Request-ID"))
 }
 
 func TestRequestBodyLimit_LimitsBody(t *testing.T) {

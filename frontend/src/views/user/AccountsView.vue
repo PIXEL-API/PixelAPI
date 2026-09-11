@@ -305,6 +305,8 @@
               usage-cache-scope="user"
               :manual-refresh-token="usageManualRefreshToken"
             />
+            <CNProviderQuotaCell :account="row" scope="user" />
+            <CNProviderBalanceCell :account="row" scope="user" />
           </template>
 
           <template #cell-priority="{ value }">
@@ -570,6 +572,8 @@ import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
+import CNProviderQuotaCell from '@/components/account/CNProviderQuotaCell.vue'
+import CNProviderBalanceCell from '@/components/account/CNProviderBalanceCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import CreateAccountModal from '@/components/account/CreateAccountModal.vue'
 import EditAccountModal from '@/components/account/EditAccountModal.vue'
@@ -728,7 +732,12 @@ const platformOptions = computed<Array<{ value: AccountPlatform; label: string }
   { value: 'gemini', label: 'Gemini' },
   { value: 'antigravity', label: 'Antigravity' },
   { value: 'grok', label: 'Grok' },
-  { value: 'opencode', label: 'OpenCode' }
+  { value: 'opencode', label: 'OpenCode' },
+  { value: 'kimi', label: 'Kimi' },
+  { value: 'zhipu', label: '智谱 GLM' },
+  { value: 'deepseek', label: 'DeepSeek' },
+  { value: 'minimax', label: 'MiniMax' },
+  { value: 'qwen', label: '通义千问' }
 ])
 
 const typeOptions = computed<Array<{ value: AccountType; label: string }>>(() => [
@@ -1096,6 +1105,12 @@ function externalPlacementTitle(account: Account): string {
 function platformDisplayName(platform: Account['platform']): string {
   if (platform === 'openai') return 'OpenAI'
   if (platform === 'anthropic') return 'Anthropic'
+  if (platform === 'opencode') return 'OpenCode'
+  if (platform === 'kimi') return 'Kimi'
+  if (platform === 'zhipu') return '智谱 GLM'
+  if (platform === 'deepseek') return 'DeepSeek'
+  if (platform === 'minimax') return 'MiniMax'
+  if (platform === 'qwen') return '通义千问'
   return String(platform)
 }
 

@@ -474,9 +474,171 @@ func TestFetchCodexModelsManifestRejectsInvalidEnvelopeWithoutCaching(t *testing
 }
 
 func TestConvertOpenAIModelListToCodexManifest(t *testing.T) {
-	converted := convertOpenAIModelListToCodexManifest([]byte(`{"object":"list","data":[{"id":"gpt-5.6"},{"id":" "},{"id":"gpt-image-2"}]}`))
+	converted, err := convertOpenAIModelListToCodexManifest([]byte(`{"object":"list","data":[{"id":"gpt-5.6"},{"id":" "},{"id":"gpt-image-2"}]}`), false)
+	require.NoError(t, err)
 	require.JSONEq(t, `{"models":[{"slug":"gpt-5.6"},{"slug":"gpt-image-2"}]}`, string(converted))
 	require.NoError(t, validateCodexModelsManifestEnvelope(converted))
+}
+
+func TestConvertOpenAIModelListToCodexManifestPreservesDeclaredCapabilities(t *testing.T) {
+	body := []byte(`{"object":"list","data":[{"id":"gpt-6-astra","created":1788480000,"owned_by":"openai","reasoning":{"enabled":true},"supported_reasoning_levels":[{"effort":"high"},{"effort":"ultra"}],"multi_agent_reasoning_effort":"xhigh","multi_agent_version":"v2","supports_search_tool":false,"apply_patch_tool_type":"freeform","comp_hash":9007199254740993,"tool_mode":{"mode":"auto"},"use_responses_lite":false,"provider_extension":{}}]}`)
+	converted, err := convertOpenAIModelListToCodexManifest(body, false)
+	require.NoError(t, err)
+	var envelope map[string][]map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(converted, &envelope))
+	require.Len(t, envelope["models"], 1)
+	model := envelope["models"][0]
+	var original struct {
+		Data []map[string]json.RawMessage `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(body, &original))
+	for field, value := range original.Data[0] {
+		if field != "id" {
+			require.JSONEq(t, string(value), string(model[field]), "declared upstream metadata should be retained: %s", field)
+		}
+	}
+	require.Equal(t, "9007199254740993", string(model["comp_hash"]), "conversion must not round large integers")
+	require.Equal(t, `"gpt-6-astra"`, string(model["slug"]))
+	require.NotContains(t, model, "id")
+	// Explicit false is retained; the local bridge is allowed to advertise
+	// search only when the upstream Responses probe proved it needs the bridge.
+	require.Equal(t, "false", string(model["supports_search_tool"]))
+}
+
+func TestConvertOpenAIModelListToCodexManifestSearchCapabilityFollowsBridgeProbe(t *testing.T) {
+	body := []byte(`{"data":[{"id":"company-model"}]}`)
+	bridge := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{"openai_responses_supported": false}}
+	native := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey, Extra: map[string]any{"openai_responses_supported": true}}
+	unknown := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	for _, test := range []struct {
+		name    string
+		account *Account
+		search  bool
+	}{
+		{name: "chat bridge", account: bridge, search: true},
+		{name: "native responses", account: native, search: false},
+		{name: "unknown capability", account: unknown, search: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			advertiseSearch := shouldAdvertiseCodexSearchTool(test.account)
+			require.Equal(t, test.search, advertiseSearch)
+			converted, err := convertOpenAIModelListToCodexManifest(body, advertiseSearch)
+			require.NoError(t, err)
+			var envelope struct {
+				Models []map[string]json.RawMessage `json:"models"`
+			}
+			require.NoError(t, json.Unmarshal(converted, &envelope))
+			_, advertised := envelope.Models[0]["supports_search_tool"]
+			require.Equal(t, test.search, advertised)
+		})
+	}
+}
+
+func TestFetchCodexModelsManifestCacheSeparatesSearchProbeState(t *testing.T) {
+	var calls atomic.Int32
+	upstream := &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		calls.Add(1)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Etag": []string{`"same"`}},
+			Body:       io.NopCloser(strings.NewReader(`{"data":[{"id":"model"}]}`)),
+		}, nil
+	}}
+	s := newCodexModelsAPIKeyTestService(upstream)
+	account := newCodexModelsAPIKeyTestAccount("https://upstream.example/v1")
+	account.Extra = map[string]any{"openai_responses_supported": false}
+	first, err := s.FetchCodexModelsManifest(context.Background(), account, "0.144.0", "")
+	require.NoError(t, err)
+	require.Contains(t, string(first.Body), `"supports_search_tool":true`)
+	account.Extra["openai_responses_supported"] = true
+	second, err := s.FetchCodexModelsManifest(context.Background(), account, "0.144.0", first.ETag)
+	require.NoError(t, err)
+	require.False(t, second.NotModified, "old client ETag must not hide the changed capability")
+	require.NotEqual(t, first.ETag, second.ETag)
+	require.NotContains(t, string(second.Body), `"supports_search_tool":true`)
+	require.Equal(t, int32(2), calls.Load(), "probe state changes must not reuse a transformed body with the same upstream ETag")
+}
+
+func TestConvertOpenAIModelListToCodexManifestPreservesExplicitSearchPolicy(t *testing.T) {
+	for _, value := range []string{"false", "null", "true"} {
+		converted, err := convertOpenAIModelListToCodexManifest([]byte(`{"data":[{"id":"model","supports_search_tool":`+value+`}]}`), true)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"models":[{"slug":"model","supports_search_tool":`+value+`}]}`, string(converted))
+	}
+	native := []byte(`{ "models": [{"slug":"model","provider_extension":{"id":9007199254740993}}] }`)
+	converted, err := convertOpenAIModelListToCodexManifest(native, true)
+	require.NoError(t, err)
+	require.Equal(t, native, converted, "native Codex manifests must remain unchanged")
+}
+
+func TestConvertOpenAIModelListPreservesAccountShareManifestBoundary(t *testing.T) {
+	converted, err := convertOpenAIModelListToCodexManifest([]byte(`{"data":[{"id":"gpt-6-astra","multi_agent_reasoning_effort":"xhigh","multi_agent_version":"v2","provider_extension":{"limit":9007199254740993}},{"id":"private-unavailable-model"}]}`), true)
+	require.NoError(t, err)
+	manifest := &CodexModelsManifest{Body: converted, ETag: `"upstream-converted"`}
+	filtered, err := FilterAccountShareCodexModelsManifest(manifest, []string{"gpt-6-astra"}, "")
+	require.NoError(t, err)
+	require.JSONEq(t, `{"models":[{"slug":"gpt-6-astra","multi_agent_reasoning_effort":"xhigh","multi_agent_version":"v2","provider_extension":{"limit":9007199254740993},"supports_search_tool":true}]}`, string(filtered.Body))
+	require.NotContains(t, string(filtered.Body), "private-unavailable-model")
+	require.Contains(t, string(filtered.Body), "9007199254740993")
+	cached, err := FilterAccountShareCodexModelsManifest(manifest, []string{"gpt-6-astra"}, filtered.ETag)
+	require.NoError(t, err)
+	require.True(t, cached.NotModified)
+	revoked, err := FilterAccountShareCodexModelsManifest(manifest, nil, filtered.ETag)
+	require.NoError(t, err)
+	require.False(t, revoked.NotModified, "key permission changes must invalidate the visible manifest")
+	require.JSONEq(t, `{"models":[]}`, string(revoked.Body))
+}
+
+func TestConvertOpenAIModelListToCodexManifestRejectsMalformedKnownCapabilities(t *testing.T) {
+	for _, body := range []string{
+		`{"data":[{"id":"model","supports_search_tool":"true"}]}`,
+		`{"data":[{"id":"model","multi_agent_reasoning_effort":{}}]}`,
+		`{"data":[{"id":"model","use_responses_lite":1}]}`,
+		`null`,
+	} {
+		converted, err := convertOpenAIModelListToCodexManifest([]byte(body), true)
+		require.Error(t, err)
+		require.Nil(t, converted, "malformed metadata must not silently enable capabilities")
+	}
+}
+
+func TestFetchCodexModelsManifestConvertedETagRevalidatesWithUpstreamETag(t *testing.T) {
+	var calls atomic.Int32
+	upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		header := make(http.Header)
+		header.Set("ETag", `W/"upstream"`)
+		if calls.Add(1) == 1 {
+			return &http.Response{StatusCode: http.StatusOK, Header: header, Body: io.NopCloser(strings.NewReader(`{"data":[{"id":"model"}]}`))}, nil
+		}
+		if req.Header.Get("If-None-Match") != `W/"upstream"` {
+			return nil, errors.New("revalidation used the client representation ETag")
+		}
+		return &http.Response{StatusCode: http.StatusNotModified, Header: header, Body: http.NoBody}, nil
+	}}
+	s := newCodexModelsAPIKeyTestService(upstream)
+	account := newCodexModelsAPIKeyTestAccount("https://upstream.example/v1")
+	first, err := s.FetchCodexModelsManifest(context.Background(), account, "0.144.0", "")
+	require.NoError(t, err)
+	require.NotEqual(t, `W/"upstream"`, first.ETag)
+	s.codexModelsManifestCache.mu.Lock()
+	var cacheKey string
+	for key := range s.codexModelsManifestCache.entries {
+		cacheKey = key
+	}
+	s.codexModelsManifestCache.mu.Unlock()
+	request := codexModelsManifestRequest{
+		url: "https://upstream.example/v1/models", headers: make(http.Header), useAPIKeyUpstream: true,
+	}
+	result := <-s.refreshCachedAPIKeyCodexModelsManifest(cacheKey, request)
+	require.NoError(t, result.Err)
+	refreshed, ok := result.Val.(*CodexModelsManifest)
+	require.True(t, ok)
+	require.Equal(t, first.Body, refreshed.Body)
+	require.Equal(t, first.ETag, refreshed.ETag)
+	require.Equal(t, int32(2), calls.Load())
+	cached, err := s.FetchCodexModelsManifest(context.Background(), account, "0.144.0", first.ETag)
+	require.NoError(t, err)
+	require.True(t, cached.NotModified)
 }
 
 func TestFetchCodexModelsManifestUsesConfiguredBodyLimit(t *testing.T) {

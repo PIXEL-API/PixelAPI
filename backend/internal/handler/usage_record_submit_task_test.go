@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -10,6 +11,37 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUsageRecordingGatePreservesSuccessfulZeroUsageAndRejectsEmptyFailures(t *testing.T) {
+	failed := errors.New("upstream interrupted")
+	for _, test := range []struct {
+		name   string
+		result bool
+		tokens int
+		err    error
+		want   bool
+	}{
+		{name: "missing result", err: failed},
+		{name: "success without tokens", result: true, want: true},
+		{name: "failed without tokens", result: true, err: failed},
+		{name: "failed with observed usage", result: true, tokens: 10, err: failed, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var generic *service.ForwardResult
+			var openai *service.OpenAIForwardResult
+			if test.result {
+				generic = &service.ForwardResult{Usage: service.ClaudeUsage{InputTokens: test.tokens}}
+				openai = &service.OpenAIForwardResult{Usage: service.OpenAIUsage{InputTokens: test.tokens}}
+			}
+			for _, gate := range []bool{shouldRecordGatewayUsage(generic, test.err), shouldRecordOpenAIUsage(openai, test.err)} {
+				recorded, released := false, false
+				finalizeAccountShareRequest(gate, func() { recorded = true }, func() { released = true })
+				require.Equal(t, test.want, recorded)
+				require.True(t, released)
+			}
+		})
+	}
+}
 
 func newUsageRecordTestPool(t *testing.T) *service.UsageRecordWorkerPool {
 	t.Helper()

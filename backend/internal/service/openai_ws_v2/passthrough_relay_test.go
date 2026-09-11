@@ -228,6 +228,156 @@ func TestRelay_BasicRelayAndUsage(t *testing.T) {
 	require.JSONEq(t, `{"type":"response.completed","response":{"id":"resp_123","usage":{"input_tokens":7,"output_tokens":3,"input_tokens_details":{"cached_tokens":2,"cache_write_tokens":1}}}}`, string(clientWrites[0].payload))
 }
 
+func TestRelay_BeforeWriteClientScopesOutputToCurrentResponseCreateTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		outputType coderws.MessageType
+		output     string
+	}{
+		{name: "no output"},
+		{name: "text output", outputType: coderws.MessageText, output: "{\"type\":\"response.output_text.delta\",\"delta\":\"second\"}"},
+		{name: "binary output", outputType: coderws.MessageBinary, output: "binary"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Concurrent relays must each start with their own clear output bit.
+			t.Parallel()
+			clientConn := newPassthroughTestFrameConn(nil, false)
+			upstreamConn := newPassthroughTestFrameConn(nil, false)
+			observed := make(chan bool, 8)
+			beforeCancel := make(chan bool, 1)
+			finished := make(chan *RelayExit, 1)
+			quotaErr := errors.New("later turn quota")
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var relayControlCtx context.Context
+			go func() {
+				_, relayExit := Relay(ctx, clientConn, upstreamConn, []byte("{\"type\":\"response.create\",\"model\":\"model\"}"), RelayOptions{
+					BeforeClientFrame: func(frameCtx context.Context, _ coderws.MessageType, _ []byte) error {
+						if relayControlCtx == nil {
+							relayControlCtx = frameCtx
+						}
+						return nil
+					},
+					BeforeWriteClient: func(_ coderws.MessageType, payload []byte, wroteDownstream bool) error {
+						observed <- wroteDownstream
+						if string(payload) == "{\"type\":\"error\"}" {
+							return quotaErr
+						}
+						return nil
+					},
+					BeforeRelayCancel: func(exit RelayExit) {
+						beforeCancel <- relayControlCtx != nil && relayControlCtx.Err() == nil
+					},
+				})
+				finished <- relayExit
+			}()
+			expectWrites := func(conn *passthroughTestFrameConn, n int) {
+				t.Helper()
+				require.Eventually(t, func() bool { return len(conn.Writes()) == n }, time.Second, time.Millisecond)
+			}
+			expectOutputState := func(want bool) {
+				t.Helper()
+				select {
+				case got := <-observed:
+					require.Equal(t, want, got)
+				case <-ctx.Done():
+					t.Fatal("relay did not observe the upstream frame")
+				}
+			}
+			sendUpstream := func(msgType coderws.MessageType, payload string) {
+				upstreamConn.readCh <- passthroughTestFrame{msgType: msgType, payload: []byte(payload)}
+			}
+			expectWrites(upstreamConn, 1)
+			sendUpstream(coderws.MessageText, "{\"type\":\"response.output_text.delta\",\"delta\":\"first\"}")
+			expectOutputState(false)
+			expectWrites(clientConn, 1)
+			sendUpstream(coderws.MessageText, "{\"type\":\"response.completed\",\"response\":{\"id\":\"resp_first\",\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}")
+			expectOutputState(true)
+			expectWrites(clientConn, 2)
+
+			clientConn.readCh <- passthroughTestFrame{msgType: coderws.MessageText, payload: []byte("{\"type\":\"session.update\"}")}
+			expectWrites(upstreamConn, 2)
+			sendUpstream(coderws.MessageText, "{\"type\":\"session.updated\"}")
+			expectOutputState(true) // session.update must not reset the turn.
+			expectWrites(clientConn, 3)
+
+			clientConn.readCh <- passthroughTestFrame{msgType: coderws.MessageText, payload: []byte("{\"type\":\"response.create\",\"model\":\"model\"}")}
+			expectWrites(upstreamConn, 3)
+			if tc.output != "" {
+				sendUpstream(tc.outputType, tc.output)
+				expectOutputState(false)
+				expectWrites(clientConn, 4)
+			}
+			sendUpstream(coderws.MessageText, "{\"type\":\"error\"}")
+			expectOutputState(tc.output != "")
+			select {
+			case relayExit := <-finished:
+				require.NotNil(t, relayExit)
+				require.ErrorIs(t, relayExit.Err, quotaErr)
+				require.Equal(t, "before_client_write", relayExit.Stage)
+			case <-ctx.Done():
+				t.Fatal("relay did not finish")
+			}
+			require.True(t, <-beforeCancel, "close hook must run before canceling relay I/O")
+		})
+	}
+}
+
+func TestRelay_DelayedTerminalDoesNotMarkNewTurnOutput(t *testing.T) {
+	clientConn := newPassthroughTestFrameConn(nil, false)
+	upstreamConn := newPassthroughTestFrameConn([]passthroughTestFrame{{
+		msgType: coderws.MessageText,
+		payload: []byte(`{"type":"response.completed","response":{"id":"resp_first","usage":{"input_tokens":1,"output_tokens":1}}}`),
+	}}, false)
+	terminalStarted := make(chan struct{})
+	releaseTerminal := make(chan struct{})
+	observedQuotaState := make(chan bool, 1)
+	finished := make(chan *RelayExit, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	quotaErr := errors.New("quota before second-turn output")
+	go func() {
+		_, relayExit := Relay(ctx, clientConn, upstreamConn, []byte(`{"type":"response.create","model":"model"}`), RelayOptions{
+			BeforeTerminalFrame: func(ctx context.Context, _ RelayTurnResult) error {
+				// Model a terminal hook releasing turn ownership before it returns.
+				close(terminalStarted)
+				select {
+				case <-releaseTerminal:
+					return nil
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			},
+			BeforeWriteClient: func(_ coderws.MessageType, payload []byte, wroteDownstream bool) error {
+				if string(payload) == `{"type":"error"}` {
+					observedQuotaState <- wroteDownstream
+					return quotaErr
+				}
+				return nil
+			},
+		})
+		finished <- relayExit
+	}()
+	select {
+	case <-terminalStarted:
+	case <-ctx.Done():
+		t.Fatal("first terminal was not observed")
+	}
+	clientConn.readCh <- passthroughTestFrame{msgType: coderws.MessageText, payload: []byte(`{"type":"response.create","model":"model"}`)}
+	require.Eventually(t, func() bool { return len(upstreamConn.Writes()) == 2 }, time.Second, time.Millisecond)
+	close(releaseTerminal)
+	require.Eventually(t, func() bool { return len(clientConn.Writes()) == 1 }, time.Second, time.Millisecond)
+	upstreamConn.readCh <- passthroughTestFrame{msgType: coderws.MessageText, payload: []byte(`{"type":"error"}`)}
+	select {
+	case relayExit := <-finished:
+		require.NotNil(t, relayExit)
+		require.ErrorIs(t, relayExit.Err, quotaErr)
+	case <-ctx.Done():
+		t.Fatal("relay did not finish")
+	}
+	require.False(t, <-observedQuotaState, "an earlier terminal must not mark the new turn as having output")
+}
+
 func TestRelay_ResponseDoneWithNestedUsage(t *testing.T) {
 	t.Parallel()
 

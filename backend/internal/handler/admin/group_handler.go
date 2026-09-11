@@ -102,7 +102,7 @@ func NewGroupHandler(adminService service.AdminService, dashboardService *servic
 type CreateGroupRequest struct {
 	Name                     string             `json:"name" binding:"required"`
 	Description              string             `json:"description"`
-	Platform                 string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok opencode"`
+	Platform                 string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok opencode kimi zhipu deepseek minimax qwen"`
 	RateMultiplier           float64            `json:"rate_multiplier"`
 	NewUserRateEnabled       bool               `json:"new_user_rate_enabled"`
 	NewUserRateMultiplier    float64            `json:"new_user_rate_multiplier"`
@@ -159,7 +159,7 @@ type CreateGroupRequest struct {
 type UpdateGroupRequest struct {
 	Name                     string             `json:"name"`
 	Description              string             `json:"description"`
-	Platform                 string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok opencode"`
+	Platform                 string             `json:"platform" binding:"omitempty,oneof=anthropic openai gemini antigravity grok opencode kimi zhipu deepseek minimax qwen"`
 	RateMultiplier           *float64           `json:"rate_multiplier"`
 	NewUserRateEnabled       *bool              `json:"new_user_rate_enabled"`
 	NewUserRateMultiplier    *float64           `json:"new_user_rate_multiplier"`

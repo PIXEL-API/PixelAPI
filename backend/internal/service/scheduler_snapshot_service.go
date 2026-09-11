@@ -185,8 +185,8 @@ type schedulerActiveGroupIDLister interface {
 	ListActiveIDs(ctx context.Context) ([]int64, error)
 }
 
-func schedulerSnapshotPlatforms() [5]string {
-	return [5]string{PlatformAnthropic, PlatformGemini, PlatformOpenAI, PlatformAntigravity, PlatformGrok}
+func schedulerSnapshotPlatforms() []string {
+	return SupportedAccountPlatforms()
 }
 
 type SchedulerSnapshotService struct {

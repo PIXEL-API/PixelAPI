@@ -47,6 +47,7 @@ const (
 	AccountCredentialImportKindOpenAIAgentIdentity       AccountCredentialImportKind = "openai_agent_identity"
 	AccountCredentialImportKindOpenAIPersonalAccessToken AccountCredentialImportKind = "openai_personal_access_token"
 	AccountCredentialImportKindOpencodeAPIKey            AccountCredentialImportKind = "opencode_api_key"
+	AccountCredentialImportKindCNAPIKey                  AccountCredentialImportKind = "cn_api_key"
 )
 
 type AccountCredentialImportSource struct {
@@ -253,6 +254,77 @@ func ParseOpencodeCredentialImportContents(contents []string) ([]AccountCredenti
 		}
 	}
 	return sources, errs
+}
+
+// ParseCNProviderCredentialImportContents accepts API keys and API-key account JSON.
+// It never relabels OAuth credentials or accounts belonging to another platform.
+func ParseCNProviderCredentialImportContents(platform string, contents []string) ([]AccountCredentialImportSource, []AccountCredentialImportError) {
+	if !IsCNProvider(platform) {
+		return nil, []AccountCredentialImportError{{Index: 1, Message: "unsupported API key platform"}}
+	}
+	var sources []AccountCredentialImportSource
+	var parseErrors []AccountCredentialImportError
+	index := 0
+	for _, content := range contents {
+		items, err := parseAccountCredentialImportContent(content)
+		if err != nil {
+			index++
+			parseErrors = append(parseErrors, AccountCredentialImportError{Index: index, Message: err.Error()})
+			continue
+		}
+		for len(items) > 0 {
+			item := items[0]
+			items = items[1:]
+			if envelope, ok := item.(map[string]any); ok {
+				if accounts, ok := importArrayField(envelope, "accounts"); ok {
+					items = append(accounts, items...)
+					continue
+				}
+			}
+			index++
+			source := AccountCredentialImportSource{Kind: AccountCredentialImportKindCNAPIKey, Platform: platform, Name: fmt.Sprintf("%s-%d", platform, index)}
+			credentials := make(map[string]any)
+			switch value := item.(type) {
+			case string:
+				credentials["api_key"] = strings.TrimSpace(value)
+			case map[string]any:
+				if declared := importStringField(value, "platform"); declared != "" && normalizeCredentialImportPlatform(declared) != platform {
+					parseErrors = append(parseErrors, AccountCredentialImportError{Index: index, Message: "account platform does not match the selected platform"})
+					continue
+				}
+				if kind := importStringField(value, "type"); kind != "" && kind != AccountTypeAPIKey {
+					parseErrors = append(parseErrors, AccountCredentialImportError{Index: index, Message: "CN provider import requires API key credentials"})
+					continue
+				}
+				if nested, ok := value["credentials"].(map[string]any); ok {
+					credentials = mergeAccountMap(nested, nil)
+				} else {
+					for _, key := range []string{"api_key", "account_mode", "api_protocol", "base_url", "api_base_urls", "model_mapping", "zhipu_organization", "zhipu_project"} {
+						if v, ok := value[key]; ok {
+							credentials[key] = v
+						}
+					}
+				}
+				if name := importStringField(value, "name"); name != "" {
+					source.Name = name
+				}
+				source.Notes = importOptionalStringField(value, "notes")
+			default:
+				parseErrors = append(parseErrors, AccountCredentialImportError{Index: index, Message: "invalid API key credential format"})
+				continue
+			}
+			key, isString := credentials["api_key"].(string)
+			key = strings.TrimSpace(key)
+			if !isString || key == "" || strings.ContainsAny(key, " \t\r\n") || strings.Contains(key, "://") {
+				parseErrors = append(parseErrors, AccountCredentialImportError{Index: index, Message: "a single non-empty API key is required"})
+				continue
+			}
+			credentials["api_key"] = key
+			source.Credentials = credentials
+			sources = append(sources, source)
+		}
+	}
+	return sources, parseErrors
 }
 
 // EnrichOpenAIOAuthCredentialsFromIDToken fills missing OpenAI identity fields
@@ -1182,6 +1254,18 @@ func normalizeCredentialImportPlatform(platform string) string {
 		return PlatformAntigravity
 	case "grok", "xai", "x.ai":
 		return PlatformGrok
+	case "opencode", "open-code":
+		return PlatformOpencode
+	case "kimi", "moonshot", "moonshot-ai":
+		return PlatformKimi
+	case "zhipu", "glm", "bigmodel", "智谱":
+		return PlatformZhipu
+	case "deepseek", "deep-seek":
+		return PlatformDeepseek
+	case "minimax", "mini-max":
+		return PlatformMiniMax
+	case "qwen", "通义千问", "dashscope", "aliyun-qwen":
+		return PlatformQwen
 	default:
 		return ""
 	}

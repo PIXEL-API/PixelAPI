@@ -800,7 +800,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "opencode";
+export type GroupPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "opencode" | "kimi" | "zhipu" | "deepseek" | "minimax" | "qwen";
 export type GrokVideoModelFamily =
   | "grok-imagine-video"
   | "grok-imagine-video-1.5";
@@ -1068,7 +1068,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "opencode";
+export type AccountPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "opencode" | "kimi" | "zhipu" | "deepseek" | "minimax" | "qwen";
 export type AccountType =
   | "oauth"
   | "setup-token"
@@ -1225,6 +1225,14 @@ export interface TempUnschedulableState {
 export interface TempUnschedulableStatus {
   active: boolean;
   state?: TempUnschedulableState;
+}
+
+export type CNProviderQuotaWindow = '5h' | 'weekly' | 'monthly'
+
+export interface CNProviderObservedLimit {
+  window: CNProviderQuotaWindow
+  observed_at: string
+  retry_at?: string
 }
 
 export interface Account {
@@ -1879,6 +1887,8 @@ export interface UsageLog {
   api_key_id: number;
   account_id: number | null;
   request_id: string;
+  upstream_request_id?: string;
+  billing_error?: 'pricing_missing' | 'billing_failed';
   model: string;
   service_tier?: string | null;
   reasoning_effort?: string | null;

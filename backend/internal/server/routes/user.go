@@ -132,6 +132,8 @@ func RegisterUserRoutes(
 			accounts.POST("/today-stats/batch", heavy, h.UserAccount.GetBatchTodayStats)
 			accounts.GET("/:id/usage", heavy, h.UserAccount.GetUsage)
 			accounts.GET("/:id/openai-quota", h.UserAccount.QueryOpenAIQuota)
+			accounts.GET("/:id/cn-quota", h.UserAccount.QueryCNProviderQuota)
+			accounts.GET("/:id/cn-balance", h.UserAccount.QueryCNProviderBalance)
 			accounts.POST("/:id/openai-quota/reset", h.UserAccount.ResetOpenAIQuota)
 			accounts.GET("/:id/stats", heavy, h.UserAccount.GetStats)
 			accounts.GET("/:id/today-stats", heavy, h.UserAccount.GetTodayStats)

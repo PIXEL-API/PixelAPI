@@ -810,8 +810,15 @@ func (a *Account) IsGrokOAuth() bool {
 	return a.IsGrok() && a.Type == AccountTypeOAuth
 }
 
+func (a *Account) IsKimi() bool       { return a != nil && a.Platform == PlatformKimi }
+func (a *Account) IsZhipu() bool      { return a != nil && a.Platform == PlatformZhipu }
+func (a *Account) IsDeepseek() bool   { return a != nil && a.Platform == PlatformDeepseek }
+func (a *Account) IsMiniMax() bool    { return a != nil && a.Platform == PlatformMiniMax }
+func (a *Account) IsQwen() bool       { return a != nil && a.Platform == PlatformQwen }
+func (a *Account) IsCNProvider() bool { return a != nil && IsCNProvider(a.Platform) }
+
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.Platform == PlatformOpencode)
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.Platform == PlatformOpencode || a.IsCNProvider())
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -2256,16 +2263,233 @@ func (a *Account) IsOpenAIApiKey() bool {
 }
 
 func (a *Account) GetOpenAIBaseURL() string {
-	if !a.IsOpenAI() {
+	if !a.IsOpenAI() && !a.IsCNProvider() {
 		return ""
 	}
-	if a.Type == AccountTypeAPIKey {
-		baseURL := a.GetCredential("base_url")
-		if baseURL != "" {
+	if a.IsCNProvider() && a.IsAdaptiveAPIProtocol() {
+		if urls, ok := a.Credentials["api_base_urls"].(map[string]any); ok {
+			if value, ok := urls[APIProtocolChatCompletions].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+	}
+	if a.Type == AccountTypeAPIKey || a.Type == AccountTypeUpstream {
+		if baseURL := strings.TrimSpace(a.GetCredential("base_url")); baseURL != "" {
 			return baseURL
 		}
 	}
-	return "https://api.openai.com"
+	switch a.Platform {
+	case PlatformKimi:
+		if a.GetAccountMode() == AccountModeCoding {
+			return DefaultKimiCodingBaseURL
+		}
+		return DefaultKimiPayGBaseURL
+	case PlatformZhipu:
+		if a.GetAccountMode() == AccountModeCoding {
+			return DefaultZhipuCodingBaseURL
+		}
+		return DefaultZhipuPayGBaseURL
+	case PlatformDeepseek:
+		return DefaultDeepseekBaseURL
+	case PlatformMiniMax:
+		return DefaultMiniMaxBaseURL
+	case PlatformQwen:
+		if a.GetAccountMode() == AccountModeCoding {
+			return DefaultQwenCodingBaseURL
+		}
+		return DefaultQwenBaseURL
+	default:
+		return "https://api.openai.com"
+	}
+}
+
+func (a *Account) GetAccountMode() string {
+	if a == nil {
+		return ""
+	}
+	mode := strings.TrimSpace(a.GetCredential("account_mode"))
+	if mode == AccountModeCoding || mode == AccountModePayG {
+		return mode
+	}
+	return ""
+}
+func (a *Account) GetOpenAIFormatBaseURL() string {
+	if a == nil || !a.IsCNProvider() || !a.IsAnthropicProtocol() {
+		if a == nil {
+			return ""
+		}
+		return a.GetOpenAIBaseURL()
+	}
+	switch a.Platform {
+	case PlatformKimi:
+		if a.IsCodingPlan() {
+			return DefaultKimiCodingBaseURL
+		}
+		return DefaultKimiPayGBaseURL
+	case PlatformZhipu:
+		if a.IsCodingPlan() {
+			return DefaultZhipuCodingBaseURL
+		}
+		return DefaultZhipuPayGBaseURL
+	case PlatformDeepseek:
+		return DefaultDeepseekBaseURL
+	case PlatformMiniMax:
+		return DefaultMiniMaxBaseURL
+	default:
+		return a.GetOpenAIBaseURL()
+	}
+}
+func (a *Account) IsCodingPlan() bool { return a.GetAccountMode() == AccountModeCoding }
+func (a *Account) GetAPIProtocol() string {
+	if a == nil || !a.IsCNProvider() {
+		return APIProtocolChatCompletions
+	}
+	switch strings.TrimSpace(a.GetCredential("api_protocol")) {
+	case APIProtocolAnthropic:
+		return APIProtocolAnthropic
+	case APIProtocolAdaptive:
+		return APIProtocolAdaptive
+	case APIProtocolResponses:
+		if a.Platform == PlatformDeepseek || a.Platform == PlatformKimi || a.Platform == PlatformMiniMax {
+			return APIProtocolResponses
+		}
+	}
+	return APIProtocolChatCompletions
+}
+func (a *Account) IsAnthropicProtocol() bool { return a.GetAPIProtocol() == APIProtocolAnthropic }
+func (a *Account) IsAdaptiveAPIProtocol() bool {
+	return a.GetAPIProtocol() == APIProtocolAdaptive
+}
+func (a *Account) SupportsNativeCNResponses() bool {
+	return a != nil && (a.Platform == PlatformDeepseek || a.Platform == PlatformKimi || a.Platform == PlatformMiniMax)
+}
+func (a *Account) UsesNativeCNResponses() bool {
+	if a == nil || !a.SupportsNativeCNResponses() {
+		return false
+	}
+	protocol := a.GetAPIProtocol()
+	return protocol == APIProtocolResponses || protocol == APIProtocolAdaptive
+}
+
+// GetCNProtocolBaseURL resolves a protocol-specific endpoint for adaptive
+// accounts. Legacy accounts continue to use base_url for Chat Completions.
+func (a *Account) GetCNProtocolBaseURL(protocol string) string {
+	if a == nil || !a.IsCNProvider() {
+		return ""
+	}
+	if a.IsAdaptiveAPIProtocol() {
+		if urls, ok := a.Credentials["api_base_urls"].(map[string]any); ok {
+			if value, ok := urls[protocol].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+		if protocol == APIProtocolChatCompletions {
+			if value := strings.TrimSpace(a.GetCredential("base_url")); value != "" {
+				return value
+			}
+		}
+	}
+	if (protocol == APIProtocolChatCompletions || protocol == APIProtocolResponses) && (a.Type == AccountTypeAPIKey || a.Type == AccountTypeUpstream) {
+		if value := strings.TrimSpace(a.GetCredential("base_url")); value != "" {
+			return value
+		}
+	}
+	switch protocol {
+	case APIProtocolAnthropic:
+		switch a.Platform {
+		case PlatformKimi:
+			if a.GetAccountMode() == AccountModeCoding {
+				return DefaultKimiCodingAnthropicBaseURL
+			}
+			return DefaultKimiPayGAnthropicBaseURL
+		case PlatformZhipu:
+			return DefaultZhipuAnthropicBaseURL
+		case PlatformDeepseek:
+			return DefaultDeepseekAnthropicBaseURL
+		case PlatformMiniMax:
+			return DefaultMiniMaxAnthropicBaseURL
+		case PlatformQwen:
+			if a.IsCodingPlan() {
+				return DefaultQwenCodingAnthropicBaseURL
+			}
+			return DefaultQwenAnthropicBaseURL
+		}
+	case APIProtocolChatCompletions, APIProtocolResponses:
+		switch a.Platform {
+		case PlatformKimi:
+			if a.GetAccountMode() == AccountModeCoding {
+				return DefaultKimiCodingBaseURL
+			}
+			return DefaultKimiPayGBaseURL
+		case PlatformZhipu:
+			if a.GetAccountMode() == AccountModeCoding {
+				return DefaultZhipuCodingBaseURL
+			}
+			return DefaultZhipuPayGBaseURL
+		case PlatformDeepseek:
+			return DefaultDeepseekBaseURL
+		case PlatformMiniMax:
+			return DefaultMiniMaxBaseURL
+		case PlatformQwen:
+			if protocol == APIProtocolChatCompletions {
+				if a.GetAccountMode() == AccountModeCoding {
+					return DefaultQwenCodingBaseURL
+				}
+				return DefaultQwenBaseURL
+			}
+		}
+	}
+	return ""
+}
+
+// GetAnthropicProtocolBaseURL returns the upstream base URL used by the
+// native Anthropic Messages protocol. Adaptive accounts may provide a
+// protocol-specific URL in api_base_urls; legacy accounts use base_url or the
+// provider default.
+func (a *Account) GetAnthropicProtocolBaseURL() string {
+	if a == nil || (!a.IsAnthropicProtocol() && !a.IsAdaptiveAPIProtocol()) {
+		return ""
+	}
+	if a.IsAdaptiveAPIProtocol() {
+		return a.GetCNProtocolBaseURL(APIProtocolAnthropic)
+	}
+	if a.Type == AccountTypeAPIKey || a.Type == AccountTypeUpstream {
+		if baseURL := strings.TrimSpace(a.GetCredential("base_url")); baseURL != "" {
+			return baseURL
+		}
+	}
+	return a.GetCNProtocolBaseURL(APIProtocolAnthropic)
+}
+func (a *Account) GetCNAPIKey() string {
+	if a == nil || !a.IsCNProvider() {
+		return ""
+	}
+	return a.GetCredential("api_key")
+}
+func (a *Account) GetOpenAIProtocolAPIKey() string {
+	if a == nil {
+		return ""
+	}
+	if a.IsCNProvider() {
+		return a.GetCNAPIKey()
+	}
+	return a.GetOpenAIApiKey()
+}
+func (a *Account) GetCodingPlanProvider() string {
+	if a == nil || !a.IsCodingPlan() {
+		return ""
+	}
+	switch a.Platform {
+	case PlatformKimi:
+		return PlatformKimi
+	case PlatformZhipu:
+		return PlatformZhipu
+	case PlatformMiniMax:
+		return PlatformMiniMax
+	case PlatformQwen:
+		return PlatformQwen
+	}
+	return ""
 }
 
 func (a *Account) GetOpenAIAccessToken() string {
@@ -2337,7 +2561,7 @@ func (a *Account) GetOpenAIIDToken() string {
 }
 
 func (a *Account) GetOpenAIApiKey() string {
-	if !a.IsOpenAIApiKey() && !a.IsOpencodeApiKey() {
+	if !a.IsOpenAIApiKey() && !a.IsOpencodeApiKey() && !(a != nil && a.IsCNProvider() && a.Type == AccountTypeAPIKey) {
 		return ""
 	}
 	return a.GetCredential("api_key")

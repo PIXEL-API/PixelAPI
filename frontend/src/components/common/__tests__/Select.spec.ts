@@ -79,6 +79,8 @@ describe('Select keyboard accessibility', () => {
       listbox?.querySelectorAll('[role="option"]')[1]?.id
     )
     expect(trigger.attributes('aria-label')).toBe('common.selectOption')
+    expect(document.body.querySelector('.select-dropdown-portal')?.classList.contains('ui-menu')).toBe(true)
+    expect(document.body.querySelector('[role="option"]')?.classList.contains('ui-menu-item')).toBe(true)
 
     const endEvent = new KeyboardEvent('keydown', {
       key: 'End',

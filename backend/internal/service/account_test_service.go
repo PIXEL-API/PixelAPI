@@ -298,11 +298,335 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.testOpencodeAccountConnection(c, account, modelID)
 	}
 
+	if account.IsCNProvider() {
+		if account.IsAnthropicProtocol() {
+			return s.testCNAnthropicProviderAccountConnection(c, account, modelID, prompt)
+		}
+		if account.GetAPIProtocol() == APIProtocolResponses {
+			return s.testCNResponsesProviderAccountConnection(c, account, modelID, prompt)
+		}
+		if account.GetAPIProtocol() != APIProtocolChatCompletions && account.GetAPIProtocol() != APIProtocolResponses && account.GetAPIProtocol() != APIProtocolAdaptive {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("CN provider account test does not support protocol %q", account.GetAPIProtocol()))
+		}
+		return s.testCNProviderAccountConnection(c, account, modelID, prompt)
+	}
+
 	if account.IsAnthropic() {
 		return s.testClaudeAccountConnection(c, account, modelID)
 	}
 
 	return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported account platform: %s", account.Platform))
+}
+
+func (s *AccountTestService) testCNResponsesProviderAccountConnection(c *gin.Context, account *Account, modelID, prompt string) error {
+	ctx := c.Request.Context()
+	if s.httpUpstream == nil || account == nil || account.Type != AccountTypeAPIKey {
+		return s.sendErrorAndEnd(c, "CN provider Responses account must use an API key")
+	}
+	apiKey := strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
+	if apiKey == "" {
+		return s.sendErrorAndEnd(c, "No API key available")
+	}
+	model := strings.TrimSpace(modelID)
+	if model == "" {
+		model = defaultCNProviderTestModel(account.Platform)
+	}
+	model = account.GetMappedModel(model)
+	baseURL := account.GetCNProtocolBaseURL(APIProtocolResponses)
+	validated, err := s.validateUpstreamBaseURL(baseURL)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
+	}
+	requestPrompt := strings.TrimSpace(prompt)
+	if requestPrompt == "" {
+		requestPrompt = "hi"
+	}
+	payload, err := json.Marshal(map[string]any{"model": model, "input": requestPrompt, "max_output_tokens": 32, "stream": false})
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to encode test request")
+	}
+	req, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(ctx), http.MethodPost, buildOpenAIResponsesURL(validated), bytes.NewReader(payload))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	account.ApplyHeaderOverrides(req.Header)
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+	var resp *http.Response
+	if s.tlsFPProfileService == nil {
+		resp, err = s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
+	} else {
+		resp, err = s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	}
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to read response: %s", err.Error()))
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body))))
+	}
+	var parsed struct {
+		OutputText string `json:"output_text"`
+		Output     []struct {
+			Content []struct {
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"output"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return s.sendErrorAndEnd(c, "API returned an invalid Responses response")
+	}
+	text := parsed.OutputText
+	if text == "" {
+		for _, item := range parsed.Output {
+			for _, block := range item.Content {
+				text += block.Text
+			}
+		}
+	}
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: model})
+	if strings.TrimSpace(text) != "" {
+		s.sendEvent(c, TestEvent{Type: "content", Text: text})
+	}
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
+}
+
+// testCNProviderAccountConnection probes OpenAI-compatible mainland China
+// providers through their chat-completions endpoint. These providers expose
+// API-key accounts only; using the shared chat-completions probe keeps account
+// verification independent from the OpenAI Responses API.
+func (s *AccountTestService) testCNProviderAccountConnection(c *gin.Context, account *Account, modelID, prompt string) error {
+	ctx := c.Request.Context()
+	if s.httpUpstream == nil {
+		return s.sendErrorAndEnd(c, "HTTP upstream is not configured")
+	}
+	if account == nil || account.Type != AccountTypeAPIKey {
+		return s.sendErrorAndEnd(c, "CN provider account must use an API key")
+	}
+	authToken := strings.TrimSpace(account.GetOpenAIApiKey())
+	if authToken == "" {
+		return s.sendErrorAndEnd(c, "No API key available")
+	}
+	testModelID := strings.TrimSpace(modelID)
+	if testModelID == "" {
+		testModelID = defaultCNProviderTestModel(account.Platform)
+	}
+	testModelID = account.GetMappedModel(testModelID)
+	if testModelID == "" {
+		return s.sendErrorAndEnd(c, "No test model available")
+	}
+	baseURL := account.GetOpenAIBaseURL()
+	if account.IsCNProvider() {
+		baseURL = account.GetCNProtocolBaseURL(APIProtocolChatCompletions)
+	}
+	if baseURL == "" {
+		return s.sendErrorAndEnd(c, "CN provider base URL is missing")
+	}
+	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
+	}
+	requestPrompt := strings.TrimSpace(prompt)
+	if requestPrompt == "" {
+		requestPrompt = "hi"
+	}
+	payload := map[string]any{
+		"model":    testModelID,
+		"messages": []map[string]string{{"role": "user", "content": requestPrompt}},
+		"stream":   false,
+	}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to encode test request")
+	}
+	req, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(ctx), http.MethodPost, buildOpenAIChatCompletionsURL(normalizedBaseURL), bytes.NewReader(payloadBytes))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+authToken)
+	account.ApplyHeaderOverrides(req.Header)
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+	var resp *http.Response
+	if s.tlsFPProfileService == nil {
+		resp, err = s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
+	} else {
+		resp, err = s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	}
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, readErr := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if readErr != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to read response: %s", readErr.Error()))
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body))))
+	}
+	var parsed struct {
+		Choices []struct {
+			Message struct {
+				Content any `json:"content"`
+			} `json:"message"`
+			Text string `json:"text"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil || len(parsed.Choices) == 0 {
+		return s.sendErrorAndEnd(c, "API returned an invalid chat-completions response")
+	}
+	text := parsed.Choices[0].Text
+	if content, ok := parsed.Choices[0].Message.Content.(string); ok && strings.TrimSpace(content) != "" {
+		text = content
+	}
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+	if strings.TrimSpace(text) != "" {
+		s.sendEvent(c, TestEvent{Type: "content", Text: text})
+	}
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
+}
+
+func (s *AccountTestService) testCNAnthropicProviderAccountConnection(c *gin.Context, account *Account, modelID, prompt string) error {
+	ctx := c.Request.Context()
+	if s.httpUpstream == nil {
+		return s.sendErrorAndEnd(c, "HTTP upstream is not configured")
+	}
+	if account == nil || account.Type != AccountTypeAPIKey {
+		return s.sendErrorAndEnd(c, "CN provider account must use an API key")
+	}
+	apiKey := strings.TrimSpace(account.GetOpenAIProtocolAPIKey())
+	if apiKey == "" {
+		return s.sendErrorAndEnd(c, "No API key available")
+	}
+	model := strings.TrimSpace(modelID)
+	if model == "" {
+		model = defaultCNProviderTestModel(account.Platform)
+	}
+	model = account.GetMappedModel(model)
+	if model == "" {
+		return s.sendErrorAndEnd(c, "No test model available")
+	}
+	baseURL := account.GetAnthropicProtocolBaseURL()
+	if strings.TrimSpace(baseURL) == "" {
+		return s.sendErrorAndEnd(c, "CN provider Anthropic base URL is missing")
+	}
+	validated, err := s.validateUpstreamBaseURL(baseURL)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
+	}
+	requestPrompt := strings.TrimSpace(prompt)
+	if requestPrompt == "" {
+		requestPrompt = "hi"
+	}
+	payload, err := json.Marshal(map[string]any{
+		"model": model, "max_tokens": 32, "stream": false,
+		"messages": []map[string]any{{"role": "user", "content": requestPrompt}},
+	})
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to encode test request")
+	}
+	req, err := http.NewRequestWithContext(WithHTTPUpstreamRedirectsDisabled(ctx), http.MethodPost, buildOpenAIMessagesURL(validated), bytes.NewReader(payload))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	setAnthropicAPIKeyAuthHeader(req.Header, account, apiKey)
+	if req.Header.Get("anthropic-version") == "" {
+		req.Header.Set("anthropic-version", "2023-06-01")
+	}
+	account.ApplyHeaderOverrides(req.Header)
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+	var resp *http.Response
+	if s.tlsFPProfileService == nil {
+		resp, err = s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
+	} else {
+		resp, err = s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	}
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to read response: %s", err.Error()))
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body))))
+	}
+	var parsed struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return s.sendErrorAndEnd(c, "API returned an invalid Anthropic response")
+	}
+	text := ""
+	for _, block := range parsed.Content {
+		if block.Type == "text" {
+			text += block.Text
+		}
+	}
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: model})
+	if strings.TrimSpace(text) != "" {
+		s.sendEvent(c, TestEvent{Type: "content", Text: text})
+	}
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
+}
+
+func defaultCNProviderTestModel(platform string) string {
+	switch platform {
+	case PlatformKimi:
+		return "kimi-k2.5"
+	case PlatformZhipu:
+		return "glm-4.5"
+	case PlatformDeepseek:
+		return "deepseek-chat"
+	case PlatformMiniMax:
+		return "minimax-m2.5"
+	case PlatformQwen:
+		return "qwen-plus"
+	default:
+		return ""
+	}
 }
 
 // testOpencodeAccountConnection tests an OpenCode Go subscription account's connection.

@@ -28,6 +28,39 @@ func TestSplitAccountShareCreditsCapsRoundedInviteAtRemainingBalance(t *testing.
 	require.True(t, owner.Add(invite).Add(platform).Equal(total))
 }
 
+func TestUsageBillingExistingLogRequiresMatchingOwnerAndAccount(t *testing.T) {
+	for _, matching := range []bool{true, false} {
+		t.Run(fmt.Sprintf("matching=%t", matching), func(t *testing.T) {
+			db, mock := newSQLMock(t)
+			mock.ExpectBegin()
+			tx, err := db.BeginTx(context.Background(), nil)
+			require.NoError(t, err)
+			cmd := &service.UsageBillingCommand{
+				RequestID: "existing-request", APIKeyID: 2, UserID: 3, AccountID: 4,
+				UsageLog: &service.UsageLog{Model: "gpt-5"},
+			}
+			mock.ExpectQuery(`INSERT INTO usage_logs`).WillReturnRows(sqlmock.NewRows([]string{"id", "created_at"}))
+			rows := sqlmock.NewRows([]string{"id", "created_at"})
+			if matching {
+				rows.AddRow(91, time.Now())
+			}
+			mock.ExpectQuery(`SELECT id, created_at FROM usage_logs WHERE request_id = \$1 AND api_key_id = \$2 AND user_id = \$3 AND account_id = \$4`).
+				WithArgs(cmd.RequestID, cmd.APIKeyID, cmd.UserID, cmd.AccountID).WillReturnRows(rows)
+			mock.ExpectRollback()
+			id, err := ensureUsageBillingLog(context.Background(), tx, cmd)
+			if matching {
+				require.NoError(t, err)
+				require.Equal(t, int64(91), id)
+			} else {
+				require.ErrorIs(t, err, service.ErrUsageBillingRequestConflict)
+				require.Zero(t, id)
+			}
+			require.NoError(t, tx.Rollback())
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
 func TestAccountShareBillingResolvesLostCommitWithoutApplyingTwice(t *testing.T) {
 	db, mock := newSQLMock(t)
 	repo := &usageBillingRepository{db: db}

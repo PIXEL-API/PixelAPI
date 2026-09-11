@@ -741,7 +741,22 @@ const form = reactive({
 let abortController: AbortController | null = null
 
 // ── Platform config ──
-const platformOrder: GroupPlatform[] = ['anthropic', 'openai', 'gemini', 'antigravity', 'grok', 'opencode']
+// Keep channel platform configuration aligned with the account/group catalog.
+// CN providers are OpenAI-compatible channels and must be selectable here so
+// admins can bind their groups and pricing to a channel.
+const platformOrder: GroupPlatform[] = [
+  'anthropic',
+  'openai',
+  'gemini',
+  'antigravity',
+  'grok',
+  'opencode',
+  'kimi',
+  'zhipu',
+  'deepseek',
+  'minimax',
+  'qwen',
+]
 
 // ── Helpers ──
 function formatDate(value: string): string {

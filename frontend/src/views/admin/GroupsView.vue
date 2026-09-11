@@ -3700,6 +3700,11 @@ const platformOptions = computed(() => [
   { value: "antigravity", label: "Antigravity" },
   { value: "grok", label: "Grok" },
   { value: "opencode", label: "OpenCode" },
+  { value: "kimi", label: "Kimi" },
+  { value: "zhipu", label: "智谱 GLM" },
+  { value: "deepseek", label: "DeepSeek" },
+  { value: "minimax", label: "MiniMax" },
+  { value: "qwen", label: "通义千问" },
 ]);
 
 const platformFilterOptions = computed(() => [
@@ -3710,6 +3715,11 @@ const platformFilterOptions = computed(() => [
   { value: "antigravity", label: "Antigravity" },
   { value: "grok", label: "Grok" },
   { value: "opencode", label: "OpenCode" },
+  { value: "kimi", label: "Kimi" },
+  { value: "zhipu", label: "智谱 GLM" },
+  { value: "deepseek", label: "DeepSeek" },
+  { value: "minimax", label: "MiniMax" },
+  { value: "qwen", label: "通义千问" },
 ]);
 
 const editStatusOptions = computed(() => [

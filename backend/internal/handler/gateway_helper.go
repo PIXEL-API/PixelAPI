@@ -298,17 +298,27 @@ func bindAccountSelectionForwardContext(ctx context.Context, selection *service.
 	return service.BindAccountShareRuntimeLeaseContext(ctx, selection.RuntimeLease)
 }
 
-// finalizeAccountShareRequest records usage and releases the runtime lease.
-// Billing intent mechanism has been removed - usage is recorded synchronously.
+// Successful zero-token results can use per-request pricing. Failed results
+// require observed usage; an empty result object alone is not a billable event.
+func shouldRecordGatewayUsage(result *service.ForwardResult, forwardErr error) bool {
+	return result != nil && (forwardErr == nil || service.ForwardResultHasBillableUsage(result))
+}
+
+func shouldRecordOpenAIUsage(result *service.OpenAIForwardResult, forwardErr error) bool {
+	return result != nil && (forwardErr == nil || service.OpenAIForwardResultHasBillableUsage(result))
+}
+
+// finalizeAccountShareRequest submits recordable usage before releasing the
+// runtime lease. The billing service determines the price and multiplier.
 func finalizeAccountShareRequest(
-	hasBillableUsage bool,
+	shouldRecord bool,
 	recordUsage func(),
 	release func(),
 ) {
 	if release != nil {
 		defer release()
 	}
-	if hasBillableUsage && recordUsage != nil {
+	if shouldRecord && recordUsage != nil {
 		recordUsage()
 	}
 }

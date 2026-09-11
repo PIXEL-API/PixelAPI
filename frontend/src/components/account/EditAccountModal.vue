@@ -141,8 +141,9 @@
       </section>
 
       <!-- API Key fields (only for apikey type) -->
-      <div v-if="!isUserScope && account.type === 'apikey'" class="space-y-4">
-        <div v-if="account.platform !== 'opencode'">
+      <div v-if="(!isUserScope || isCNPlatform(account.platform)) && account.type === 'apikey'" class="space-y-4">
+        <CNProviderSettings v-if="isCNPlatform(account.platform)" v-model="editCNConfig" :platform="account.platform" />
+        <div v-if="account.platform !== 'opencode' && !isCNPlatform(account.platform)">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="editBaseUrl"
@@ -2624,6 +2625,7 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
+import CNProviderSettings from '@/components/account/CNProviderSettings.vue'
 import {
   applyHeaderOverride,
   applyInterceptWarmup,
@@ -2633,6 +2635,8 @@ import {
   isHeaderOverrideCapable,
   splitHeaderOverridesObject,
   validateHeaderOverrideRows,
+  defaultCNBaseUrl,
+  cnSupportsNativeResponses,
   HEADER_OVERRIDE_ENABLED_CREDENTIAL_KEY,
   HEADER_OVERRIDES_CREDENTIAL_KEY,
   type HeaderOverrideRow
@@ -2833,6 +2837,8 @@ let pendingPlacementIntentSignature = ''
 let pendingPlacementIdempotencyKey = ''
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+const editCNConfig = ref({ mode: 'payg' as 'payg' | 'coding', protocol: 'chat_completions' as 'adaptive' | 'chat_completions' | 'anthropic' | 'responses', base_url: '', api_base_urls: {} as Record<string, string> })
+const isCNPlatform = (platform: string) => ['kimi', 'zhipu', 'deepseek', 'minimax', 'qwen'].includes(platform)
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
 const editBedrockSecretAccessKey = ref('')
@@ -3592,6 +3598,17 @@ const syncFormFromAccount = (newAccount: Account | null) => {
               ? ''
               : 'https://api.anthropic.com'
     editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
+    if (isCNPlatform(newAccount.platform)) {
+      const mode = credentials.account_mode === 'coding' ? 'coding' : 'payg'
+      const storedProtocol = credentials.api_protocol
+      const protocol = storedProtocol === 'adaptive' || storedProtocol === 'anthropic' || storedProtocol === 'responses' || storedProtocol === 'chat_completions' ? storedProtocol : 'chat_completions'
+      editCNConfig.value = {
+        mode,
+        protocol: protocol === 'responses' && !cnSupportsNativeResponses(newAccount.platform) ? 'chat_completions' : protocol,
+        base_url: typeof credentials.base_url === 'string' ? credentials.base_url : defaultCNBaseUrl(newAccount.platform, mode, protocol),
+        api_base_urls: credentials.api_base_urls && typeof credentials.api_base_urls === 'object' ? { ...(credentials.api_base_urls as Record<string, string>) } : {}
+      }
+    }
 
     // Load model mappings and detect mode
     const existingMappings = credentials.model_mapping as Record<string, string> | undefined
@@ -4452,7 +4469,7 @@ const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
 
-  if (isUserScope.value && props.account.type !== 'oauth' && props.account.platform !== 'opencode') {
+  if (isUserScope.value && props.account.type !== 'oauth' && props.account.platform !== 'opencode' && !isCNPlatform(props.account.platform)) {
     appStore.showError(t('userAccounts.typeNotAllowed'))
     return
   }
@@ -4564,6 +4581,18 @@ const handleSubmit = async () => {
       } else {
         delete newCredentials.custom_error_codes_enabled
         delete newCredentials.custom_error_codes
+      }
+
+      if (isCNPlatform(props.account.platform)) {
+        newCredentials.account_mode = editCNConfig.value.mode
+        newCredentials.api_protocol = editCNConfig.value.protocol
+        if (editCNConfig.value.protocol === 'adaptive') {
+          newCredentials.api_base_urls = { ...editCNConfig.value.api_base_urls }
+          newCredentials.base_url = (newCredentials.api_base_urls as Record<string, string>).chat_completions || editCNConfig.value.base_url
+        } else {
+          newCredentials.base_url = editCNConfig.value.base_url.trim() || defaultCNBaseUrl(props.account.platform, editCNConfig.value.mode, editCNConfig.value.protocol)
+          delete newCredentials.api_base_urls
+        }
       }
 
       if (!isUserScope.value && isHeaderOverrideCapable(props.account.platform, 'apikey')) {
@@ -5056,7 +5085,7 @@ const handleSubmit = async () => {
         const sanitizedCredentials = {
           ...(updatePayload.credentials as Record<string, unknown>)
         }
-        delete sanitizedCredentials.base_url
+        if (!isCNPlatform(props.account.platform)) delete sanitizedCredentials.base_url
         delete sanitizedCredentials.header_override_enabled
         delete sanitizedCredentials.header_overrides
         updatePayload.credentials = sanitizedCredentials

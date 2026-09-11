@@ -303,6 +303,8 @@
               :reset-openai-quota="adminAPI.accounts.resetOpenAIQuota"
               :manual-refresh-token="usageManualRefreshToken"
             />
+            <CNProviderQuotaCell :account="row" />
+            <CNProviderBalanceCell :account="row" />
           </template>
           <template #cell-proxy="{ row }">
             <div class="flex flex-col items-start gap-1">
@@ -486,6 +488,8 @@ import ScheduledTestsPanel from '@/components/admin/account/ScheduledTestsPanel.
 import type { SelectOption } from '@/components/common/Select.vue'
 import AccountStatusIndicator from '@/components/account/AccountStatusIndicator.vue'
 import AccountUsageCell from '@/components/account/AccountUsageCell.vue'
+import CNProviderQuotaCell from '@/components/account/CNProviderQuotaCell.vue'
+import CNProviderBalanceCell from '@/components/account/CNProviderBalanceCell.vue'
 import AccountTodayStatsCell from '@/components/account/AccountTodayStatsCell.vue'
 import AccountGroupsCell from '@/components/account/AccountGroupsCell.vue'
 import AccountCapacityCell from '@/components/account/AccountCapacityCell.vue'

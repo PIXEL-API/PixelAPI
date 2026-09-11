@@ -1672,7 +1672,7 @@ const exportToExcel = async () => {
       t('admin.usage.cacheReadCost'), t('admin.usage.cacheCreationCost'),
       t('usage.rate'), t('usage.accountMultiplier'), t('usage.original'), t('usage.userBilled'), t('usage.accountBilled'),
       t('usage.firstToken'), t('usage.duration'),
-      t('admin.usage.requestId'), t('usage.userAgent'), t('admin.usage.ipAddress')
+      t('admin.usage.requestId'), t('admin.usage.upstreamRequestId'), t('admin.usage.billingError'), t('usage.userAgent'), t('admin.usage.ipAddress')
     ]
     const csvRows = [toCsvRow(headers)]
     while (true) {
@@ -1692,7 +1692,9 @@ const exportToExcel = async () => {
         log.rate_multiplier?.toPrecision(4) || '1.00', (log.account_rate_multiplier ?? 1).toPrecision(4),
         log.total_cost?.toFixed(6) || '0.000000', log.actual_cost?.toFixed(6) || '0.000000',
         ((log.account_stats_cost ?? log.total_cost) * (log.account_rate_multiplier ?? 1)).toFixed(6), log.first_token_ms ?? '', log.duration_ms,
-        log.request_id || '', log.user_agent || '', log.ip_address || ''
+        log.request_id || '', log.upstream_request_id || '',
+        log.billing_error ? t(log.billing_error === 'pricing_missing' ? 'admin.usage.billingPricingMissing' : 'admin.usage.billingFailed') : '',
+        log.user_agent || '', log.ip_address || ''
       ])
       if (rows.length) {
         csvRows.push(...rows.map(toCsvRow))
@@ -1716,8 +1718,10 @@ const exportToExcel = async () => {
 
 // Column visibility
 const ALWAYS_VISIBLE = ['user', 'created_at']
-const DEFAULT_HIDDEN_COLUMNS = ['reasoning_effort', 'user_agent']
+const DEFAULT_HIDDEN_COLUMNS = ['reasoning_effort', 'user_agent', 'upstream_request_id']
 const HIDDEN_COLUMNS_KEY = 'usage-hidden-columns'
+const COLUMN_SETTINGS_VERSION_KEY = 'usage-column-settings-version'
+const COLUMN_SETTINGS_VERSION = '1'
 
 const allColumns = computed(() => [
   { key: 'user', label: t('admin.usage.user'), sortable: false },
@@ -1734,6 +1738,7 @@ const allColumns = computed(() => [
   { key: 'latency', label: t('usage.latency'), sortable: false },
   { key: 'created_at', label: t('usage.time'), sortable: true },
   { key: 'user_agent', label: t('usage.userAgent'), sortable: false },
+  { key: 'upstream_request_id', label: t('admin.usage.upstreamRequestId'), sortable: false },
   { key: 'ip_address', label: t('admin.usage.ipAddress'), sortable: false }
 ])
 
@@ -1759,6 +1764,7 @@ const toggleColumn = (key: string) => {
   }
   try {
     localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
+    localStorage.setItem(COLUMN_SETTINGS_VERSION_KEY, COLUMN_SETTINGS_VERSION)
   } catch (e) {
     console.error('Failed to save columns:', e)
   }
@@ -1775,6 +1781,11 @@ const loadSavedColumns = () => {
       DEFAULT_HIDDEN_COLUMNS.forEach((key) => {
         hiddenColumns.add(key)
       })
+    }
+    if (localStorage.getItem(COLUMN_SETTINGS_VERSION_KEY) !== COLUMN_SETTINGS_VERSION) {
+      hiddenColumns.add('upstream_request_id')
+      localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
+      localStorage.setItem(COLUMN_SETTINGS_VERSION_KEY, COLUMN_SETTINGS_VERSION)
     }
   } catch {
     DEFAULT_HIDDEN_COLUMNS.forEach((key) => {

@@ -172,6 +172,11 @@
 
         <template #cell-cost="{ row }">
           <div class="text-sm">
+            <div
+              v-if="row.billing_error"
+              class="mb-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
+              :title="billingErrorLabel(row.billing_error)"
+            >{{ t('admin.usage.billingUnsettled') }}</div>
             <div class="flex items-center gap-1.5">
               <span class="font-medium text-green-600 dark:text-green-400">${{ row.actual_cost?.toFixed(6) || '0.000000' }}</span>
               <!-- Cost Detail Tooltip -->
@@ -219,6 +224,18 @@
         <template #cell-ip_address="{ row }">
           <span v-if="row.ip_address" class="text-sm font-mono text-gray-600 dark:text-gray-400">{{ row.ip_address }}</span>
           <span v-else class="text-sm text-gray-400 dark:text-gray-500">-</span>
+        </template>
+
+        <template #cell-upstream_request_id="{ row }">
+          <button
+            v-if="row.upstream_request_id"
+            type="button"
+            class="block max-w-[240px] truncate font-mono text-xs text-primary-600 dark:text-primary-400"
+            :title="row.upstream_request_id"
+            :aria-label="t('admin.usage.copyUpstreamRequestId')"
+            @click="copyToClipboard(row.upstream_request_id, t('admin.usage.upstreamRequestIdCopied'))"
+          >{{ row.upstream_request_id }}</button>
+          <span v-else class="text-sm text-gray-400">-</span>
         </template>
 
         <template #empty><EmptyState :message="t('usage.noRecords')" /></template>
@@ -425,6 +442,7 @@ import EmptyState from '@/components/common/EmptyState.vue'
 import Icon from '@/components/icons/Icon.vue'
 import UsageLatencyCell from '@/components/common/UsageLatencyCell.vue'
 import { useUsageDetailTooltip } from '@/composables/useUsageDetailTooltip'
+import { useClipboard } from '@/composables/useClipboard'
 import type { AdminUsageLog } from '@/types'
 import type { Column } from '@/components/common/types'
 
@@ -450,6 +468,10 @@ defineEmits<{
   sort: [key: string, order: 'asc' | 'desc']
 }>()
 const { t } = useI18n()
+const { copyToClipboard } = useClipboard()
+const billingErrorLabel = (code: string): string => t(
+  code === 'pricing_missing' ? 'admin.usage.billingPricingMissing' : 'admin.usage.billingFailed'
+)
 
 const sentUpstreamModel = (row: AdminUsageLog): string => row.upstream_model?.trim() || row.model?.trim() || ''
 

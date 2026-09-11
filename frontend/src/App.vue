@@ -102,7 +102,42 @@ onMounted(async () => {
 
 <template>
   <NavigationProgress />
-  <RouterView />
+  <RouterView v-slot="{ Component, route }">
+    <!-- Let the lazy destination mount before the outgoing full-page surface fades. -->
+    <Transition name="page" mode="in-out">
+      <component
+        :is="Component"
+        :key="route.name ? `${String(route.name)}:${JSON.stringify(route.params)}` : route.path"
+      />
+    </Transition>
+  </RouterView>
   <Toast />
   <AnnouncementPopup />
 </template>
+
+<style>
+/* Keep route changes calm while preserving the existing page layout. */
+.page-enter-active,
+.page-leave-active {
+  transition:
+    opacity 240ms ease,
+    transform 300ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.page-enter-from {
+  opacity: 0;
+  transform: translateY(0.6rem);
+}
+
+.page-leave-to {
+  opacity: 0;
+  transform: translateY(-0.35rem);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter-active,
+  .page-leave-active {
+    transition-duration: 1ms;
+  }
+}
+</style>

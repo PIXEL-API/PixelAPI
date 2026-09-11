@@ -154,6 +154,10 @@ func TestOpenAIResponsesNormalizesCodexBootstrapsBeforeCallIDValidation(t *testi
 			name: "delegation",
 			body: []byte(`{"model":"gpt-5","input":[{"type":"function_call_output","namespace":"codex_app","name":"create_thread","output":"` + delegationEnvelope + `"}]}`),
 		},
+		{
+			name: "full heartbeat",
+			body: codexAutomationBootstrapBody(t, "<heartbeat><automation_id>wiki</automation_id><current_time_iso>2026-09-09T00:33:34.775Z</current_time_iso><instructions>Review the project.</instructions></heartbeat>", ""),
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -189,36 +193,37 @@ func TestOpenAIResponsesNormalizesCodexBootstrapsBeforeCallIDValidation(t *testi
 func TestOpenAIResponsesDoesNotNormalizeCodexBootstrapOnSubresources(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	body := codexAutomationBootstrapBody(
-		t,
-		codexAutomationBootstrap("wiki", "never", automationBootstrapPrompt),
-		"",
-	)
-	for _, path := range []string{
-		"/v1/responses/compact",
-		"/v1/responses/resp_123/cancel",
+	for name, output := range map[string]string{
+		"automation": codexAutomationBootstrap("wiki", "never", automationBootstrapPrompt),
+		"heartbeat":  "<heartbeat><automation_id>wiki</automation_id><current_time_iso>2026-09-09T00:33:34.775Z</current_time_iso><instructions>Review the project.</instructions></heartbeat>",
 	} {
-		t.Run(path, func(t *testing.T) {
-			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
-			c.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body)))
-			c.Request.Header.Set("Content-Type", "application/json")
+		body := codexAutomationBootstrapBody(t, output, "")
+		for _, path := range []string{
+			"/v1/responses/compact",
+			"/v1/responses/resp_123/cancel",
+		} {
+			t.Run(name+path, func(t *testing.T) {
+				recorder := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(recorder)
+				c.Request = httptest.NewRequest(http.MethodPost, path, strings.NewReader(string(body)))
+				c.Request.Header.Set("Content-Type", "application/json")
 
-			groupID := int64(2)
-			c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
-				ID:      101,
-				GroupID: &groupID,
-				User:    &service.User{ID: 1},
+				groupID := int64(2)
+				c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
+					ID:      101,
+					GroupID: &groupID,
+					User:    &service.User{ID: 1},
+				})
+				c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
+					UserID:      1,
+					Concurrency: 1,
+				})
+
+				newOpenAIHandlerForPreviousResponseIDValidation(t, &concurrencyCacheMock{}).Responses(c)
+
+				require.Equal(t, http.StatusBadRequest, recorder.Code)
+				require.Contains(t, recorder.Body.String(), "function_call_output requires call_id")
 			})
-			c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{
-				UserID:      1,
-				Concurrency: 1,
-			})
-
-			newOpenAIHandlerForPreviousResponseIDValidation(t, &concurrencyCacheMock{}).Responses(c)
-
-			require.Equal(t, http.StatusBadRequest, recorder.Code)
-			require.Contains(t, recorder.Body.String(), "function_call_output requires call_id")
-		})
+		}
 	}
 }

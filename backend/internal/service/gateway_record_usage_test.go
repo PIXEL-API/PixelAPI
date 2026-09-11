@@ -333,7 +333,7 @@ func TestGatewayServiceRecordUsage_UsesFallbackRequestIDForUsageLog(t *testing.T
 	require.Equal(t, "local:gateway-local-fallback", usageRepo.lastLog.RequestID)
 }
 
-func TestGatewayServiceRecordUsage_PrefersUpstreamRequestIDOverClientRequestID(t *testing.T) {
+func TestGatewayServiceRecordUsage_PrefersClientRequestIDAndPreservesUpstreamRequestID(t *testing.T) {
 	usageRepo := &openAIRecordUsageLogRepoStub{}
 	billingRepo := &openAIRecordUsageBillingRepoStub{result: &UsageBillingApplyResult{Applied: true}}
 	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, &openAIRecordUsageUserRepoStub{}, &openAIRecordUsageSubRepoStub{})
@@ -357,9 +357,11 @@ func TestGatewayServiceRecordUsage_PrefersUpstreamRequestIDOverClientRequestID(t
 
 	require.NoError(t, err)
 	require.NotNil(t, billingRepo.lastCmd)
-	require.Equal(t, "upstream-volatile-456", billingRepo.lastCmd.RequestID)
+	require.Equal(t, "client:client-stable-123", billingRepo.lastCmd.RequestID)
 	require.NotNil(t, usageRepo.lastLog)
-	require.Equal(t, "upstream-volatile-456", usageRepo.lastLog.RequestID)
+	require.Equal(t, "client:client-stable-123", usageRepo.lastLog.RequestID)
+	require.NotNil(t, usageRepo.lastLog.UpstreamRequestID)
+	require.Equal(t, "upstream-volatile-456", *usageRepo.lastLog.UpstreamRequestID)
 }
 
 func TestGatewayServiceRecordUsage_GeneratesRequestIDWhenAllSourcesMissing(t *testing.T) {
@@ -455,6 +457,33 @@ func TestGatewayServiceRecordUsage_BillingErrorWritesUnsettledUsageLog(t *testin
 	require.Greater(t, usageRepo.lastLog.OutputCost, 0.0)
 	require.Greater(t, usageRepo.lastLog.TotalCost, 0.0)
 	require.Zero(t, usageRepo.lastLog.ActualCost)
+	require.NotNil(t, usageRepo.lastLog.BillingError)
+	require.Equal(t, UsageBillingErrorFailed, *usageRepo.lastLog.BillingError)
+}
+
+func TestGatewayServiceRecordUsage_UnpricedModelPreservesUnsettledUsage(t *testing.T) {
+	usageRepo := &openAIRecordUsageLogRepoStub{}
+	billingRepo := &openAIRecordUsageBillingRepoStub{}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	svc := newGatewayRecordUsageServiceWithBillingRepoForTest(usageRepo, billingRepo, userRepo, &openAIRecordUsageSubRepoStub{})
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID: "gateway-unpriced-usage", Model: "model-without-any-price",
+			Usage: ClaudeUsage{InputTokens: 10, OutputTokens: 6, CacheReadInputTokens: 3},
+		},
+		APIKey: &APIKey{ID: 508}, User: &User{ID: 608}, Account: &Account{ID: 708},
+	})
+	require.ErrorIs(t, err, ErrModelPricingUnavailable)
+	require.Zero(t, billingRepo.calls)
+	require.Zero(t, userRepo.deductCalls)
+	require.Equal(t, 1, usageRepo.calls)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, 10, usageRepo.lastLog.InputTokens)
+	require.Equal(t, 6, usageRepo.lastLog.OutputTokens)
+	require.Equal(t, 3, usageRepo.lastLog.CacheReadTokens)
+	require.Zero(t, usageRepo.lastLog.ActualCost)
+	require.NotNil(t, usageRepo.lastLog.BillingError)
+	require.Equal(t, UsageBillingErrorPricingMissing, *usageRepo.lastLog.BillingError)
 }
 
 func TestGatewayServiceRecordUsage_ReasoningEffortPersisted(t *testing.T) {

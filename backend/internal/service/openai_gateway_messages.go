@@ -64,6 +64,16 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			return nil, fmt.Errorf("unsupported OpenCode Go protocol %q for model %q", resolved.Spec.Protocol, resolved.UpstreamModel)
 		}
 	}
+	// CN providers configured for Anthropic or adaptive protocol use the raw
+	// Anthropic Messages path. The raw forwarder selects the provider's native
+	// /v1/messages endpoint and preserves the request/stream contract.
+	if account.IsCNProvider() && (account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol()) {
+		if account.IsAnthropicProtocol() {
+			SetActualOpenAIUpstreamEndpoint(c, "/v1/messages")
+			return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel)
+		}
+		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+	}
 	// OpenCode Go 的协议由映射后的最终模型目录决定。普通 OpenAI API Key 的
 	// 账号级 Responses 探测/强制模式不得覆盖已经完成的 OpenCode 路由决策。
 	if account.Type == AccountTypeAPIKey && !account.IsOpencode() && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
@@ -371,7 +381,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
-		shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody)
+		shouldFailover := s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody)
 		if account.Platform == PlatformGrok {
 			shouldFailover = s.shouldFailoverGrokUpstreamError(resp.StatusCode, respBody)
 		}
@@ -580,7 +590,7 @@ func (s *OpenAIGatewayService) handleAnthropicBufferedStreamingResponse(
 			UpstreamOutTok: usage.OutputTokens,
 		})
 		writeAnthropicError(c, http.StatusBadRequest, "invalid_request_error", clientMsg)
-		return resultForOpenAICompatFailure(c, requestID, usage, originalModel, billingModel, upstreamModel, finalResponse.ServiceTier, false, startTime),
+		return resultForOpenAICompatFailure(c, requestID, resp.Header, usage, originalModel, billingModel, upstreamModel, finalResponse.ServiceTier, false, startTime),
 			fmt.Errorf("openai cyber_policy: %s", clientMsg)
 	}
 	if strings.EqualFold(strings.TrimSpace(finalResponse.Status), "failed") {

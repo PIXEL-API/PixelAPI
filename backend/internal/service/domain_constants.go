@@ -38,12 +38,24 @@ const (
 
 // Platform constants
 const (
-	PlatformAnthropic   = domain.PlatformAnthropic
-	PlatformOpenAI      = domain.PlatformOpenAI
-	PlatformGemini      = domain.PlatformGemini
-	PlatformAntigravity = domain.PlatformAntigravity
-	PlatformGrok        = domain.PlatformGrok
-	PlatformOpencode    = domain.PlatformOpencode
+	PlatformAnthropic          = domain.PlatformAnthropic
+	PlatformOpenAI             = domain.PlatformOpenAI
+	PlatformGemini             = domain.PlatformGemini
+	PlatformAntigravity        = domain.PlatformAntigravity
+	PlatformGrok               = domain.PlatformGrok
+	PlatformOpencode           = domain.PlatformOpencode
+	PlatformKimi               = domain.PlatformKimi
+	PlatformZhipu              = domain.PlatformZhipu
+	PlatformDeepseek           = domain.PlatformDeepseek
+	PlatformMiniMax            = domain.PlatformMiniMax
+	PlatformQwen               = domain.PlatformQwen
+	PlatformComposite          = domain.PlatformComposite
+	AccountModePayG            = domain.AccountModePayG
+	AccountModeCoding          = domain.AccountModeCoding
+	APIProtocolChatCompletions = domain.APIProtocolChatCompletions
+	APIProtocolAnthropic       = domain.APIProtocolAnthropic
+	APIProtocolResponses       = domain.APIProtocolResponses
+	APIProtocolAdaptive        = domain.APIProtocolAdaptive
 )
 
 // supportedAccountPlatforms is the single service-level source for account platform validation.
@@ -54,7 +66,40 @@ var supportedAccountPlatforms = [...]string{
 	PlatformAntigravity,
 	PlatformGrok,
 	PlatformOpencode,
+	PlatformKimi,
+	PlatformZhipu,
+	PlatformDeepseek,
+	PlatformMiniMax,
+	PlatformQwen,
 }
+
+// IsCNProvider reports whether platform is a mainland China OpenAI-compatible provider.
+func IsCNProvider(platform string) bool {
+	switch platform {
+	case PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformQwen:
+		return true
+	default:
+		return false
+	}
+}
+
+const (
+	DefaultKimiPayGBaseURL            = "https://api.moonshot.cn/v1"
+	DefaultKimiCodingBaseURL          = "https://api.kimi.com/coding/v1"
+	DefaultZhipuPayGBaseURL           = "https://open.bigmodel.cn/api/paas/v4"
+	DefaultZhipuCodingBaseURL         = "https://open.bigmodel.cn/api/coding/paas/v4"
+	DefaultDeepseekBaseURL            = "https://api.deepseek.com"
+	DefaultMiniMaxBaseURL             = "https://api.minimaxi.com/v1"
+	DefaultQwenBaseURL                = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+	DefaultQwenCodingBaseURL          = "https://coding.dashscope.aliyuncs.com/v1"
+	DefaultQwenAnthropicBaseURL       = "https://dashscope.aliyuncs.com/apps/anthropic"
+	DefaultQwenCodingAnthropicBaseURL = "https://coding.dashscope.aliyuncs.com/apps/anthropic"
+	DefaultKimiPayGAnthropicBaseURL   = "https://api.moonshot.cn/anthropic"
+	DefaultKimiCodingAnthropicBaseURL = "https://api.kimi.com/coding"
+	DefaultZhipuAnthropicBaseURL      = "https://open.bigmodel.cn/api/anthropic"
+	DefaultDeepseekAnthropicBaseURL   = "https://api.deepseek.com/anthropic"
+	DefaultMiniMaxAnthropicBaseURL    = "https://api.minimaxi.com/anthropic"
+)
 
 // SupportedAccountPlatforms returns all canonical account platforms.
 func SupportedAccountPlatforms() []string {
@@ -76,6 +121,10 @@ func IsSupportedAccountPlatform(platform string) bool {
 
 // AllowedQuotaPlatforms is the single service-level source for user platform quotas.
 var AllowedQuotaPlatforms = SupportedAccountPlatforms()
+
+var AllowedSchedulingThresholdPlatforms = []string{
+	PlatformOpenAI, PlatformAnthropic, PlatformGrok, PlatformKimi, PlatformZhipu, PlatformMiniMax,
+}
 
 func IsAllowedQuotaPlatform(s string) bool {
 	for _, p := range AllowedQuotaPlatforms {

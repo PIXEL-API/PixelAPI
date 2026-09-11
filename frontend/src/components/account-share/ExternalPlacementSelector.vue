@@ -101,11 +101,16 @@ const platformDisplayName = computed(() => {
   if (props.platform === 'openai') return 'OpenAI'
   if (props.platform === 'anthropic') return 'Anthropic'
   if (props.platform === 'opencode') return 'Opencode'
+  if (props.platform === 'kimi') return 'Kimi'
+  if (props.platform === 'zhipu') return '智谱 GLM'
+  if (props.platform === 'deepseek') return 'DeepSeek'
+  if (props.platform === 'minimax') return 'MiniMax'
+  if (props.platform === 'qwen') return '通义千问'
   return props.platform ? String(props.platform) : ''
 })
 
 const supportsPlatformMode = computed(() => (
-  props.platform === 'openai' || props.platform === 'anthropic' || props.platform === 'opencode'
+  props.platform === 'openai' || props.platform === 'anthropic' || props.platform === 'opencode' || props.platform === 'kimi' || props.platform === 'zhipu' || props.platform === 'deepseek' || props.platform === 'minimax' || props.platform === 'qwen'
 ))
 
 function explicitDisabledReason(target: AccountExternalPlacementTarget): string {

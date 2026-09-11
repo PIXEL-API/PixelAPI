@@ -144,7 +144,9 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 		return s.buildAntigravityAPIKeyModelsRequest(ctx, account)
 	case account.IsGrok():
 		return s.buildGrokUpstreamModelsRequest(ctx, account)
-	case account.IsOpenAI():
+	case account.IsQwen() && (account.IsCodingPlan() || account.IsAnthropicProtocol()):
+		return nil, newUpstreamModelSyncUnsupportedError("This Qwen billing mode or protocol does not provide model discovery; configure the model whitelist from the provider catalog", nil)
+	case account.IsOpenAI(), account.IsCNProvider():
 		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
 	case account.IsGemini():
 		return s.buildGeminiUpstreamModelsRequest(ctx, account)
@@ -329,12 +331,12 @@ func (s *AccountTestService) buildAntigravityAPIKeyModelsRequest(ctx context.Con
 func (s *AccountTestService) buildOpenAIUpstreamModelsRequest(ctx context.Context, account *Account) (*http.Request, error) {
 	if account.Type != AccountTypeAPIKey {
 		return nil, newUpstreamModelSyncUnsupportedError(
-			fmt.Sprintf("Unsupported OpenAI account type for upstream model sync: %s", account.Type), nil,
+			fmt.Sprintf("Unsupported OpenAI-compatible account type for upstream model sync: %s", account.Type), nil,
 		)
 	}
 	apiKey := strings.TrimSpace(account.GetOpenAIApiKey())
 	if apiKey == "" {
-		return nil, newUpstreamModelSyncConfigError("No OpenAI API key is available", nil)
+		return nil, newUpstreamModelSyncConfigError("No OpenAI-compatible API key is available", nil)
 	}
 
 	baseURL := account.GetOpenAIBaseURL()
@@ -343,7 +345,7 @@ func (s *AccountTestService) buildOpenAIUpstreamModelsRequest(ctx context.Contex
 	}
 	normalizedBaseURL, err := s.validateUpstreamBaseURL(baseURL)
 	if err != nil {
-		return nil, newUpstreamModelSyncConfigError("Invalid OpenAI base URL", err)
+		return nil, newUpstreamModelSyncConfigError("Invalid OpenAI-compatible base URL", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, buildOpenAIModelsURL(normalizedBaseURL), nil)

@@ -204,7 +204,7 @@ func isOpenAICodexAutomationCandidate(item map[string]any) bool {
 		return false
 	}
 	output, ok := item["output"].(string)
-	return ok && validOpenAICodexAutomationBootstrap(output)
+	return ok && (validOpenAICodexAutomationBootstrap(output) || validOpenAICodexAutomationHeartbeat(output))
 }
 
 func openAIStringField(item map[string]any, key string) string {
@@ -280,6 +280,90 @@ func validOpenAICodexAutomationLastRun(value string) bool {
 	}
 	epochMillis, err := strconv.ParseInt(value[separator+2:len(value)-1], 10, 64)
 	return err == nil && runAt.UnixMilli() == epochMillis
+}
+
+// validOpenAICodexAutomationHeartbeat accepts only the complete heartbeat
+// envelope emitted by Codex automation runs. The strict shape prevents an
+// arbitrary function output from being rewritten into a user message before
+// the normal Responses call_id validation runs.
+func validOpenAICodexAutomationHeartbeat(value string) bool {
+	decoder := xml.NewDecoder(strings.NewReader(value))
+	fields := make(map[string]string, 3)
+	var rootSeen bool
+	var childName string
+	var childText bytes.Buffer
+	depth := 0
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			if !rootSeen || depth != 0 || len(fields) != 3 {
+				return false
+			}
+			automationID, ok := fields["automation_id"]
+			if !ok || strings.TrimSpace(automationID) != automationID || !validOpenAICodexAutomationID(automationID) {
+				return false
+			}
+			timestamp, ok := fields["current_time_iso"]
+			if !ok {
+				return false
+			}
+			if _, err := time.Parse(time.RFC3339Nano, timestamp); err != nil {
+				return false
+			}
+			instructions, ok := fields["instructions"]
+			return ok && strings.TrimSpace(instructions) != ""
+		}
+		if err != nil {
+			return false
+		}
+		switch current := token.(type) {
+		case xml.StartElement:
+			depth++
+			if current.Name.Space != "" || len(current.Attr) != 0 || depth > 2 {
+				return false
+			}
+			if depth == 1 {
+				if rootSeen || current.Name.Local != "heartbeat" {
+					return false
+				}
+				rootSeen = true
+				continue
+			}
+			childName = current.Name.Local
+			switch childName {
+			case "automation_id", "current_time_iso", "instructions":
+			default:
+				return false
+			}
+			if _, duplicate := fields[childName]; duplicate {
+				return false
+			}
+			childText.Reset()
+		case xml.EndElement:
+			if current.Name.Space != "" {
+				return false
+			}
+			if depth == 2 {
+				if current.Name.Local != childName {
+					return false
+				}
+				fields[childName] = childText.String()
+				childName = ""
+			}
+			depth--
+			if depth < 0 {
+				return false
+			}
+		case xml.CharData:
+			if depth == 2 {
+				_, _ = childText.Write(current)
+			} else if len(bytes.TrimSpace(current)) != 0 {
+				return false
+			}
+		case xml.Comment, xml.ProcInst, xml.Directive:
+			return false
+		}
+	}
 }
 
 func validOpenAICodexDelegationEnvelope(value string) bool {

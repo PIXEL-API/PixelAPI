@@ -162,9 +162,12 @@ func RegisterGatewayRoutes(
 			}
 			h.Gateway.Messages(c)
 		})
-		// /v1/messages/count_tokens: OpenAI groups get 404
+		// /v1/messages/count_tokens: OpenAI/Grok/OpenCode groups get 404.
+		// 国产平台的 Anthropic 协议由通用 GatewayHandler 转发到其原生
+		// /v1/messages/count_tokens 端点；不能在这里提前拦截。
 		gateway.POST("/messages/count_tokens", func(c *gin.Context) {
-			if isOpenAICompatiblePlatform(getGroupPlatform(c)) {
+			platform := getGroupPlatform(c)
+			if isOpenAICompatiblePlatform(platform) && !service.IsCNProvider(platform) {
 				c.JSON(http.StatusNotFound, gin.H{
 					"type": "error",
 					"error": gin.H{
@@ -334,5 +337,5 @@ func getGroupPlatform(c *gin.Context) string {
 }
 
 func isOpenAICompatiblePlatform(platform string) bool {
-	return platform == service.PlatformOpenAI || platform == service.PlatformGrok || platform == service.PlatformOpencode
+	return platform == service.PlatformOpenAI || platform == service.PlatformGrok || platform == service.PlatformOpencode || service.IsCNProvider(platform)
 }

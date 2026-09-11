@@ -90,6 +90,9 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
 	}
 	baseURL := account.GetOpenAIBaseURL()
+	if account.IsCNProvider() {
+		baseURL = account.GetCNProtocolBaseURL(APIProtocolChatCompletions)
+	}
 	if account.IsOpencode() {
 		baseURL = account.GetOpencodeBaseURL()
 	} else if baseURL == "" {
@@ -168,7 +171,7 @@ func (s *OpenAIGatewayService) forwardAsRawChatCompletions(
 		resp.Body = io.NopCloser(bytes.NewReader(respBody))
 
 		upstreamMsg := sanitizeUpstreamErrorMessage(strings.TrimSpace(extractUpstreamErrorMessage(respBody)))
-		if s.shouldFailoverOpenAIUpstreamResponse(resp.StatusCode, upstreamMsg, respBody) {
+		if s.shouldFailoverOpenAIUpstreamResponse(account, resp.StatusCode, upstreamMsg, respBody) {
 			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
 				Platform:           account.Platform,
 				AccountID:          account.ID,

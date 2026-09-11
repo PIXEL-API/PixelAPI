@@ -49,7 +49,9 @@ func TestOpenAIGatewayServiceForwardWithAnalysis_RawPatchSkipsFullMapDecode(t *t
 	require.Equal(t, "9007199254740993", gjson.GetBytes(forwarded, "future_extension.nonce").Raw)
 	require.Equal(t, "未知字段", gjson.GetBytes(forwarded, "future_extension.label").String())
 	require.Equal(t, "none", gjson.GetBytes(forwarded, "reasoning.effort").String())
-	require.Equal(t, "You are a helpful coding assistant.", gjson.GetBytes(forwarded, "instructions").String())
+	// API-key compatible upstreams must receive the client's instruction contract
+	// unchanged; the gateway must not synthesize a Codex system prompt.
+	require.False(t, gjson.GetBytes(forwarded, "instructions").Exists())
 }
 
 func TestProjectOpenAICleanRelaySessionBodyDropsUnrelatedLargePayload(t *testing.T) {

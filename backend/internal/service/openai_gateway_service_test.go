@@ -2266,6 +2266,71 @@ func TestOpenAIStreamingResponseFailedAfterOutputSanitizesVerboseResponseForClie
 	require.NotContains(t, body, `"parallel_tool_calls"`)
 }
 
+func TestOpenAIStreamingProcessingFailureAfterOutputKeepsDiagnosticsAndBilling(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	const failedPayload = `{"type":"response.failed","response":{"id":"resp_processing_failure","model":"upstream-model","status":"failed","instructions":"private instructions","usage":{"input_tokens":17,"output_tokens":3},"error":{"code":"server_error","message":"An error occurred while processing your request."}}}`
+	for _, passthrough := range []bool{false, true} {
+		for _, logBody := range []bool{false, true} {
+			t.Run(fmt.Sprintf("passthrough=%t/log_body=%t", passthrough, logBody), func(t *testing.T) {
+				svc := &OpenAIGatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+					MaxLineSize: defaultMaxLineSize, LogUpstreamErrorBody: logBody,
+					LogUpstreamErrorBodyMaxBytes: 4096,
+				}}}
+				rec := httptest.NewRecorder()
+				c, _ := gin.CreateTestContext(rec)
+				c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+				resp := &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"X-Request-Id": []string{"rid-processing-failure"}},
+					Body:       io.NopCloser(strings.NewReader("data: {\"type\":\"response.output_text.delta\",\"delta\":\"partial\"}\n\ndata: " + failedPayload + "\n\n")),
+				}
+				account := &Account{ID: 42, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Name: "test-account"}
+				var usage *OpenAIUsage
+				var err error
+				if passthrough {
+					var result *openaiStreamingResultPassthrough
+					result, err = svc.handleStreamingResponsePassthrough(c.Request.Context(), resp, c, account, time.Now(), "client-model", "upstream-model")
+					require.NotNil(t, result)
+					usage = result.usage
+				} else {
+					var result *openaiStreamingResult
+					result, err = svc.handleStreamingResponse(c.Request.Context(), resp, c, account, time.Now(), "client-model", "upstream-model")
+					require.NotNil(t, result)
+					usage = result.usage
+				}
+				require.Error(t, err)
+				var failoverErr *UpstreamFailoverError
+				require.False(t, errors.As(err, &failoverErr), "committed semantic output must never be replayed")
+				require.NotNil(t, usage)
+				require.Equal(t, 17, usage.InputTokens)
+				require.Equal(t, 3, usage.OutputTokens)
+				require.Contains(t, rec.Body.String(), `"delta":"partial"`)
+				require.Equal(t, 1, strings.Count(rec.Body.String(), `"type":"response.failed"`))
+				require.NotContains(t, rec.Body.String(), "response.completed")
+				require.NotContains(t, rec.Body.String(), "private instructions")
+				rawEvents, ok := c.Get(OpsUpstreamErrorsKey)
+				require.True(t, ok)
+				events, ok := rawEvents.([]*OpsUpstreamErrorEvent)
+				require.True(t, ok)
+				require.Len(t, events, 1)
+				event := events[0]
+				require.Equal(t, "stream_failed", event.Kind)
+				require.Equal(t, "rid-processing-failure", event.UpstreamRequestID)
+				require.Equal(t, account.ID, event.AccountID)
+				require.Equal(t, account.Name, event.AccountName)
+				require.Equal(t, passthrough, event.Passthrough)
+				require.Equal(t, http.StatusBadGateway, event.UpstreamStatusCode)
+				require.Contains(t, event.Message, "An error occurred while processing")
+				if logBody {
+					require.JSONEq(t, failedPayload, event.Detail, "diagnostics must preserve the upstream model and payload")
+				} else {
+					require.Empty(t, event.Detail, "respect the existing error body logging setting")
+				}
+			})
+		}
+	}
+}
+
 func TestOpenAIStreamingResponseFailedCapacityAfterOutputTempUnscheds(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	cfg := &config.Config{

@@ -18,6 +18,7 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"golang.org/x/net/http2"
 	"golang.org/x/sync/singleflight"
 )
@@ -39,6 +40,9 @@ type CodexModelsManifest struct {
 	Body        []byte
 	ETag        string
 	NotModified bool
+	// API-key manifests may be converted before delivery. Revalidation must
+	// use the upstream validator, not the converted representation's ETag.
+	upstreamETag string
 }
 
 type codexModelsManifestUpstreamError struct {
@@ -138,6 +142,10 @@ type codexModelsManifestRequest struct {
 	account            *Account
 	accountConcurrency int
 	useAPIKeyUpstream  bool
+	// Search capability is derived from the account's persisted Responses
+	// probe. It participates in the cache identity so a probe state change
+	// cannot reuse a body generated under a different tool contract.
+	advertiseSearchTool bool
 }
 
 type codexModelsManifestCacheEntry struct {
@@ -294,13 +302,14 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 		proxyURL = account.Proxy.URL()
 	}
 	request := codexModelsManifestRequest{
-		url:                requestURL.String(),
-		headers:            headers,
-		proxyURL:           proxyURL,
-		accountID:          account.ID,
-		account:            account,
-		accountConcurrency: account.Concurrency,
-		useAPIKeyUpstream:  useAPIKeyUpstream,
+		url:                 requestURL.String(),
+		headers:             headers,
+		proxyURL:            proxyURL,
+		accountID:           account.ID,
+		account:             account,
+		accountConcurrency:  account.Concurrency,
+		useAPIKeyUpstream:   useAPIKeyUpstream,
+		advertiseSearchTool: shouldAdvertiseCodexSearchTool(account),
 	}
 	if useAPIKeyUpstream {
 		return s.fetchCachedAPIKeyCodexModelsManifest(ctx, request, ifNoneMatch)
@@ -385,7 +394,7 @@ func (s *OpenAIGatewayService) refreshCachedAPIKeyCodexModelsManifest(cacheKey s
 		cached, _ := s.codexModelsManifestCache.get(cacheKey, time.Now())
 		ifNoneMatch := ""
 		if cached != nil {
-			ifNoneMatch = cached.ETag
+			ifNoneMatch = cached.upstreamETag
 		}
 		manifest, err := s.fetchCodexModelsManifestUpstream(context.Background(), request, ifNoneMatch)
 		if err != nil {
@@ -468,8 +477,19 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 			retryable: !errors.Is(err, ErrUpstreamResponseBodyTooLarge) && isRetryableCodexModelsManifestTransportError(err),
 		}
 	}
+	clientETag := resp.Header.Get("ETag")
 	if request.useAPIKeyUpstream {
-		body = convertOpenAIModelListToCodexManifest(body)
+		converted, convertErr := convertOpenAIModelListToCodexManifest(body, request.advertiseSearchTool)
+		if convertErr != nil {
+			return nil, &codexModelsManifestUpstreamError{
+				err:       infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_INVALID_MANIFEST", "convert OpenAI model list to Codex manifest: %v", convertErr),
+				retryable: true,
+			}
+		}
+		if !bytes.Equal(body, converted) {
+			clientETag = fmt.Sprintf(`"%x"`, sha256.Sum256(converted))
+		}
+		body = converted
 	}
 	if err := validateCodexModelsManifestEnvelope(body); err != nil {
 		return nil, &codexModelsManifestUpstreamError{
@@ -482,45 +502,135 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 			retryable: true,
 		}
 	}
-	return &CodexModelsManifest{Body: body, ETag: resp.Header.Get("ETag")}, nil
+	return &CodexModelsManifest{Body: body, ETag: clientETag, upstreamETag: resp.Header.Get("ETag")}, nil
 }
 
-func convertOpenAIModelListToCodexManifest(body []byte) []byte {
+// convertOpenAIModelListToCodexManifest converts a standard OpenAI
+// model list to the Codex manifest shape without discarding metadata declared
+// by the upstream. Known Codex capability fields are validated and malformed
+// declarations fail closed; unknown fields remain untouched because they are
+// part of the upstream model descriptor contract.
+func convertOpenAIModelListToCodexManifest(body []byte, advertiseSearch bool) ([]byte, error) {
 	var envelope map[string]json.RawMessage
-	if err := json.Unmarshal(body, &envelope); err != nil || envelope == nil {
-		return body
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, fmt.Errorf("decode upstream model list: %w", err)
+	}
+	if envelope == nil {
+		return nil, errors.New("upstream model list must be an object")
 	}
 	if _, ok := envelope["models"]; ok {
-		return body
+		return body, nil
 	}
 	data, ok := envelope["data"]
 	if !ok {
-		return body
+		return nil, errors.New("missing data array")
 	}
-	var entries []struct {
-		ID string `json:"id"`
-	}
+	var entries []json.RawMessage
 	if err := json.Unmarshal(data, &entries); err != nil {
-		return body
+		return nil, fmt.Errorf("decode data array: %w", err)
 	}
-	type codexModelEntry struct {
-		Slug string `json:"slug"`
-	}
-	models := make([]codexModelEntry, 0, len(entries))
-	for _, entry := range entries {
-		id := strings.TrimSpace(entry.ID)
+	models := make([]map[string]json.RawMessage, 0, len(entries))
+	for _, rawEntry := range entries {
+		var entry map[string]json.RawMessage
+		if err := json.Unmarshal(rawEntry, &entry); err != nil || entry == nil {
+			continue
+		}
+		var rawID string
+		if err := json.Unmarshal(entry["id"], &rawID); err != nil {
+			continue
+		}
+		id := strings.TrimSpace(rawID)
 		if id != "" {
-			models = append(models, codexModelEntry{Slug: id})
+			delete(entry, "id")
+			entry["slug"], _ = json.Marshal(id)
+			_, searchDeclared := entry["supports_search_tool"]
+			if err := validateCodexModelDescriptor(entry); err != nil {
+				return nil, fmt.Errorf("model %q: %w", id, err)
+			}
+			if advertiseSearch && !searchDeclared {
+				entry["supports_search_tool"] = json.RawMessage("true")
+			}
+			models = append(models, entry)
 		}
 	}
 	if len(models) == 0 {
-		return body
+		return nil, errors.New("data array contains no valid model entries")
 	}
-	converted, err := json.Marshal(map[string][]codexModelEntry{"models": models})
+	converted, err := json.Marshal(map[string][]map[string]json.RawMessage{"models": models})
 	if err != nil {
-		return body
+		return nil, fmt.Errorf("encode models array: %w", err)
 	}
-	return converted
+	return converted, nil
+}
+
+var codexModelDescriptorStringFields = map[string]struct{}{
+	"apply_patch_tool_type":        {},
+	"multi_agent_reasoning_effort": {},
+	"default_reasoning_level":      {},
+}
+
+var codexModelDescriptorBoolFields = map[string]struct{}{
+	"supports_search_tool": {},
+	"use_responses_lite":   {},
+}
+
+// validateCodexModelDescriptor checks fields with stable upstream types. Fields
+// such as comp_hash, tool_mode and multi_agent_version are opaque in the Codex
+// schema and must keep their original JSON types.
+func validateCodexModelDescriptor(entry map[string]json.RawMessage) error {
+	for field := range codexModelDescriptorStringFields {
+		if value, ok := entry[field]; ok && !validCodexModelDescriptorField(field, value) {
+			return fmt.Errorf("malformed %s", field)
+		}
+	}
+	for field := range codexModelDescriptorBoolFields {
+		if value, ok := entry[field]; ok && !validCodexModelDescriptorField(field, value) {
+			return fmt.Errorf("malformed %s", field)
+		}
+	}
+	for _, field := range []string{"supported_reasoning_levels", "input_modalities"} {
+		if value, ok := entry[field]; ok && !validCodexModelDescriptorField(field, value) {
+			return fmt.Errorf("malformed %s", field)
+		}
+	}
+	return nil
+}
+
+func validCodexModelDescriptorField(field string, value json.RawMessage) bool {
+	if _, ok := codexModelDescriptorStringFields[field]; ok {
+		return jsonNullOrString(value)
+	}
+	if _, ok := codexModelDescriptorBoolFields[field]; ok {
+		return jsonNullOrBool(value)
+	}
+	if field == "supported_reasoning_levels" || field == "input_modalities" {
+		return jsonArray(value)
+	}
+	return true
+}
+
+func jsonNullOrString(value json.RawMessage) bool {
+	value = bytes.TrimSpace(value)
+	if bytes.Equal(value, []byte("null")) {
+		return true
+	}
+	var text string
+	return json.Unmarshal(value, &text) == nil
+}
+
+func jsonNullOrBool(value json.RawMessage) bool {
+	value = bytes.TrimSpace(value)
+	return bytes.Equal(value, []byte("null")) || bytes.Equal(value, []byte("true")) || bytes.Equal(value, []byte("false"))
+}
+
+func jsonArray(value json.RawMessage) bool {
+	value = bytes.TrimSpace(value)
+	return len(value) > 0 && value[0] == '[' && json.Valid(value)
+}
+
+func shouldAdvertiseCodexSearchTool(account *Account) bool {
+	return account != nil && account.IsOpenAI() && account.Type == AccountTypeAPIKey &&
+		openai_compat.ResolveResponsesSupport(account.Extra) == openai_compat.ResponsesSupportNo
 }
 
 func validateCodexModelsManifestEnvelope(body []byte) error {
@@ -548,7 +658,7 @@ func validateCodexModelsManifestEnvelope(body []byte) error {
 
 func buildCodexModelsManifestCacheKey(request codexModelsManifestRequest) string {
 	hasher := sha256.New()
-	_, _ = fmt.Fprintf(hasher, "%d\n%s\n%s\n", request.accountID, request.proxyURL, request.url)
+	_, _ = fmt.Fprintf(hasher, "%d\n%t\n%s\n%s\n", request.accountID, request.advertiseSearchTool, request.proxyURL, request.url)
 	headerNames := make([]string, 0, len(request.headers))
 	for name := range request.headers {
 		headerNames = append(headerNames, name)

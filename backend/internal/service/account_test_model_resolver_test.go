@@ -97,6 +97,20 @@ func TestResolveTestModels_PlatformAccountNoMappingUsesCatalog(t *testing.T) {
 	require.Len(t, models, 2)
 }
 
+func TestResolveTestModels_CNProviderAPIKeyUsesCatalog(t *testing.T) {
+	catalog := &catalogStub{selectable: func(_ context.Context, query PricedModelQuery) ([]string, error) {
+		require.Equal(t, PlatformDeepseek, query.Platform)
+		return []string{"deepseek-chat"}, nil
+	}}
+	resolver := NewAccountTestModelResolver(catalog)
+	account := &Account{Platform: PlatformDeepseek, Type: AccountTypeAPIKey}
+
+	models, err := resolver.ResolveTestModels(context.Background(), account)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"deepseek-chat"}, []string{models[0].ID})
+}
+
 func TestResolveTestModels_PlatformAccountExplicitMappingFilters(t *testing.T) {
 	catalog := &catalogStub{selectable: func(_ context.Context, _ PricedModelQuery) ([]string, error) {
 		return []string{"grok-4.5", "grok-4.6", "grok-3-mini"}, nil

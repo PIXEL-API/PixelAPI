@@ -554,13 +554,51 @@ geminiNativeRouteLoop:
 			} else {
 				result, err = h.geminiCompatService.ForwardNative(requestCtx, c, account, routeModel, action, stream, routeBody)
 			}
-			if accountReleaseFunc != nil {
-				accountReleaseFunc()
-			}
+			// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
+			userAgent := c.GetHeader("User-Agent")
+			clientIP := ip.GetSecurityClientIP(c)
+
+			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
+			requestPayloadHash := service.HashUsageRequestPayload(routeBody)
+			inboundEndpoint := GetInboundEndpoint(c)
+			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
+			forceCacheBilling := fs.ForceCacheBilling
+			usageAPIKey := currentAPIKey
+			usageSubscription := currentSubscription
+			finalizeAccountShareRequest(shouldRecordGatewayUsage(result, err), func() {
+				h.submitUsageRecordTask(requestCtx, func(ctx context.Context) {
+					if err := h.gatewayService.RecordUsageWithLongContext(ctx, &service.RecordUsageLongContextInput{
+						Result:                result,
+						APIKey:                usageAPIKey,
+						User:                  usageAPIKey.User,
+						Account:               account,
+						Subscription:          usageSubscription,
+						InboundEndpoint:       inboundEndpoint,
+						UpstreamEndpoint:      upstreamEndpoint,
+						UserAgent:             userAgent,
+						IPAddress:             clientIP,
+						RequestPayloadHash:    requestPayloadHash,
+						LongContextThreshold:  200000, // Gemini 200K 阈值
+						LongContextMultiplier: 2.0,    // 超出部分双倍计费
+						ForceCacheBilling:     forceCacheBilling,
+						APIKeyService:         h.apiKeyService,
+						ChannelUsageFields:    channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
+					}); err != nil {
+						logger.L().With(
+							zap.String("component", "handler.gemini_v1beta.models"),
+							zap.Int64("user_id", authSubject.UserID),
+							zap.Int64("api_key_id", usageAPIKey.ID),
+							zap.Any("group_id", usageAPIKey.GroupID),
+							zap.String("model", routeModel),
+							zap.Int64("account_id", account.ID),
+						).Error("gemini.record_usage_failed", zap.Error(err))
+					}
+				})
+			}, accountReleaseFunc)
 			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 			if err != nil {
 				var failoverErr *service.UpstreamFailoverError
-				if errors.As(err, &failoverErr) {
+				if !shouldRecordGatewayUsage(result, err) && errors.As(err, &failoverErr) {
 					if c.Writer.Size() != writerSizeBeforeForward && !failoverErr.SafeToFailoverAfterWrite {
 						h.handleGeminiFailoverExhausted(c, failoverErr)
 						return
@@ -586,10 +624,6 @@ geminiNativeRouteLoop:
 				return
 			}
 
-			// 捕获请求信息（用于异步记录，避免在 goroutine 中访问 gin.Context）
-			userAgent := c.GetHeader("User-Agent")
-			clientIP := ip.GetSecurityClientIP(c)
-
 			// 保存 Gemini 内容摘要会话（用于 Fallback 匹配）
 			if useDigestFallback && geminiDigestChain != "" && geminiPrefixHash != "" {
 				if err := h.gatewayService.SaveGeminiSession(
@@ -604,42 +638,6 @@ geminiNativeRouteLoop:
 					reqLog.Warn("gemini.digest_session_save_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 				}
 			}
-
-			// 使用量记录通过有界 worker 池提交，避免请求热路径创建无界 goroutine。
-			requestPayloadHash := service.HashUsageRequestPayload(routeBody)
-			inboundEndpoint := GetInboundEndpoint(c)
-			upstreamEndpoint := GetUpstreamEndpoint(c, account.Platform)
-			forceCacheBilling := fs.ForceCacheBilling
-			usageAPIKey := currentAPIKey
-			usageSubscription := currentSubscription
-			h.submitUsageRecordTask(requestCtx, func(ctx context.Context) {
-				if err := h.gatewayService.RecordUsageWithLongContext(ctx, &service.RecordUsageLongContextInput{
-					Result:                result,
-					APIKey:                usageAPIKey,
-					User:                  usageAPIKey.User,
-					Account:               account,
-					Subscription:          usageSubscription,
-					InboundEndpoint:       inboundEndpoint,
-					UpstreamEndpoint:      upstreamEndpoint,
-					UserAgent:             userAgent,
-					IPAddress:             clientIP,
-					RequestPayloadHash:    requestPayloadHash,
-					LongContextThreshold:  200000, // Gemini 200K 阈值
-					LongContextMultiplier: 2.0,    // 超出部分双倍计费
-					ForceCacheBilling:     forceCacheBilling,
-					APIKeyService:         h.apiKeyService,
-					ChannelUsageFields:    channelMapping.ToUsageFields(reqModel, result.UpstreamModel),
-				}); err != nil {
-					logger.L().With(
-						zap.String("component", "handler.gemini_v1beta.models"),
-						zap.Int64("user_id", authSubject.UserID),
-						zap.Int64("api_key_id", usageAPIKey.ID),
-						zap.Any("group_id", usageAPIKey.GroupID),
-						zap.String("model", routeModel),
-						zap.Int64("account_id", account.ID),
-					).Error("gemini.record_usage_failed", zap.Error(err))
-				}
-			})
 			reqLog.Debug("gemini.request_completed",
 				zap.Int64("account_id", account.ID),
 				zap.Int("switch_count", fs.SwitchCount),

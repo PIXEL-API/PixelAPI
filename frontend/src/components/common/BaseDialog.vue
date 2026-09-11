@@ -3,7 +3,7 @@
     <Transition :name="placement === 'right' ? 'modal-drawer' : 'modal'">
       <div
         v-if="show"
-        class="modal-overlay"
+        class="modal-overlay ui-overlay"
         :class="{ 'modal-overlay-right': placement === 'right' }"
         :data-ui-skin="uiSkin"
         :style="zIndexStyle"
@@ -15,13 +15,14 @@
         <!-- Modal panel -->
         <div
           ref="dialogRef"
-          :class="['modal-content', { 'modal-content-right': placement === 'right' }, widthClasses, panelClass]"
+          :class="['modal-content', 'ui-dialog-panel', { 'modal-content-right': placement === 'right' }, widthClasses, panelClass]"
           tabindex="-1"
           @click.stop
         >
           <!-- Header -->
-          <div class="modal-header">
+          <div class="modal-header ui-dialog-header">
             <div class="flex min-w-0 flex-1 items-center gap-3">
+              <slot name="title-prefix"></slot>
               <h3 :id="dialogId" class="modal-title">
                 {{ title }}
               </h3>
@@ -41,12 +42,12 @@
           </div>
 
           <!-- Body -->
-          <div :class="['modal-body', bodyClass]">
+          <div :class="['modal-body', 'ui-dialog-body', bodyClass]">
             <slot></slot>
           </div>
 
           <!-- Footer -->
-          <div v-if="$slots.footer" class="modal-footer">
+          <div v-if="$slots.footer" class="modal-footer ui-dialog-footer">
             <slot name="footer"></slot>
           </div>
         </div>

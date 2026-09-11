@@ -600,13 +600,13 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 						}
 					})
 				}
-				hasBillableUsage := result != nil &&
-					(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
-				finalizeAccountShareRequest(hasBillableUsage, func() { recordUsageResult(result) }, accountReleaseFunc)
+				// 成功请求及带有可计费用量的失败请求交给计费层处理。
+				// 是否产生费用由 RecordUsage 的价格与用量计算决定。
+				finalizeAccountShareRequest(shouldRecordGatewayUsage(result, err), func() { recordUsageResult(result) }, accountReleaseFunc)
 				h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 				if err != nil {
 					var failoverErr *service.UpstreamFailoverError
-					if errors.As(err, &failoverErr) {
+					if !shouldRecordGatewayUsage(result, err) && errors.As(err, &failoverErr) {
 						// 流式内容已写入客户端，无法撤销，禁止 failover 以防止流拼接腐化
 						if c.Writer.Size() != writerSizeBeforeForward {
 							h.handleFailoverExhausted(c, failoverErr, service.PlatformGemini, true)
@@ -1183,9 +1183,9 @@ routeLoop:
 				result, err = h.gatewayService.Forward(requestCtx, c, account, parsedReq)
 			}
 			cancelForward()
-			hasBillableUsage := result != nil &&
-				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
-			finalizeAccountShareRequest(hasBillableUsage, func() { recordUsageResult(result) }, accountReleaseFunc)
+			// result 非空表示上游已完成或已观测到本次尝试；计费层负责计算
+			// 实际金额，handler 不再按 usage 数量过滤记录。
+			finalizeAccountShareRequest(shouldRecordGatewayUsage(result, err), func() { recordUsageResult(result) }, accountReleaseFunc)
 
 			// 兜底释放串行锁（正常情况已通过回调提前释放）
 			if queueRelease != nil {
@@ -1197,7 +1197,7 @@ routeLoop:
 			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 			if err != nil {
 				billableStreamUsageError := service.IsBillableStreamUsageError(err)
-				if hasBillableUsage {
+				if shouldRecordGatewayUsage(result, err) {
 					usageRecordedEvent := "gateway.forward_usage_recorded_after_error"
 					if billableStreamUsageError {
 						usageRecordedEvent = "gateway.billable_stream_usage_recorded_after_error"
@@ -1269,7 +1269,7 @@ routeLoop:
 					return
 				}
 				var failoverErr *service.UpstreamFailoverError
-				if errors.As(err, &failoverErr) {
+				if !shouldRecordGatewayUsage(result, err) && errors.As(err, &failoverErr) {
 					// 流式内容已写入客户端，无法撤销，禁止 failover 以防止流拼接腐化
 					if c.Writer.Size() != writerSizeBeforeForward {
 						h.handleFailoverExhausted(c, failoverErr, account.Platform, true)

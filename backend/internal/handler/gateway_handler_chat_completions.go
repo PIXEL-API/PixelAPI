@@ -392,14 +392,12 @@ routeLoop:
 					}
 				})
 			}
-			hasBillableUsage := result != nil &&
-				(service.IsBillableStreamUsageError(err) || service.ForwardResultHasBillableUsage(result))
-			finalizeAccountShareRequest(hasBillableUsage, func() { recordUsageResult(result) }, accountReleaseFunc)
+			finalizeAccountShareRequest(shouldRecordGatewayUsage(result, err), func() { recordUsageResult(result) }, accountReleaseFunc)
 			h.gatewayService.ReportAccountForwardResult(account.ID, result, err)
 
 			if err != nil {
 				var failoverErr *service.UpstreamFailoverError
-				if errors.As(err, &failoverErr) {
+				if !shouldRecordGatewayUsage(result, err) && errors.As(err, &failoverErr) {
 					if c.Writer.Size() != writerSizeBeforeForward {
 						h.handleCCFailoverExhausted(c, failoverErr, true)
 						return

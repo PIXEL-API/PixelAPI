@@ -152,3 +152,43 @@ func TestHandleErrorResponse_PassthroughRuleStillWinsOver400Branch(t *testing.T)
 	require.Equal(t, http.StatusTeapot, rec.Code)
 	require.Equal(t, "自定义文案", gjson.Get(rec.Body.String(), "error.message").String())
 }
+
+func TestIsOpenAICompatibleModelNotFound400(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{name: "structured code", body: `{"error":{"code":"model_not_found","message":"No such deployment"}}`, want: true},
+		{name: "unknown provider", body: `{"error":{"message":"Unknown provider for model claude-x"}}`, want: true},
+		{name: "model not found", body: `{"error":{"message":"Model not found: claude-x"}}`, want: true},
+		{name: "unsupported model", body: `{"error":{"message":"The requested model is not supported"}}`, want: true},
+		{name: "plain text", body: `unknown provider for model claude-x`, want: true},
+		{name: "invalid parameter", body: `{"error":{"code":"invalid_request_error","message":"Invalid value for temperature"}}`, want: false},
+		{name: "nonmatching code", body: `{"error":{"code":"invalid_request_error","message":"Model not found: claude-x"}}`, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isOpenAICompatibleModelNotFound400([]byte(tt.body)))
+		})
+	}
+}
+
+type modelNotFoundManagedAccountRepo struct{ AccountRepository }
+
+func TestShouldFailoverOpenAIModelNotFoundRequiresManagedCompatibleAccount(t *testing.T) {
+	svc := &OpenAIGatewayService{accountRepo: &modelNotFoundManagedAccountRepo{}}
+	body := []byte(`{"error":{"code":"model_not_found","message":"model not found"}}`)
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(
+		&Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}, http.StatusBadRequest, "model not found", body,
+	))
+	require.True(t, svc.shouldFailoverOpenAIUpstreamResponse(
+		&Account{Platform: PlatformDeepseek, Type: AccountTypeAPIKey}, http.StatusBadRequest, "model not found", body,
+	))
+	require.False(t, svc.shouldFailoverOpenAIUpstreamResponse(
+		&Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey}, http.StatusBadRequest, "model not found", body,
+	))
+	require.False(t, (&OpenAIGatewayService{}).shouldFailoverOpenAIUpstreamResponse(
+		&Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}, http.StatusBadRequest, "model not found", body,
+	))
+}

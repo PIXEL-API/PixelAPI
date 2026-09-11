@@ -144,6 +144,28 @@ func ProvideGrokQuotaService(
 	return svc
 }
 
+func ProvideCNProviderQuotaService(accountRepo AccountRepository, proxyRepo ProxyRepository, httpUpstream HTTPUpstream, cfg *config.Config, settingService *SettingService) *CNProviderQuotaService {
+	svc := NewCNProviderQuotaService(accountRepo, proxyRepo, httpUpstream, cfg)
+	svc.SetURLSecurityPolicy(settingService)
+	return svc
+}
+
+func ProvideCNProviderBalanceService(accountRepo AccountRepository, proxyRepo ProxyRepository, httpUpstream HTTPUpstream, cfg *config.Config, settingService *SettingService) *CNProviderBalanceService {
+	svc := NewCNProviderBalanceService(accountRepo, proxyRepo, httpUpstream, cfg)
+	svc.SetURLSecurityPolicy(settingService)
+	return svc
+}
+
+func ProvideCNProviderBalanceCheckService(accountRepo AccountRepository, balance *CNProviderBalanceService, quota *CNProviderQuotaService, cfg *config.Config, taskExecutor *ClusterTaskExecutor) *CNProviderBalanceCheckService {
+	interval := 10 * time.Minute
+	if cfg != nil && cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes > 0 {
+		interval = time.Duration(cfg.Gateway.CNProviders.BalanceCheckIntervalMinutes) * time.Minute
+	}
+	svc := NewCNProviderBalanceCheckService(accountRepo, balance, quota, cfg, interval, taskExecutor)
+	svc.Start()
+	return svc
+}
+
 // ProvideGrokTokenProvider creates GrokTokenProvider with OAuthRefreshAPI injection.
 func ProvideGrokTokenProvider(
 	accountRepo AccountRepository,
@@ -1083,6 +1105,7 @@ func ProvideAdminService(
 
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
+	wire.Bind(new(PricedModelCatalog), new(*ChannelService)),
 	// Core services
 	ProvideAuthService,
 	NewUserService,
@@ -1127,6 +1150,9 @@ var ProviderSet = wire.NewSet(
 	ProvideOpenAITokenProvider,
 	ProvideOpenAIQuotaService,
 	ProvideGrokQuotaService,
+	ProvideCNProviderQuotaService,
+	ProvideCNProviderBalanceService,
+	ProvideCNProviderBalanceCheckService,
 	ProvideClaudeTokenProvider,
 	NewAntigravityGatewayService,
 	ProvideRateLimitService,

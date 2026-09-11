@@ -1,53 +1,33 @@
 <template>
-  <Teleport to="body">
-    <Transition name="drawer">
-      <div
-        v-if="show"
-        class="fixed inset-0 z-50 flex justify-end bg-gray-950/30 backdrop-blur-[2px] dark:bg-black/55"
-        @mousedown.self="$emit('close')"
+  <BaseDialog
+    :show="show"
+    :title="model?.name || ''"
+    placement="right"
+    width="full"
+    close-on-click-outside
+    panel-class="available-model-details-panel"
+    body-class="px-4 py-5 sm:px-6 sm:py-6"
+    @close="$emit('close')"
+  >
+    <template #title-prefix>
+      <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gray-50 ring-1 ring-inset ring-gray-200 dark:bg-dark-800 dark:ring-dark-700">
+        <ModelIcon v-if="model" :model="model.name" size="21px" />
+      </span>
+    </template>
+    <template #title-extra>
+      <span
+        v-if="platform"
+        :class="[
+          'inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide',
+          platformBadgeClass(platform),
+        ]"
       >
-        <aside
-          ref="drawerRef"
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="available-model-drawer-title"
-          class="drawer-panel flex h-[100dvh] w-full min-w-0 flex-col overflow-hidden border-l border-gray-200 bg-white shadow-2xl dark:border-dark-700 dark:bg-dark-900 sm:max-w-2xl lg:max-w-3xl xl:max-w-4xl"
-          @keydown="handleDrawerKeydown"
-        >
-          <header class="flex shrink-0 items-center justify-between gap-4 border-b border-gray-200 px-4 py-3.5 dark:border-dark-700 sm:px-6">
-            <div class="flex min-w-0 items-center gap-3">
-              <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gray-50 ring-1 ring-inset ring-gray-200 dark:bg-dark-800 dark:ring-dark-700">
-                <ModelIcon v-if="model" :model="model.name" size="21px" />
-              </span>
-              <div class="min-w-0">
-                <h3 id="available-model-drawer-title" class="truncate font-mono text-base font-semibold text-gray-950 dark:text-white sm:text-lg">
-                  {{ model?.name || '' }}
-                </h3>
-                <span
-                  v-if="platform"
-                  :class="[
-                    'mt-1 inline-flex max-w-full items-center gap-1.5 rounded-md border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide',
-                    platformBadgeClass(platform),
-                  ]"
-                >
-                  <PlatformIcon :platform="platform as GroupPlatform" size="xs" />
-                  <span class="truncate">{{ platform }}</span>
-                </span>
-              </div>
-            </div>
-            <button
-              ref="closeButtonRef"
-              type="button"
-              class="flex h-11 w-11 shrink-0 cursor-pointer items-center justify-center rounded-xl text-gray-400 transition-colors duration-200 hover:bg-gray-100 hover:text-gray-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/60 dark:hover:bg-dark-800 dark:hover:text-gray-200"
-              :aria-label="t('common.close')"
-              @click="$emit('close')"
-            >
-              <Icon name="x" size="md" />
-            </button>
-          </header>
+        <PlatformIcon :platform="platform as GroupPlatform" size="xs" />
+        <span class="truncate">{{ platform }}</span>
+      </span>
+    </template>
 
-          <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6 sm:py-6">
-            <div v-if="model" class="space-y-6">
+    <div v-if="model" class="space-y-6">
               <AvailableModelPricingPanel
                 :model="model"
                 :no-pricing-label="noPricingLabel"
@@ -94,18 +74,13 @@
                   </div>
                 </div>
               </section>
-            </div>
-          </div>
-        </aside>
-      </div>
-    </Transition>
-  </Teleport>
+    </div>
+  </BaseDialog>
 </template>
 
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import Icon from '@/components/icons/Icon.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import PlatformIcon from '@/components/common/PlatformIcon.vue'
@@ -137,14 +112,8 @@ const props = withDefaults(
   },
 )
 
-const emit = defineEmits<{ (event: 'close'): void }>()
-
 const { t } = useI18n()
 const translate = (key: string) => t(key)
-const drawerRef = ref<HTMLElement | null>(null)
-const closeButtonRef = ref<HTMLButtonElement | null>(null)
-let previousActiveElement: HTMLElement | null = null
-let previousBodyOverflow = ''
 
 function groupPriceSummary(group: UserAvailableGroup): string {
   if (!props.model) return props.noPricingLabel
@@ -158,89 +127,10 @@ function groupPriceSummary(group: UserAvailableGroup): string {
   )
 }
 
-function handleDrawerKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape') {
-    emit('close')
-    return
-  }
-  if (event.key !== 'Tab' || !drawerRef.value) return
-
-  const focusableElements = Array.from(
-    drawerRef.value.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
-    ),
-  )
-  if (focusableElements.length === 0) {
-    event.preventDefault()
-    return
-  }
-
-  const first = focusableElements[0]
-  const last = focusableElements[focusableElements.length - 1]
-  if (event.shiftKey && document.activeElement === first) {
-    event.preventDefault()
-    last.focus()
-  } else if (!event.shiftKey && document.activeElement === last) {
-    event.preventDefault()
-    first.focus()
-  }
-}
-
-function unlockBodyScroll(): void {
-  document.body.style.overflow = previousBodyOverflow
-}
-
-watch(
-  () => props.show,
-  async (show) => {
-    if (show) {
-      previousActiveElement = document.activeElement as HTMLElement
-      previousBodyOverflow = document.body.style.overflow
-      document.body.style.overflow = 'hidden'
-      await nextTick()
-      closeButtonRef.value?.focus()
-      return
-    }
-
-    unlockBodyScroll()
-    previousActiveElement?.focus()
-    previousActiveElement = null
-  },
-  { immediate: true },
-)
-
-onBeforeUnmount(() => {
-  unlockBodyScroll()
-})
 </script>
 
 <style scoped>
-.drawer-enter-active,
-.drawer-leave-active {
-  transition: opacity 200ms ease;
-}
-
-.drawer-enter-active .drawer-panel,
-.drawer-leave-active .drawer-panel {
-  transition: transform 240ms ease;
-}
-
-.drawer-enter-from,
-.drawer-leave-to {
-  opacity: 0;
-}
-
-.drawer-enter-from .drawer-panel,
-.drawer-leave-to .drawer-panel {
-  transform: translateX(100%);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .drawer-enter-active,
-  .drawer-leave-active,
-  .drawer-enter-active .drawer-panel,
-  .drawer-leave-active .drawer-panel {
-    transition-duration: 1ms;
-  }
+:deep(.available-model-details-panel) {
+  --dialog-drawer-width: 56rem;
 }
 </style>
