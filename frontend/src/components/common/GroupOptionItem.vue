@@ -26,7 +26,7 @@
         v-if="description"
         class="mt-1.5 w-full text-left text-xs leading-relaxed text-gray-500 dark:text-gray-400 line-clamp-2"
       >
-        {{ description }}
+        {{ displayDescription }}
       </span>
     </div>
 
@@ -69,6 +69,7 @@ import type {
   GroupPlatform,
   GroupScope
 } from '@/types'
+import { displayText } from '@/utils/displayText'
 
 interface Props {
   name: string
@@ -97,6 +98,8 @@ const props = withDefaults(defineProps<Props>(), {
   rateMultiplierSource: null
 })
 const { t } = useI18n()
+
+const displayDescription = computed(() => displayText(props.description))
 
 const effectiveDisplayRate = computed(() => props.effectiveRateMultiplier ?? props.userRateMultiplier ?? null)
 

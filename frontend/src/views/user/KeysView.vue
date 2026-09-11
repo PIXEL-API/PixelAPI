@@ -1422,7 +1422,7 @@
         :id="getGroupSelectorPopoverId(groupSelectorKeyId)"
         ref="dropdownRef"
         :data-ui-skin="uiSkin"
-        class="data-teleport-panel animate-in fade-in slide-in-from-top-2 fixed z-[100000020] flex max-h-[calc(100dvh-2rem)] min-w-0 w-[calc(100vw-2rem)] max-w-[380px] flex-col duration-200"
+        class="data-teleport-panel animate-in fade-in slide-in-from-top-2 fixed z-[100000020] flex max-h-[calc(100dvh-2rem)] min-w-0 w-[min(34rem,calc(100vw-2rem))] flex-col duration-200"
         style="pointer-events: auto !important;"
         role="dialog"
         :aria-label="t('keys.groupSelectorLabel')"
@@ -1451,6 +1451,26 @@
               autocomplete="off"
               @click.stop
             />
+          </div>
+          <div class="mt-2 flex items-center gap-1 overflow-x-auto pb-0.5" role="tablist" :aria-label="t('keys.groupSelectorLabel')">
+            <button
+              v-for="platform in groupPlatforms"
+              :key="platform.value || 'all'"
+              type="button"
+              role="tab"
+              :aria-selected="activeGroupPlatform === platform.value"
+              :class="[
+                'inline-flex min-h-8 shrink-0 items-center gap-1.5 rounded-lg px-2.5 text-xs font-medium transition-colors',
+                activeGroupPlatform === platform.value
+                  ? 'bg-brand-soft text-brand'
+                  : 'text-content-muted hover:bg-surface-muted hover:text-content'
+              ]"
+              @click="activeGroupPlatform = platform.value"
+            >
+              <PlatformIcon v-if="platform.value" :platform="platform.value" size="xs" />
+              <span>{{ platform.label }}</span>
+              <span class="rounded-full bg-black/5 px-1.5 py-0.5 text-[10px] dark:bg-white/10">{{ platform.count }}</span>
+            </button>
           </div>
         </div>
         <!-- Group list -->
@@ -1536,6 +1556,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 	import GroupBadge from '@/components/common/GroupBadge.vue'
 	import GroupApiKeyBadge from '@/components/common/GroupApiKeyBadge.vue'
 	import GroupOptionItem from '@/components/common/GroupOptionItem.vue'
+	import PlatformIcon from '@/components/common/PlatformIcon.vue'
 	import type {
 	  ApiKey,
 	  ApiKeyGroupBadgeType,
@@ -1551,6 +1572,7 @@ import type { BatchApiKeyUsageStats } from '@/api/usage'
 import type { AccountShareAPIKeyBindingStatus } from '@/api/accountShare'
 import { formatDateTime } from '@/utils/format'
 import { maskApiKey } from '@/utils/maskApiKey'
+import { displayText } from '@/utils/displayText'
 import { buildCcSwitchImportDeeplink } from '@/utils/ccswitchImport'
 import { buildImagePlaygroundImportUrl } from '@/utils/imagePlaygroundImport'
 import { extractApiErrorCode, extractApiErrorMessage, isAbortError } from '@/utils/apiError'
@@ -2012,8 +2034,8 @@ const groupOptions = computed<GroupOption[]>(() =>
       const fallbackUserRate = userGroupRates.value[group.id] ?? null
       return {
         value: group.id,
-        label: group.name,
-        description: group.description,
+        label: displayText(group.name),
+        description: displayText(group.description),
         rate: group.rate_multiplier,
         userRate: fallbackUserRate,
         effectiveRate: group.effective_rate_multiplier ?? fallbackUserRate,
@@ -2176,11 +2198,29 @@ const groupRoutingChanged = (
 
 // Group dropdown search
 const groupSearchQuery = ref('')
+const activeGroupPlatform = ref<GroupPlatform | null>(null)
+const groupPlatforms = computed(() => {
+  const platforms = Array.from(new Set(groupOptions.value.map((option) => option.platform)))
+  return [
+    {
+      value: null as GroupPlatform | null,
+      label: t('admin.groups.platforms.all'),
+      count: groupOptions.value.length
+    },
+    ...platforms.map((platform) => ({
+      value: platform,
+      label: t(`admin.groups.platforms.${platform}`),
+      count: groupOptions.value.filter((option) => option.platform === platform).length
+    }))
+  ]
+})
 const filteredGroupOptions = computed(() => {
   const query = groupSearchQuery.value.trim().toLowerCase()
-  if (!query) return groupOptions.value
+  const platform = activeGroupPlatform.value
+  if (!query && !platform) return groupOptions.value
   return groupOptions.value.filter((opt) => {
-    return opt.label.toLowerCase().includes(query) ||
+    if (platform && opt.platform !== platform) return false
+    return !query || opt.label.toLowerCase().includes(query) ||
       (opt.description && opt.description.toLowerCase().includes(query))
   })
 })
@@ -2350,6 +2390,7 @@ const closeGroupSelectorPopover = (restoreFocus: boolean) => {
   groupSelectorKeyId.value = null
   dropdownPosition.value = null
   groupSearchQuery.value = ''
+  activeGroupPlatform.value = null
   if (restoreFocus) {
     void nextTick(() => groupButtonRefs.value.get(keyId)?.focus())
   }
@@ -2367,7 +2408,7 @@ const updateGroupSelectorPosition = (): boolean => {
   const dropdownHeight = Math.min(dropdownRef.value?.offsetHeight || 400, maxDropdownHeight)
   const spaceBelow = window.innerHeight - rect.bottom - viewportPadding
   const spaceAbove = rect.top - viewportPadding
-  const dropdownWidth = Math.min(380, Math.max(0, window.innerWidth - viewportPadding * 2))
+  const dropdownWidth = Math.min(544, Math.max(0, window.innerWidth - viewportPadding * 2))
   const maxLeft = Math.max(viewportPadding, window.innerWidth - dropdownWidth - viewportPadding)
   const clampedLeft = Math.min(Math.max(rect.left, viewportPadding), maxLeft)
   const preferredTop = spaceBelow >= dropdownHeight || spaceBelow >= spaceAbove
@@ -2395,6 +2436,7 @@ const openGroupSelector = async (key: ApiKey) => {
 
   groupSelectorKeyId.value = key.id
   groupSearchQuery.value = ''
+  activeGroupPlatform.value = null
   if (!updateGroupSelectorPosition()) {
     closeGroupSelectorPopover(false)
     return

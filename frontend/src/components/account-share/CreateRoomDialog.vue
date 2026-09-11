@@ -65,18 +65,27 @@ const emit = defineEmits<Emits>()
 
 <style>
 .create-room-dialog-panel {
-  width: min(60rem, calc(100vw - 1rem));
-  max-height: calc(100dvh - 1rem);
+  width: min(84rem, calc(100vw - 2rem));
+  max-width: min(84rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
 }
 
 .create-room-dialog-body {
+  display: flex;
+  min-height: 0;
   padding: 0;
+  overflow: hidden;
   overscroll-behavior: contain;
 }
 
 .create-room-dialog-shell {
-  min-height: calc(100dvh - 8rem);
+  display: flex;
+  min-height: 0;
+  max-height: 100%;
+  flex: 1 1 auto;
+  flex-direction: column;
   background: rgb(248 250 252);
+  overflow-y: auto;
 }
 
 .create-room-dialog-intro {
@@ -97,9 +106,18 @@ const emit = defineEmits<Emits>()
   background: rgb(24 24 27);
 }
 
+@media (max-width: 1023px) {
+  .create-room-dialog-shell .create-room-submit-stage {
+    position: sticky;
+    bottom: 0;
+    z-index: 10;
+    box-shadow: 0 -0.5rem 1.25rem rgb(15 23 42 / 0.08);
+  }
+}
+
 @media (min-width: 640px) {
   .create-room-dialog-panel {
-    max-height: 90dvh;
+    max-height: 94dvh;
   }
 
   .create-room-dialog-shell {
@@ -111,6 +129,58 @@ const emit = defineEmits<Emits>()
     align-items: center;
     justify-content: space-between;
     padding: 1rem 1.5rem;
+  }
+}
+
+/* Keep the primary action in view on wide screens while the form scrolls. */
+@media (min-width: 1024px) {
+  .create-room-dialog-shell .create-room-workspace {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 23rem);
+    align-items: start;
+    gap: 1rem;
+    padding: 1.25rem 1.5rem;
+  }
+
+  .create-room-dialog-shell .create-room-form-flow,
+  .create-room-dialog-shell .create-room-submit-stage {
+    padding: 0;
+  }
+
+  .create-room-dialog-shell .create-room-submit-stage {
+    position: sticky;
+    top: 0;
+    border-top: 0;
+    border-left: 1px solid rgb(226 232 240);
+    background: transparent;
+    padding-left: 1rem;
+  }
+
+  .create-room-dialog-shell .create-room-submit-content {
+    position: sticky;
+    top: 0;
+    grid-template-columns: minmax(0, 1fr);
+    border: 1px solid rgb(191 219 254);
+    border-radius: 0.875rem;
+    background: rgb(239 246 255 / 0.72);
+    padding: 1rem;
+  }
+
+  .create-room-dialog-shell .create-room-submit-content > :not(.create-room-stage-heading):not(.create-room-submit-button) {
+    grid-column: auto;
+  }
+
+  .create-room-dialog-shell .create-room-submit-button {
+    width: 100%;
+  }
+
+  .dark .create-room-dialog-shell .create-room-submit-stage {
+    border-left-color: rgb(63 63 70);
+  }
+
+  .dark .create-room-dialog-shell .create-room-submit-content {
+    border-color: rgb(30 64 175);
+    background: rgb(30 64 175 / 0.14);
   }
 }
 </style>

@@ -8,7 +8,7 @@
     <!-- Platform logo -->
     <PlatformIcon v-if="platform" :platform="platform" size="sm" class="flex-shrink-0" />
     <!-- Group name -->
-    <span class="min-w-0 truncate">{{ name }}</span>
+    <span class="min-w-0 truncate">{{ displayName }}</span>
     <span v-if="isPrivateScope" :class="['flex-shrink-0', scopeLabelClass]">
       {{ t('groups.private') }}
     </span>
@@ -31,6 +31,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SubscriptionType, GroupPlatform, GroupScope } from '@/types'
+import { displayText } from '@/utils/displayText'
 import PlatformIcon from './PlatformIcon.vue'
 
 interface Props {
@@ -61,6 +62,8 @@ const props = withDefaults(defineProps<Props>(), {
   rateMultiplierSource: null,
   alwaysShowRate: false
 })
+
+const displayName = computed(() => displayText(props.name))
 
 const { t } = useI18n()
 

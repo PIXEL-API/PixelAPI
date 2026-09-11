@@ -130,7 +130,7 @@
           <template #cell-name="{ value, row }">
             <div class="flex min-w-0 items-center gap-2">
               <span class="truncate font-medium text-gray-900 dark:text-white">{{
-                value
+                displayText(String(value ?? ""))
               }}</span>
               <span
                 v-if="row.scope === 'user_private'"
@@ -3217,7 +3217,7 @@
             </div>
             <div class="flex-1">
               <div class="font-medium text-gray-900 dark:text-white">
-                {{ group.name }}
+                {{ displayText(group.name) }}
               </div>
               <div class="text-xs text-gray-500 dark:text-gray-400">
                 <span
@@ -3499,6 +3499,7 @@ import GroupCapacityBadge from "@/components/common/GroupCapacityBadge.vue";
 import { VueDraggable } from "vue-draggable-plus";
 import { createStableObjectKeyResolver } from "@/utils/stableObjectKey";
 import { extractApiErrorMessage } from "@/utils/apiError";
+import { displayText } from "@/utils/displayText";
 import { useKeyedDebouncedSearch } from "@/composables/useKeyedDebouncedSearch";
 import { getPersistedPageSize } from "@/composables/usePersistedPageSize";
 import {
