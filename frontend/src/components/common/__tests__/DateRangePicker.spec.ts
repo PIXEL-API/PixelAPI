@@ -26,6 +26,8 @@ vi.mock('vue-i18n', () => ({
   })
 }))
 
+const teleportStub = { template: '<div><slot /></div>' }
+
 const formatLocalDate = (date: Date): string => {
   const year = date.getFullYear()
   const month = String(date.getMonth() + 1).padStart(2, '0')
@@ -74,7 +76,8 @@ describe('DateRangePicker', () => {
       },
       global: {
         stubs: {
-          Icon: true
+          Icon: true,
+          Teleport: teleportStub
         }
       }
     })
@@ -102,7 +105,8 @@ describe('DateRangePicker', () => {
       },
       global: {
         stubs: {
-          Icon: true
+          Icon: true,
+          Teleport: teleportStub
         }
       }
     })
@@ -153,11 +157,7 @@ describe('DateRangePicker', () => {
         startDate: today,
         endDate: today
       },
-      global: {
-        stubs: {
-          Icon: true
-        }
-      }
+      global: { stubs: { Icon: true, Teleport: teleportStub } }
     })
     const trigger = wrapper.get<HTMLButtonElement>('.date-picker-trigger')
 
@@ -191,7 +191,7 @@ describe('DateRangePicker', () => {
     const wrapper = mount(DateRangePicker, {
       attachTo: document.body,
       props: { startDate: today, endDate: today },
-      global: { stubs: { Icon: true } }
+      global: { stubs: { Icon: true, Teleport: teleportStub } }
     })
     const outsideButton = document.createElement('button')
     document.body.appendChild(outsideButton)
@@ -219,7 +219,7 @@ describe('DateRangePicker', () => {
     const wrapper = mount(DateRangePicker, {
       attachTo: document.body,
       props: { startDate: today, endDate: today },
-      global: { stubs: { Icon: true } }
+      global: { stubs: { Icon: true, Teleport: teleportStub } }
     })
     const outsideButton = document.createElement('button')
     document.body.appendChild(outsideButton)
@@ -246,7 +246,7 @@ describe('DateRangePicker', () => {
       const wrapper = mount(DateRangePicker, {
         attachTo: document.body,
         props: { startDate: today, endDate: today },
-        global: { stubs: { Icon: true } }
+        global: { stubs: { Icon: true, Teleport: teleportStub } }
       })
       vi.spyOn(wrapper.element, 'getBoundingClientRect').mockImplementation(() => triggerRect)
 
@@ -263,10 +263,10 @@ describe('DateRangePicker', () => {
       await nextTick()
       await nextTick()
 
-      expect(dropdown.style.left).toBe(`${16 - triggerRect.left}px`)
+      expect(dropdown.style.left).toBe('16px')
       expect(dropdown.style.maxWidth).toBe('calc(100vw - 2rem)')
       expect(dropdown.style.maxHeight).toBe('280px')
-      expect(dropdown.style.bottom).toBe('44px')
+      expect(dropdown.style.bottom).toBe('104px')
       expect(dropdown.style.top).toBe('')
 
       vi.stubGlobal('innerHeight', 600)
@@ -275,9 +275,9 @@ describe('DateRangePicker', () => {
       await nextTick()
       await nextTick()
 
-      expect(dropdown.style.left).toBe('-4px')
+      expect(dropdown.style.left).toBe('16px')
       expect(dropdown.style.maxHeight).toBe('520px')
-      expect(dropdown.style.top).toBe('44px')
+      expect(dropdown.style.top).toBe('64px')
       expect(dropdown.style.bottom).toBe('')
 
       const scrollRegistration = addEventListenerSpy.mock.calls.find(

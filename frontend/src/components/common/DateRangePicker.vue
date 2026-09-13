@@ -29,7 +29,8 @@
       </span>
     </button>
 
-    <Transition name="date-picker-dropdown">
+    <Teleport to="body">
+      <Transition name="date-picker-dropdown">
       <div
         v-if="isOpen"
         :id="dropdownId"
@@ -39,6 +40,8 @@
         :aria-labelledby="triggerId"
         :data-placement="dropdownPosition"
         :style="dropdownStyle"
+        @click.stop
+        @mousedown.stop
       >
         <!-- Quick presets -->
         <div class="date-picker-presets">
@@ -93,7 +96,8 @@
           </button>
         </div>
       </div>
-    </Transition>
+      </Transition>
+    </Teleport>
   </div>
 </template>
 
@@ -374,9 +378,11 @@ const updateDropdownGeometry = (
 
   dropdownPosition.value = position
   dropdownGeometry.value = {
-    left: viewportLeft - rect.left,
+    left: viewportLeft,
     maxHeight: position === 'top' ? spaceAbove : spaceBelow,
-    offset: rect.height + DROPDOWN_GAP
+    offset: position === 'top'
+      ? window.innerHeight - rect.top + DROPDOWN_GAP
+      : rect.bottom + DROPDOWN_GAP
   }
 }
 
@@ -434,7 +440,8 @@ const handleDocumentFocusIn = (event: FocusEvent) => {
     isOpen.value &&
     target instanceof Node &&
     containerRef.value &&
-    !containerRef.value.contains(target)
+    !containerRef.value.contains(target) &&
+    !dropdownRef.value?.contains(target)
   ) {
     closePicker(false)
   }
@@ -527,7 +534,7 @@ onUnmounted(() => {
 }
 
 .date-picker-dropdown {
-  @apply absolute z-[100];
+  @apply fixed z-[100000020];
   @apply bg-white dark:bg-dark-800;
   @apply rounded-xl;
   @apply border border-gray-200 dark:border-dark-700;

@@ -268,6 +268,7 @@ async function confirmCancel() {
     cancelTargetId.value = null
     await fetchOrders()
   } catch (err: unknown) {
+    await fetchOrders()
     appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   } finally {
     actionLoading.value = false

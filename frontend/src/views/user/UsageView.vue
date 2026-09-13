@@ -600,7 +600,6 @@
         />
       </template>
     </TablePageLayout>
-  </AppLayout>
 
   <!-- Token Tooltip Portal -->
   <Teleport to="body">
@@ -764,6 +763,8 @@
       </div>
     </div>
   </Teleport>
+
+  </AppLayout>
 </template>
 
 <script setup lang="ts">

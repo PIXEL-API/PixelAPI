@@ -10529,6 +10529,8 @@ export default {
       NOT_FOUND: "订单不存在",
       FORBIDDEN: "无权限操作此订单",
       CONFLICT: "订单状态已变更，请刷新",
+      ORDER_ALREADY_PAID: "订单已完成支付，无法取消",
+      ORDER_STATE_CHANGED: "订单状态已变更，请刷新",
       ORDER_PROCESSING: "订单仍在处理中，请稍后再试",
       INVALID_ORDER_TYPE: "仅余额订单可申请退款",
       INVALID_STATUS: "当前订单状态不允许此操作",

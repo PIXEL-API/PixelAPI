@@ -399,8 +399,15 @@ async function showOrderDetail(order: PaymentOrder) {
 }
 
 async function handleCancelOrder(order: PaymentOrder) {
-  try { await adminPaymentAPI.cancelOrder(order.id); appStore.showSuccess(t('payment.admin.orderCancelled')); loadOrders() }
-  catch (err: unknown) { appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))) }
+  try {
+    await adminPaymentAPI.cancelOrder(order.id)
+    await loadOrders()
+    appStore.showSuccess(t('payment.admin.orderCancelled'))
+  }
+  catch (err: unknown) {
+    await loadOrders()
+    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+  }
 }
 
 async function handleRetryOrder(order: PaymentOrder) {

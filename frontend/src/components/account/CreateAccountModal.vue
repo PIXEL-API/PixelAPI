@@ -1291,6 +1291,7 @@
       <CNProviderSettings
         v-if="isCNPlatform(form.platform)"
         :platform="form.platform"
+        :allow-custom-base-url="false"
         v-model="cnProviderConfig"
       />
 
@@ -4447,6 +4448,15 @@ watch(
       form.type = 'apikey'
       return
     }
+    // 国内平台仅支持 API Key/上游配置。用户范围也必须保持 apikey，
+    // 否则会被误判为 OAuth 并落入默认的 Anthropic 授权流程。
+    if (isCNPlatform(form.platform)) {
+      accountCategory.value = 'apikey'
+      addMethod.value = 'oauth'
+      antigravityAccountType.value = 'oauth'
+      form.type = 'apikey'
+      return
+    }
     if (isUserScope.value) {
       if (accountCategory.value !== 'oauth-based') {
         accountCategory.value = 'oauth-based'
@@ -4485,7 +4495,7 @@ watch(
 watch(
   () => form.platform,
   (newPlatform) => {
-    if (isUserScope.value) {
+    if (isUserScope.value && !isCNPlatform(newPlatform as AccountPlatform)) {
       accountCategory.value = 'oauth-based'
       addMethod.value = 'oauth'
       antigravityAccountType.value = 'oauth'
@@ -5009,7 +5019,7 @@ const resetForm = () => {
   form.name = ''
   form.notes = ''
   form.platform = props.initialPlatform
-  form.type = 'oauth'
+  form.type = isCNPlatform(form.platform) ? 'apikey' : 'oauth'
   form.share_mode = 'private'
   form.account_level = props.initialAccountLevel
   form.credentials = {}
@@ -5020,7 +5030,7 @@ const resetForm = () => {
   form.rate_multiplier = 1
   form.group_ids = []
   form.expires_at = null
-  accountCategory.value = 'oauth-based'
+  accountCategory.value = isCNPlatform(form.platform) ? 'apikey' : 'oauth-based'
   addMethod.value = 'oauth'
   apiKeyBaseUrl.value = 'https://api.anthropic.com'
   apiKeyValue.value = ''

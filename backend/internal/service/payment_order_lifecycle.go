@@ -29,6 +29,10 @@ const (
 	checkPaidResultCancelled   = "cancelled"
 )
 
+// ErrPaymentOrderAlreadyPaid indicates that upstream reconciliation found a
+// payment, so cancelling the local order would be unsafe.
+var ErrPaymentOrderAlreadyPaid = infraerrors.Conflict("ORDER_ALREADY_PAID", "order has already been paid and cannot be cancelled")
+
 func (s *PaymentService) checkCancelRateLimit(ctx context.Context, userID int64, cfg *PaymentConfig) error {
 	if !cfg.CancelRateLimitEnabled || cfg.CancelRateLimitMax <= 0 {
 		return nil
@@ -102,7 +106,14 @@ func (s *PaymentService) CancelOrder(ctx context.Context, orderID, userID int64)
 	if o.Status != OrderStatusPending {
 		return "", infraerrors.BadRequest("INVALID_STATUS", "order cannot be cancelled in current status")
 	}
-	return s.cancelCore(ctx, o, OrderStatusCancelled, fmt.Sprintf("user:%d", userID), "user cancelled order")
+	msg, err := s.cancelCore(ctx, o, OrderStatusCancelled, fmt.Sprintf("user:%d", userID), "user cancelled order")
+	if err != nil {
+		return "", err
+	}
+	if msg == checkPaidResultAlreadyPaid {
+		return "", ErrPaymentOrderAlreadyPaid
+	}
+	return msg, nil
 }
 
 func (s *PaymentService) AdminCancelOrder(ctx context.Context, orderID int64) (string, error) {
@@ -113,7 +124,14 @@ func (s *PaymentService) AdminCancelOrder(ctx context.Context, orderID int64) (s
 	if o.Status != OrderStatusPending {
 		return "", infraerrors.BadRequest("INVALID_STATUS", "order cannot be cancelled in current status")
 	}
-	return s.cancelCore(ctx, o, OrderStatusCancelled, "admin", "admin cancelled order")
+	msg, err := s.cancelCore(ctx, o, OrderStatusCancelled, "admin", "admin cancelled order")
+	if err != nil {
+		return "", err
+	}
+	if msg == checkPaidResultAlreadyPaid {
+		return "", ErrPaymentOrderAlreadyPaid
+	}
+	return msg, nil
 }
 
 func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, fs, op, ad string) (string, error) {
@@ -164,7 +182,19 @@ func (s *PaymentService) cancelCore(ctx context.Context, o *dbent.PaymentOrder, 
 	if err := tx.Commit(); err != nil {
 		return "", fmt.Errorf("commit empty cancel transaction: %w", err)
 	}
-	return checkPaidResultCancelled, nil
+
+	// The conditional update can legitimately affect no rows when a webhook or
+	// expiry worker changes the order between the initial read and this write.
+	// Do not report a successful cancellation unless the persisted state proves
+	// that this transition (or an equivalent one) won.
+	latest, err := s.entClient.PaymentOrder.Get(ctx, o.ID)
+	if err != nil {
+		return "", fmt.Errorf("reload order after empty cancel: %w", err)
+	}
+	if latest.Status == fs {
+		return checkPaidResultCancelled, nil
+	}
+	return "", infraerrors.Conflict("ORDER_STATE_CHANGED", "order status changed before cancellation")
 }
 
 func (s *PaymentService) checkPaid(ctx context.Context, o *dbent.PaymentOrder) string {
