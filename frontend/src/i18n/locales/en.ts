@@ -10843,6 +10843,8 @@ export default {
       NOT_FOUND: "Order not found.",
       FORBIDDEN: "No permission for this order.",
       CONFLICT: "Order status has changed. Please refresh.",
+      ORDER_ALREADY_PAID: "This order has already been paid and cannot be cancelled.",
+      ORDER_STATE_CHANGED: "The order status changed before cancellation. Please refresh.",
       ORDER_PROCESSING:
         "Order is still being processed. Please try again later.",
       INVALID_ORDER_TYPE: "Only balance orders can request a refund.",

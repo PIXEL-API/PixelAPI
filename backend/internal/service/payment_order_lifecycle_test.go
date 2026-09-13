@@ -10,7 +10,9 @@ import (
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/ent/enttest"
+	"github.com/Wei-Shaw/sub2api/ent/paymentorder"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
 
@@ -564,6 +566,51 @@ func TestPaymentOrderQueryReferenceUsesOutTradeNoForOfficialProviders(t *testing
 	require.Equal(t, "sub2_out_trade_no", paymentOrderQueryReference(order, paymentFulfillmentTestProvider{
 		key: payment.TypeWxpay,
 	}))
+}
+
+func TestCancelCoreReportsConcurrentStateChange(t *testing.T) {
+	ctx := context.Background()
+	client := newPaymentOrderLifecycleTestClient(t)
+	user, err := client.User.Create().
+		SetEmail("cancel-race@example.com").
+		SetPasswordHash("hash").
+		SetUsername("cancel-race-user").
+		Save(ctx)
+	require.NoError(t, err)
+
+	order, err := client.PaymentOrder.Create().
+		SetUserID(user.ID).
+		SetUserEmail(user.Email).
+		SetUserName(user.Username).
+		SetAmount(10).
+		SetPayAmount(10).
+		SetFeeRate(0).
+		SetRechargeCode("CANCEL-RACE").
+		SetOutTradeNo("sub2_cancel_race").
+		SetPaymentType("").
+		SetPaymentTradeNo("").
+		SetOrderType(payment.OrderTypeBalance).
+		SetStatus(OrderStatusPending).
+		SetExpiresAt(time.Now().Add(time.Hour)).
+		SetClientIP("127.0.0.1").
+		SetSrcHost("api.example.com").
+		Save(ctx)
+	require.NoError(t, err)
+
+	loaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	_, err = client.PaymentOrder.Update().Where(paymentorder.IDEQ(order.ID)).SetStatus(OrderStatusCompleted).Save(ctx)
+	require.NoError(t, err)
+
+	svc := &PaymentService{entClient: client}
+	_, err = svc.cancelCore(ctx, loaded, OrderStatusCancelled, "admin", "admin cancelled order")
+	require.Error(t, err)
+	require.True(t, infraerrors.IsConflict(err))
+	require.Equal(t, "ORDER_STATE_CHANGED", infraerrors.Reason(err))
+
+	reloaded, err := client.PaymentOrder.Get(ctx, order.ID)
+	require.NoError(t, err)
+	require.Equal(t, OrderStatusCompleted, reloaded.Status)
 }
 
 func newPaymentOrderLifecycleTestClient(t *testing.T) *dbent.Client {

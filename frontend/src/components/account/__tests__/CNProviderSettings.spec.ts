@@ -21,6 +21,20 @@ function latestModelValue(wrapper: ReturnType<typeof mount>) {
 }
 
 describe('CNProviderSettings Qwen', () => {
+  it('uses the requested account mode labels and locks official URLs', async () => {
+    const wrapper = mount(CNProviderSettings, {
+      props: { platform: 'qwen', modelValue: paygChat(), allowCustomBaseUrl: false }
+    })
+
+    expect(wrapper.find('option[value="payg"]').text()).toBe('API key')
+    expect(wrapper.find('option[value="coding"]').text()).toBe('Coding Plan')
+    expect(wrapper.findAll('input[type="url"]')).toHaveLength(0)
+    expect(wrapper.find('code').text()).toBe('https://dashscope.aliyuncs.com/compatible-mode/v1')
+
+    await wrapper.find('select').setValue('coding')
+    expect(wrapper.find('code').text()).toBe('https://coding.dashscope.aliyuncs.com/v1')
+  })
+
   it('updates official defaults across mode, protocol, and adaptive switches', async () => {
     const wrapper = mount(CNProviderSettings, {
       props: { platform: 'qwen', modelValue: paygChat() }
@@ -51,17 +65,17 @@ describe('CNProviderSettings Qwen', () => {
     expect(wrapper.findAll('option').map((option) => option.attributes('value'))).not.toContain('responses')
   })
 
-  it('preserves a user-entered base URL when defaults change', async () => {
+  it('locks the base URL to the official endpoint', async () => {
     const wrapper = mount(CNProviderSettings, {
       props: { platform: 'qwen', modelValue: paygChat() }
     })
     const [modeSelect, protocolSelect] = wrapper.findAll('select')
 
-    await wrapper.get('input[type="url"]').setValue('https://relay.example.test/qwen')
     await modeSelect.setValue('coding')
     await protocolSelect.setValue('anthropic')
 
-    expect(latestModelValue(wrapper).base_url).toBe('https://relay.example.test/qwen')
+    expect(wrapper.findAll('input[type="url"]')).toHaveLength(0)
+    expect(latestModelValue(wrapper).base_url).toBe('https://coding.dashscope.aliyuncs.com/apps/anthropic')
   })
 
   it('normalizes stored Responses protocol because Qwen has no native Responses endpoint', async () => {

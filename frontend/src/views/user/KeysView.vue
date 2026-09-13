@@ -1528,7 +1528,7 @@
                 "
                 @click="changeGroup(selectedKeyForGroup!, option.value)"
                 :class="[
-                  'data-teleport-option min-w-0 rounded-xl border border-line bg-surface-raised p-0 text-left transition-all hover:-translate-y-px hover:border-brand/45 hover:shadow-sm',
+                  'data-teleport-option min-w-0 rounded-xl border border-line bg-surface-raised p-0.5 text-left transition-all hover:-translate-y-px hover:border-brand/45 hover:shadow-sm last:!border',
                   selectedKeyForGroup?.group_id === option.value ||
                   (!selectedKeyForGroup?.group_id && option.value === null)
                     ? 'border-brand/60 bg-brand-soft ring-1 ring-brand/20'

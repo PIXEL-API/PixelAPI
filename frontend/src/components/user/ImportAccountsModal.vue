@@ -24,7 +24,7 @@
         :selected-platform="selectedPlatform"
         @select="selectPlatform"
       />
-      <CNProviderSettings v-if="selectedPlatform && isCNImportPlatform(selectedPlatform)" v-model="cnImportConfig" :platform="selectedPlatform" />
+      <CNProviderSettings v-if="selectedPlatform && isCNImportPlatform(selectedPlatform)" v-model="cnImportConfig" :platform="selectedPlatform" :allow-custom-base-url="false" />
       <OpenAIAuthModeSelector
         v-if="selectedPlatform === 'openai'"
         :selected-mode="selectedOpenAIAuthMode"
@@ -287,6 +287,7 @@ import {
 import { useAppStore } from '@/stores/app'
 import { useOpenAIOAuth } from '@/composables/useOpenAIOAuth'
 import CNProviderSettings from '@/components/account/CNProviderSettings.vue'
+import { defaultCNAdaptiveBaseUrls, defaultCNBaseUrl, cnSupportsNativeResponses, type CnProviderPlatform } from '@/components/account/credentialsBuilder'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { isProxyAccountFull, normalizeProxyAccountCount, normalizeProxyMaxAccounts } from '@/utils/proxyCapacity'
 import { openAIAccountLevelLabel, selectableOpenAIAccountLevels } from '@/utils/openaiAccountLevels'
@@ -1008,10 +1009,18 @@ function importPersonalCredentials(contents: string[]): Promise<ImportCredential
     }
     request.account_level = accountLevel
   } else if (isCNImportPlatform(selectedPlatform.value)) {
-    request.account_mode = cnImportConfig.value.mode
-    request.api_protocol = cnImportConfig.value.protocol
-    request.base_url = cnImportConfig.value.base_url.trim()
-    if (cnImportConfig.value.protocol === 'adaptive') request.api_base_urls = { ...cnImportConfig.value.api_base_urls }
+    const platform = selectedPlatform.value as CnProviderPlatform
+    const mode = cnImportConfig.value.mode
+    const protocol = !cnSupportsNativeResponses(platform) && cnImportConfig.value.protocol === 'responses'
+      ? 'chat_completions'
+      : cnImportConfig.value.protocol
+    const defaults = defaultCNAdaptiveBaseUrls(platform, mode)
+    request.account_mode = mode
+    request.api_protocol = protocol
+    request.base_url = protocol === 'adaptive'
+      ? defaults.chat_completions
+      : defaultCNBaseUrl(platform, mode, protocol)
+    if (protocol === 'adaptive') request.api_base_urls = { ...defaults }
   }
   if (requiresCredentialImportProxy.value) {
     if (!selectedProxyId.value) {

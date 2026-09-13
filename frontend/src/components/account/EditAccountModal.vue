@@ -142,7 +142,7 @@
 
       <!-- API Key fields (only for apikey type) -->
       <div v-if="(!isUserScope || isCNPlatform(account.platform)) && account.type === 'apikey'" class="space-y-4">
-        <CNProviderSettings v-if="isCNPlatform(account.platform)" v-model="editCNConfig" :platform="account.platform" />
+        <CNProviderSettings v-if="isCNPlatform(account.platform)" v-model="editCNConfig" :platform="account.platform" :allow-custom-base-url="false" />
         <div v-if="account.platform !== 'opencode' && !isCNPlatform(account.platform)">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
