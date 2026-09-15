@@ -1147,7 +1147,7 @@ func (s *AccountShareModeService) validateRoomActivation(
 			return ErrAccountShareAccountUnavailable
 		}
 		for _, model := range allowedModels {
-			if account.IsModelSupported(model) {
+			if account.IsModelSupportedByMapping(model) {
 				continue
 			}
 			return ErrAccountShareModeUnsupportedModel.WithMetadata(map[string]string{
@@ -1167,7 +1167,7 @@ func (s *AccountShareModeService) validateRoomActivation(
 	// OpenCode 房间的恢复校验只需要确认账号凭证和上游连通性，不应使用房间
 	// 白名单中的任意模型作为探针。白名单首项可能是区域、套餐或上游状态
 	// 不稳定的模型（例如 grok-4.5），会把模型级失败误判成账号不可用。
-	// OpenCode 账号测试服务的默认探针是 deepseek-v4-flash，这里显式固定
+	// OpenCode 账号测试服务的默认探针是 deepseek-v4.1-flash，这里显式固定
 	// 使用同一个模型，避免房间恢复流程传入首个白名单模型覆盖该默认值。
 	validationCtx, validationCancel := context.WithTimeout(
 		ctx,

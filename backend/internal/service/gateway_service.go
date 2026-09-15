@@ -1770,7 +1770,7 @@ func (s *GatewayService) resolveAccountShareModeBoundAccountForLookup(
 	if requestedModel != "" && !accountShareRoomModelIsPriced(ctx, s.channelService, listing.Platform, requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
-	if requestedModel != "" && account != nil && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
+	if requestedModel != "" && account != nil && !account.IsModelSupportedByMapping(requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
 	if account == nil ||
@@ -2666,7 +2666,7 @@ func (s *GatewayService) selectAccountShareModeBoundAccount(ctx context.Context,
 	if !retryCurrentMembership && requestedModel != "" && !accountShareRoomModelIsPriced(ctx, s.channelService, listing.Platform, requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
-	if !retryCurrentMembership && requestedModel != "" && !s.isModelSupportedByAccountWithContext(ctx, account, requestedModel) {
+	if !retryCurrentMembership && requestedModel != "" && !account.IsModelSupportedByMapping(requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
 	if !retryCurrentMembership && !s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) {

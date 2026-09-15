@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   isImageGenerationModel,
-  prepareAccountTestModels
+  prepareAccountTestModels,
+  selectDefaultAccountTestModel
 } from '../accountTestModels'
 import type { ClaudeModel } from '@/types'
 
@@ -67,5 +68,13 @@ describe('prepareAccountTestModels', () => {
     const result = prepareAccountTestModels(models, 'openai')
 
     expect(result.map((m) => m.id)).toEqual(['gpt-5.5', 'gpt-5.4'])
+  })
+})
+
+describe('selectDefaultAccountTestModel', () => {
+  it('uses DeepSeek V4.1 Flash for OpenCode when it is available', () => {
+    const models = [model('deepseek-v4-flash'), model('deepseek-v4.1-flash')]
+
+    expect(selectDefaultAccountTestModel(models, 'opencode')).toBe('deepseek-v4.1-flash')
   })
 })

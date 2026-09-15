@@ -160,10 +160,11 @@ func intersectModelIDLists(lists [][]string) []string {
 	return result
 }
 
-// resolveCatalogModelIDs 确定账号可用的定价目录（多 group 取并集，无 group 用平台全局）。
+// resolveCatalogModelIDs 确定账号可用的定价目录：私有账号继承平台，其他账号按分组取并集。
 func (r *AccountTestModelResolver) resolveCatalogModelIDs(ctx context.Context, account *Account) ([]string, error) {
 	platform := account.Platform
-	if len(account.GroupIDs) == 0 {
+	// 私有分组用于账号归属和配额，不限制平台模型目录。
+	if account.UsesPlatformModelInheritance() || len(account.GroupIDs) == 0 {
 		return r.catalog.ListSelectablePricedModelIDs(ctx, PricedModelQuery{Platform: platform})
 	}
 
@@ -188,7 +189,14 @@ func (r *AccountTestModelResolver) resolveCatalogModelIDs(ctx context.Context, a
 
 // resolveTestableModels 计算账号能力与定价目录的交集，输出具体模型 ID。
 func (r *AccountTestModelResolver) resolveTestableModels(account *Account, catalogModels []string) ([]string, error) {
-	// 个人账号：号主严格白名单（exact identity），空则缺失，不接受通配符扩大权限。
+	if account.UsesPlatformModelInheritance() {
+		if len(catalogModels) == 0 {
+			return nil, ErrAccountTestModelCatalogEmpty
+		}
+		return catalogModels, nil
+	}
+
+	// 公有个人账号：号主严格白名单（exact identity），空则缺失，不接受通配符扩大权限。
 	if account.OwnerUserID != nil {
 		mapping := account.GetModelMapping()
 		if len(mapping) == 0 {

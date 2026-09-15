@@ -1674,7 +1674,7 @@ export default {
         subtitle: "opencode.json",
         description:
           "配置 OpenCode CLI，按模型协议将 Chat Completions、Anthropic Messages 和 OpenAI Responses 流量路由到当前 OpenCode Go 分组。",
-        hint: "配置文件路径：~/.config/opencode/opencode.json（或 opencode.jsonc），不存在需手动创建。如果旧配置把本分组写在 `provider.anthropic` 下，请完整删除该旧分组配置并替换为示例中的 `provider.opencode-go`，不要只追加；否则 OpenCode 的递归配置合并可能继续让 DeepSeek 走 `/v1/messages`。保存后运行 `opencode debug config`，确认 `deepseek-v4-flash` 的 SDK 是 `@ai-sdk/openai-compatible`，再从 `/models` 选择 `opencode-go/deepseek-v4-flash` 并完整重启 OpenCode。示例已为 DeepSeek 显式指定 Chat Completions SDK，并为 Messages 与 Responses 模型保留各自的模型级覆盖。请使用包含该目录的 OpenCode 版本（已核验 1.18.25）。API Key 也可通过客户端 `/connect` 命令配置。",
+        hint: "配置文件路径：~/.config/opencode/opencode.json（或 opencode.jsonc），不存在需手动创建。如果旧配置把本分组写在 `provider.anthropic` 下，请完整删除该旧分组配置并替换为示例中的 `provider.opencode-go`，不要只追加；否则 OpenCode 的递归配置合并可能继续让 DeepSeek 走 `/v1/messages`。保存后运行 `opencode debug config`，确认 `deepseek-v4.1-flash` 的 SDK 是 `@ai-sdk/openai-compatible`，再从 `/models` 选择 `opencode-go/deepseek-v4.1-flash` 并完整重启 OpenCode。示例已为 DeepSeek 显式指定 Chat Completions SDK，并为 Messages 与 Responses 模型保留各自的模型级覆盖。请使用包含该目录的 OpenCode 版本（已核验 1.18.25）。API Key 也可通过客户端 `/connect` 命令配置。",
       },
     },
     customKeyLabel: "自定义密钥",

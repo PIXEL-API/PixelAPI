@@ -4086,7 +4086,7 @@ const loadModelOptions = async (preserveSelectionForValidation = false) => {
 
   if (
     !props.show ||
-    (!isUserScope.value && (form.platform === 'antigravity' || form.platform === 'opencode'))
+    (!isUserScope.value && form.platform === 'antigravity')
   ) {
     modelOptions.value = null
     modelOptionsLoading.value = false
@@ -4179,7 +4179,6 @@ const ensureModelOptionsReady = async (): Promise<boolean> => {
   const requiresModelOptions = isUserScope.value || (
     adminUsesCurrentWhitelist &&
     form.platform !== 'antigravity' &&
-    form.platform !== 'opencode' &&
     modelRestrictionMode.value === 'whitelist' &&
     !isOpenAIModelRestrictionDisabled.value
   )

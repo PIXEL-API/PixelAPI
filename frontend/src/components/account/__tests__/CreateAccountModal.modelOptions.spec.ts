@@ -144,14 +144,17 @@ const OAuthAuthorizationFlowStub = defineComponent({
   `
 })
 
-function mountModal(accountScope: 'admin' | 'user' = 'admin') {
+function mountModal(
+  accountScope: 'admin' | 'user' = 'admin',
+  initialPlatform: 'openai' | 'opencode' = 'openai'
+) {
   return mount(CreateAccountModal, {
     props: {
       show: false,
       proxies: [],
       groups: [],
       accountScope,
-      initialPlatform: 'openai',
+      initialPlatform,
       lockPlatform: true
     },
     global: {
@@ -209,6 +212,19 @@ describe('CreateAccountModal priced model options', () => {
     expect(getPricedModelOptionsMock).not.toHaveBeenCalled()
     const selector = wrapper.get('[data-testid="model-whitelist-selector"]')
     expect(selector.attributes('data-model-value')).toBe('user-gpt-5.4')
+  })
+
+  it('管理员新增 OpenCode 账号加载渠道定价目录', async () => {
+    getPricedModelOptionsMock.mockResolvedValue({
+      models: ['deepseek-v4.1-flash', 'deepseek-v4-flash']
+    })
+
+    const wrapper = mountModal('admin', 'opencode')
+    await wrapper.setProps({ show: true })
+    await flushPromises()
+
+    expect(getPricedModelOptionsMock).toHaveBeenCalledWith(['opencode'])
+    expect(getUserModelOptionsMock).not.toHaveBeenCalled()
   })
 
   it('渠道定价目录加载失败时保持空候选，不回退前端静态模型', async () => {

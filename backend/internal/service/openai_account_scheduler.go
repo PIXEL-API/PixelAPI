@@ -1651,7 +1651,7 @@ func (s *OpenAIGatewayService) selectAccountShareModeBoundAccount(
 	if !retryCurrentMembership && requestedModel != "" && !accountShareRoomModelIsPriced(ctx, s.channelService, listing.Platform, requestedModel) {
 		return nil, decision, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
-	if !retryCurrentMembership && requestedModel != "" && !account.IsModelSupported(requestedModel) {
+	if !retryCurrentMembership && requestedModel != "" && !account.IsModelSupportedByMapping(requestedModel) {
 		return nil, decision, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
 	if !retryCurrentMembership && (!isOpenAIAccountEligibleForRequest(account, requestedModel, requireCompact) || s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel)) {

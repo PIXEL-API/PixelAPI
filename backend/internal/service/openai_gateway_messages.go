@@ -150,6 +150,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if err != nil {
 		return nil, fmt.Errorf("marshal responses request: %w", err)
 	}
+	if opencodeResolved != nil {
+		responsesBody, err = stripOpencodeUnsupportedResponsesFields(responsesBody, *opencodeResolved)
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	if account.Type == AccountTypeOAuth && account.Platform != PlatformGrok {
 		var reqBody map[string]any

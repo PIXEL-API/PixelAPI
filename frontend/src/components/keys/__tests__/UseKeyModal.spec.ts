@@ -432,6 +432,8 @@ describe('UseKeyModal', () => {
     const deepSeekChatModels = [
       'deepseek-v4-pro',
       'deepseek-v4-flash',
+      'deepseek-flash',
+      'deepseek-v4.1-flash',
       'deepseek-v4-flash-vision-exp'
     ]
     const messagesModels = [
@@ -448,8 +450,8 @@ describe('UseKeyModal', () => {
       'gpt-5.6-luna',
       'grok-4.5',
       'grok-4.6',
-      'muse-spark-1.2-contributor',
-      'muse-spark-1.3-contributor'
+      'muse-spark-1.3-contributor',
+      'muse-spark-1.2-contributor'
     ]
     const omenAlphaModels = ['omen-alpha']
 

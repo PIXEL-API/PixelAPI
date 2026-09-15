@@ -42,6 +42,7 @@ func ownedGrokAccount(mapping map[string]any) *Account {
 	return &Account{
 		Platform:    PlatformGrok,
 		OwnerUserID: &ownerID,
+		ShareMode:   AccountShareModePublic,
 		Credentials: credentials,
 	}
 }
@@ -58,6 +59,52 @@ func TestResolveTestModels_OwnedAccountIntersection(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, models, 1)
 	require.Equal(t, "grok-4.5", models[0].ID)
+}
+
+func TestResolveTestModels_PrivateAccountInheritsPlatformCatalog(t *testing.T) {
+	var gotQuery PricedModelQuery
+	catalog := &catalogStub{selectable: func(_ context.Context, query PricedModelQuery) ([]string, error) {
+		gotQuery = query
+		return []string{"grok-new"}, nil
+	}}
+	resolver := NewAccountTestModelResolver(catalog)
+	ownerID := int64(1)
+	account := &Account{
+		Platform:    PlatformGrok,
+		OwnerUserID: &ownerID,
+		ShareMode:   AccountShareModePrivate,
+		GroupIDs:    []int64{99}, // 私有分组不应限制测试模型目录
+	}
+
+	models, err := resolver.ResolveTestModels(context.Background(), account)
+
+	require.NoError(t, err)
+	require.Equal(t, []string{"grok-new"}, []string{models[0].ID})
+	require.Nil(t, gotQuery.GroupID)
+	require.Equal(t, PlatformGrok, gotQuery.Platform)
+}
+
+func TestValidateExplicitTestModel_PrivateInheritancePreservesPricedImageTests(t *testing.T) {
+	catalog := &catalogStub{selectable: func(_ context.Context, query PricedModelQuery) ([]string, error) {
+		require.Nil(t, query.GroupID)
+		return []string{"gpt-new", "gpt-image-2"}, nil
+	}}
+	ownerID := int64(1)
+	account := &Account{
+		Platform:    PlatformOpenAI,
+		OwnerUserID: &ownerID,
+		ShareMode:   AccountShareModePrivate,
+		GroupIDs:    []int64{99},
+		Credentials: map[string]any{"model_mapping": map[string]any{"gpt-old": "gpt-old"}},
+	}
+	svc := newValidateModelTestService(catalog, account)
+	ctx := context.Background()
+
+	require.NoError(t, svc.ValidateExplicitTestModel(ctx, account, "gpt-new"))
+	require.NoError(t, svc.ValidateExplicitTestModel(ctx, account, "gpt-image-2"))
+	require.ErrorIs(t, svc.ValidateExplicitTestModel(ctx, account, "gpt-old"), ErrAccountTestModelNotAvailable)
+	require.ErrorIs(t, svc.ValidateExplicitTestModel(ctx, account, "gpt-image-unpriced"), ErrAccountTestModelNotAvailable)
+	require.ErrorIs(t, svc.ValidateTestModel(ctx, account.ID, "gpt-image-2"), ErrAccountTestModelNotAvailable)
 }
 
 func TestResolveTestModels_OwnedAccountWhitelistMissing(t *testing.T) {

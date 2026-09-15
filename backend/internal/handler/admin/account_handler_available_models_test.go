@@ -68,6 +68,7 @@ func TestAccountHandlerGetAvailableModels_OwnedAccountReturnsPricedIntersection(
 			Type:        service.AccountTypeOAuth,
 			Status:      service.StatusActive,
 			OwnerUserID: &ownerUserID,
+			ShareMode:   service.AccountShareModePublic,
 			Credentials: map[string]any{
 				"model_mapping": map[string]any{
 					"gpt-5": "gpt-5.1",
@@ -164,6 +165,7 @@ func TestAccountHandlerGetAvailableModels_OwnedAccountEmptyWhitelistReturnsWhite
 			Type:        service.AccountTypeOAuth,
 			Status:      service.StatusActive,
 			OwnerUserID: &ownerUserID,
+			ShareMode:   service.AccountShareModePublic,
 			Credentials: map[string]any{},
 		},
 	}
@@ -188,6 +190,7 @@ func TestAccountHandlerGetAvailableModels_OwnedAccountNoPricedIntersection(t *te
 			Type:        service.AccountTypeOAuth,
 			Status:      service.StatusActive,
 			OwnerUserID: &ownerUserID,
+			ShareMode:   service.AccountShareModePublic,
 			Credentials: map[string]any{
 				"model_mapping": map[string]any{"gpt-9": "gpt-9"},
 			},
