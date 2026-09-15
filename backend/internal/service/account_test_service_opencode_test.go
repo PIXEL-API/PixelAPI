@@ -292,7 +292,7 @@ func TestOpencodeAccountConnectionRejectsDoubleProviderPrefixBeforeRequest(t *te
 func TestOpencodeAccountConnectionFallsBackOnRegionError(t *testing.T) {
 	t.Parallel()
 	upstream := &opencodeTestUpstream{responses: map[string]*http.Response{
-		"deepseek-v4-flash": newOpencodeErrorResponse(http.StatusForbidden, `{"type":"error","error":{"type":"RegionError","message":"only available hosted in China"}}`),
+		"deepseek-v4.1-flash": newOpencodeErrorResponse(http.StatusForbidden, `{"type":"error","error":{"type":"RegionError","message":"only available hosted in China"}}`),
 		"gpt-5.6-luna":      newOpencodeResponsesOKResponse(),
 	}}
 	svc := newOpencodeTestService(upstream)
@@ -306,8 +306,8 @@ func TestOpencodeAccountConnectionFallsBackOnRegionError(t *testing.T) {
 
 	err := svc.testOpencodeAccountConnection(opencodeTestGinContext(t), account, "")
 	require.NoError(t, err)
-	require.Equal(t, []string{"deepseek-v4-flash", "gpt-5.6-luna"}, upstream.calls,
-		"should fall back from deepseek-v4-flash to gpt-5.6-luna on RegionError")
+	require.Equal(t, []string{"deepseek-v4.1-flash", "gpt-5.6-luna"}, upstream.calls,
+		"should fall back from deepseek-v4.1-flash to gpt-5.6-luna on RegionError")
 	require.Equal(t, "/zen/go/v1/chat/completions", upstream.requests[0].path)
 	require.Equal(t, "/zen/go/v1/responses", upstream.requests[1].path)
 }
@@ -315,7 +315,7 @@ func TestOpencodeAccountConnectionFallsBackOnRegionError(t *testing.T) {
 func TestOpencodeAccountConnectionNoFallbackOnAuthError(t *testing.T) {
 	t.Parallel()
 	upstream := &opencodeTestUpstream{responses: map[string]*http.Response{
-		"deepseek-v4-flash": newOpencodeErrorResponse(http.StatusUnauthorized, `{"type":"error","error":{"type":"AuthError","message":"Invalid API key."}}`),
+		"deepseek-v4.1-flash": newOpencodeErrorResponse(http.StatusUnauthorized, `{"type":"error","error":{"type":"AuthError","message":"Invalid API key."}}`),
 	}}
 	svc := newOpencodeTestService(upstream)
 	account := &Account{
@@ -329,6 +329,6 @@ func TestOpencodeAccountConnectionNoFallbackOnAuthError(t *testing.T) {
 	err := svc.testOpencodeAccountConnection(opencodeTestGinContext(t), account, "")
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "401")
-	require.Equal(t, []string{"deepseek-v4-flash"}, upstream.calls,
+	require.Equal(t, []string{"deepseek-v4.1-flash"}, upstream.calls,
 		"auth error is account-level and must not trigger model fallback")
 }

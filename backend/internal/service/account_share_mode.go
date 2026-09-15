@@ -2515,7 +2515,7 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 		return nil, ErrAccountShareAccountUnavailable
 	}
 	for _, model := range allowedModels {
-		if !account.IsModelSupported(model) {
+		if !account.IsModelSupportedByMapping(model) {
 			return nil, ErrAccountShareModeUnsupportedModel.WithMetadata(map[string]string{
 				"account_id": strconv.FormatInt(account.ID, 10),
 				"model":      model,

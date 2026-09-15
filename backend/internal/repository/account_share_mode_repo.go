@@ -2825,7 +2825,7 @@ func validateAccountShareRoomAllowedModelsInTx(
 			Extra:        candidate.Extra,
 		}
 		for _, model := range allowedModels {
-			if account.IsModelSupported(model) {
+			if account.IsModelSupportedByMapping(model) {
 				continue
 			}
 			return service.ErrAccountShareModeUnsupportedModel.WithMetadata(map[string]string{

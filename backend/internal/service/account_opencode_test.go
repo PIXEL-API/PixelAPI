@@ -78,6 +78,8 @@ func TestResolveOpencodeGoModelSpec(t *testing.T) {
 		found      bool
 	}{
 		{name: "chat", model: "deepseek-v4-flash", protocol: OpencodeGoProtocolChat, found: true},
+		{name: "deepseek flash alias", model: "deepseek-flash", protocol: OpencodeGoProtocolChat, found: true},
+		{name: "deepseek v4.1 flash", model: "deepseek-v4.1-flash", protocol: OpencodeGoProtocolChat, found: true},
 		{name: "messages", model: "opencode-go/minimax-m3[1m]", protocol: OpencodeGoProtocolMessages, found: true},
 		{name: "documented qwen messages", model: "opencode-go/qwen3.7-plus", protocol: OpencodeGoProtocolMessages, found: true},
 		{name: "responses", model: "opencode/grok-4.6", protocol: OpencodeGoProtocolResponses, found: true},
@@ -154,11 +156,11 @@ func TestOpencodeDefaultModelSlugs(t *testing.T) {
 		"minimax-m3", "minimax-m2.7", "minimax-m2.5",
 		"kimi-k3", "kimi-k2.7-code", "kimi-k2.6", "longcat-2.0", "kimi-k2.5",
 		"glm-5.2", "glm-5.3-flash", "glm-5.3", "glm-5.1", "glm-5",
-		"deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp",
+		"deepseek-v4-pro", "deepseek-v4-flash", "deepseek-flash", "deepseek-v4.1-flash", "deepseek-v4-flash-vision-exp",
 		"qwen3.7-max", "qwen3.8-max", "qwen3.8-flash", "qwen3.7-plus", "qwen3.6-plus", "qwen3.5-plus",
 		"mimo-v2-pro", "mimo-v2-omni", "mimo-v2.5-pro", "mimo-v2.5",
 		"hy4-preview", "hy3", "hy3-preview",
-		"gpt-5.6-luna", "grok-4.5", "grok-4.6", "muse-spark-1.2-contributor", "muse-spark-1.3-contributor", "omen-alpha",
+		"gpt-5.6-luna", "grok-4.5", "grok-4.6", "muse-spark-1.3-contributor", "muse-spark-1.2-contributor", "omen-alpha",
 	}
 	if !slices.Equal(models, wantModels) {
 		t.Fatalf("model snapshot mismatch\n got: %v\nwant: %v", models, wantModels)
@@ -225,7 +227,7 @@ func TestOpencodeDefaultModelSlugs(t *testing.T) {
 	}
 
 	models[0] = "mutated"
-	if fresh := OpencodeDefaultModelSlugs(); len(fresh) != 35 || fresh[0] == "mutated" {
+	if fresh := OpencodeDefaultModelSlugs(); len(fresh) != 37 || fresh[0] == "mutated" {
 		t.Fatalf("OpencodeDefaultModelSlugs did not return an independent copy: %v", fresh)
 	}
 }

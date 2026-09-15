@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -28,6 +29,20 @@ const (
 	userAgentIdentityPrivateGroupID int64 = 8201
 	userAgentIdentityPublicGroupID  int64 = 8202
 )
+
+type userAccountTestModelCatalog struct{}
+
+func (userAccountTestModelCatalog) ListPricedModelIDs(context.Context, []string) ([]string, error) {
+	return nil, nil
+}
+
+func (userAccountTestModelCatalog) ListSelectablePricedModelIDs(context.Context, service.PricedModelQuery) ([]string, error) {
+	return []string{"selected-model", "gpt-new"}, nil
+}
+
+func (userAccountTestModelCatalog) IsModelPriced(context.Context, service.PricedModelQuery, string) (bool, error) {
+	return false, nil
+}
 
 type userAgentIdentityShareRepo struct {
 	service.AccountRepository
@@ -259,6 +274,7 @@ type userAgentIdentityValidationUpstream struct {
 	body              string
 	calls             int
 	lastAuthorization string
+	lastModel         string
 }
 
 func (u *userAgentIdentityValidationUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
@@ -272,6 +288,13 @@ func (u *userAgentIdentityValidationUpstream) DoWithTLS(req *http.Request, _ str
 func (u *userAgentIdentityValidationUpstream) response(req *http.Request) *http.Response {
 	u.calls++
 	u.lastAuthorization = req.Header.Get("Authorization")
+	if req.Body != nil {
+		var payload struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(req.Body).Decode(&payload)
+		u.lastModel = payload.Model
+	}
 	statusCode := u.statusCode
 	if statusCode == 0 {
 		statusCode = http.StatusOK
@@ -368,7 +391,8 @@ func newUserAgentIdentityShareHandler(
 	accountService.SetAccountShareModeRepository(placementRepo)
 	accountService.SetAgentIdentityWSInvalidator(invalidatorProxy)
 	upstream := &userAgentIdentityValidationUpstream{statusCode: upstreamStatus, body: upstreamBody}
-	accountTestService := service.NewAccountTestService(repo, nil, nil, nil, upstream, nil, nil, nil, invalidatorProxy)
+	accountTestService := service.NewAccountTestService(repo, nil, nil, nil, upstream, &config.Config{}, nil, nil, invalidatorProxy)
+	accountTestService.SetModelResolver(service.NewAccountTestModelResolver(userAccountTestModelCatalog{}))
 	handler := NewUserAccountHandler(accountService, nil, accountTestService, nil, nil, nil, nil, nil, nil, nil)
 	return handler, repo, upstream, invalidator, placementRepo
 }
@@ -389,10 +413,10 @@ func runUserAgentIdentityUpdateRequest(t *testing.T, handler *UserAccountHandler
 	return recorder
 }
 
-func TestUserAccountHandlerTestRejectsModelOutsideOwnerWhitelist(t *testing.T) {
+func TestUserAccountHandlerTestRejectsModelOutsideOwnerWhitelistForPublicAccount(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ownerUserID := int64(101)
-	account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePrivate, service.AccountShareStatusApproved)
+	account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePublic, service.AccountShareStatusApproved)
 	account.Credentials["model_mapping"] = map[string]any{"selected-model": "selected-model"}
 	handler, _, upstream, _, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
 
@@ -409,6 +433,53 @@ func TestUserAccountHandlerTestRejectsModelOutsideOwnerWhitelist(t *testing.T) {
 
 	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
 	require.Contains(t, recorder.Body.String(), "OWNED_ACCOUNT_MODEL_NOT_SELECTABLE")
+	require.Zero(t, upstream.calls)
+}
+
+func TestUserAccountHandlerTestPrivateInheritanceAllowsPricedModelOutsideLegacyMapping(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ownerUserID := int64(101)
+	account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePrivate, service.AccountShareStatusApproved)
+	account.Type = service.AccountTypeAPIKey
+	account.Credentials = map[string]any{"api_key": "test-key", "model_mapping": map[string]any{"old-model": "old-model"}}
+	handler, _, upstream, _, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
+
+	router := gin.New()
+	router.POST("/accounts/:id/test", func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: ownerUserID})
+		handler.Test(c)
+	})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/accounts/1/test", strings.NewReader(`{"model_id":"gpt-new"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), `"success":true`)
+	require.Equal(t, 1, upstream.calls)
+	require.Equal(t, "gpt-new", upstream.lastModel)
+}
+
+func TestUserAccountHandlerTestPrivateInheritanceRejectsUnpricedModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ownerUserID := int64(101)
+	account := newUserAgentIdentityShareAccount(t, ownerUserID, service.AccountShareModePrivate, service.AccountShareStatusApproved)
+	account.Type = service.AccountTypeAPIKey
+	account.Credentials = map[string]any{"api_key": "test-key"}
+	handler, _, upstream, _, _ := newUserAgentIdentityShareHandler(t, account, http.StatusOK, "")
+
+	router := gin.New()
+	router.POST("/accounts/:id/test", func(c *gin.Context) {
+		c.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: ownerUserID})
+		handler.Test(c)
+	})
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/accounts/1/test", strings.NewReader(`{"model_id":"unpriced-model"}`))
+	request.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code, recorder.Body.String())
+	require.Contains(t, recorder.Body.String(), "ACCOUNT_TEST_MODEL_NOT_AVAILABLE")
 	require.Zero(t, upstream.calls)
 }
 

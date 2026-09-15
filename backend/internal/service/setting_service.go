@@ -4150,7 +4150,7 @@ func (s *SettingService) GetFallbackModel(ctx context.Context, platform string) 
 		defaultModel = "gemini-2.5-pro"
 	case PlatformOpencode:
 		key = SettingKeyFallbackModelOpencode
-		defaultModel = "deepseek-v4-flash"
+		defaultModel = "deepseek-v4.1-flash"
 	default:
 		return ""
 	}

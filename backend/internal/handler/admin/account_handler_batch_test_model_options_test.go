@@ -45,6 +45,7 @@ func ownedGrokAccountForBatchTest(id int64, mapping map[string]any) *service.Acc
 		Type:        service.AccountTypeOAuth,
 		Status:      service.StatusActive,
 		OwnerUserID: &ownerID,
+		ShareMode:   service.AccountShareModePublic,
 		Credentials: credentials,
 	}
 }
@@ -107,6 +108,7 @@ func TestAccountHandlerGetBatchTestModelOptions_MixedPlatforms(t *testing.T) {
 				Type:        service.AccountTypeOAuth,
 				Status:      service.StatusActive,
 				OwnerUserID: &ownerID,
+				ShareMode:   service.AccountShareModePublic,
 				Credentials: map[string]any{"model_mapping": map[string]any{"gpt-5": "gpt-5"}},
 			},
 		},

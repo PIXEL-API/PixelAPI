@@ -966,7 +966,7 @@ function generateOpenCodeGoConfig(baseUrl: string, apiKey: string): FileConfig {
     // metadata, so relying only on the provider-level default can preserve a
     // stale model-level Anthropic override from an older configuration.
     ...createModelOverrides(
-      ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp'],
+      ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-flash', 'deepseek-v4.1-flash', 'deepseek-v4-flash-vision-exp'],
       '@ai-sdk/openai-compatible'
     ),
     ...createModelOverrides(
@@ -983,7 +983,7 @@ function generateOpenCodeGoConfig(baseUrl: string, apiKey: string): FileConfig {
       '@ai-sdk/anthropic'
     ),
     ...createModelOverrides(
-      ['gpt-5.6-luna', 'grok-4.5', 'grok-4.6', 'muse-spark-1.2-contributor', 'muse-spark-1.3-contributor'],
+      ['gpt-5.6-luna', 'grok-4.5', 'grok-4.6', 'muse-spark-1.3-contributor', 'muse-spark-1.2-contributor'],
       '@ai-sdk/openai'
     ),
     ...createModelOverrides(

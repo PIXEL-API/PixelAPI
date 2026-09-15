@@ -1219,6 +1219,21 @@ func isOpencodeEmptyBase64DataURL(raw string) bool {
 	return strings.TrimSpace(strings.TrimPrefix(payload, "base64,")) == ""
 }
 
+// stripOpencodeUnsupportedResponsesFields removes request fields that the
+// resolved OpenCode Responses model does not accept. Keep this at the final
+// Responses-body boundary so native passthrough and protocol bridges share the
+// same model-specific normalization.
+func stripOpencodeUnsupportedResponsesFields(body []byte, resolved OpencodeGoResolvedModel) ([]byte, error) {
+	if !resolved.Spec.NoTopP {
+		return body, nil
+	}
+	stripped, err := sjson.DeleteBytes(body, "top_p")
+	if err != nil {
+		return nil, fmt.Errorf("remove unsupported OpenCode Responses top_p: %w", err)
+	}
+	return stripped, nil
+}
+
 func (s *OpenAIGatewayService) forwardOpencodeRawResponses(
 	ctx context.Context,
 	c *gin.Context,
@@ -1238,6 +1253,10 @@ func (s *OpenAIGatewayService) forwardOpencodeRawResponses(
 	upstreamBody, err := sjson.SetBytes(body, "model", resolved.UpstreamModel)
 	if err != nil {
 		return nil, fmt.Errorf("rewrite OpenCode Go Responses model: %w", err)
+	}
+	upstreamBody, err = stripOpencodeUnsupportedResponsesFields(upstreamBody, resolved)
+	if err != nil {
+		return nil, err
 	}
 	SetActualOpenAIUpstreamEndpoint(c, opencodeResponsesRawEndpoint)
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(

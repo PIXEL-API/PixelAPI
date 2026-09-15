@@ -22,8 +22,8 @@ type OpencodeGoModelSpec struct {
 	NoTopP bool
 }
 
-// opencodeGoModelCatalog 是 2026-09-07 审核的 OpenCode Go 模型快照：
-// 成员以公开 GET /zen/go/v1/models 当日返回的 35 个可用 ID 为准；当前模型协议
+// opencodeGoModelCatalog 是 OpenCode Go 官方实时目录的受审核快照：
+// 成员以公开 GET /zen/go/v1/models 当前返回的 37 个可用 ID 为准；当前模型协议
 // 优先依据 OpenCode Go 官方文档的“API 端点”表，未列出的历史模型再与固定
 // models.dev 快照交叉核对。因来源版本存在漂移，固定 models.dev 提交中的
 // ox-alpha-free（deprecated）不在公开端点返回值中，而公开端点中的 hy3-preview
@@ -45,6 +45,11 @@ var opencodeGoModelCatalog = [...]OpencodeGoModelSpec{
 	{ID: "glm-5", Protocol: OpencodeGoProtocolChat, Deprecated: true},
 	{ID: "deepseek-v4-pro", Protocol: OpencodeGoProtocolChat},
 	{ID: "deepseek-v4-flash", Protocol: OpencodeGoProtocolChat},
+	// deepseek-flash is the official Go product alias for DeepSeek V4.1 Flash;
+	// the API roster exposes it without protocol metadata, so retain the
+	// Chat-compatible mapping used by the OpenCode Go alias.
+	{ID: "deepseek-flash", Protocol: OpencodeGoProtocolChat},
+	{ID: "deepseek-v4.1-flash", Protocol: OpencodeGoProtocolChat},
 	{ID: "deepseek-v4-flash-vision-exp", Protocol: OpencodeGoProtocolChat},
 	{ID: "qwen3.7-max", Protocol: OpencodeGoProtocolMessages},
 	{ID: "qwen3.8-max", Protocol: OpencodeGoProtocolMessages},
@@ -62,8 +67,8 @@ var opencodeGoModelCatalog = [...]OpencodeGoModelSpec{
 	{ID: "gpt-5.6-luna", Protocol: OpencodeGoProtocolResponses, NoTopP: true},
 	{ID: "grok-4.5", Protocol: OpencodeGoProtocolResponses, Deprecated: true},
 	{ID: "grok-4.6", Protocol: OpencodeGoProtocolResponses},
-	{ID: "muse-spark-1.2-contributor", Protocol: OpencodeGoProtocolResponses},
 	{ID: "muse-spark-1.3-contributor", Protocol: OpencodeGoProtocolResponses},
+	{ID: "muse-spark-1.2-contributor", Protocol: OpencodeGoProtocolResponses},
 	{ID: "omen-alpha", Protocol: OpencodeGoProtocolChat},
 }
 

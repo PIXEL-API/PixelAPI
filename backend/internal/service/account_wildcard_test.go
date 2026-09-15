@@ -136,6 +136,7 @@ func TestAccountIsModelSupported(t *testing.T) {
 		platform       string
 		credentials    map[string]any
 		owned          bool
+		private        bool
 		requestedModel string
 		expected       bool
 	}{
@@ -158,6 +159,14 @@ func TestAccountIsModelSupported(t *testing.T) {
 			credentials:    nil,
 			requestedModel: "any-model",
 			expected:       false,
+		},
+		{
+			name:           "private account without mapping inherits platform models",
+			owned:          true,
+			private:        true,
+			credentials:    nil,
+			requestedModel: "new-platform-model",
+			expected:       true,
 		},
 		{
 			name:           "owned account with empty mapping denies all",
@@ -197,6 +206,17 @@ func TestAccountIsModelSupported(t *testing.T) {
 			},
 			requestedModel: "grok-unselected",
 			expected:       false,
+		},
+		{
+			name:     "private account explicit mapping still supports alias",
+			platform: PlatformGrok,
+			owned:    true,
+			private:  true,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{"client-new": "upstream-new"},
+			},
+			requestedModel: "client-new",
+			expected:       true,
 		},
 		{
 			name:     "opencode 1m suffix strips to mapped slug",
@@ -343,6 +363,12 @@ func TestAccountIsModelSupported(t *testing.T) {
 				Platform:    tt.platform,
 				Credentials: tt.credentials,
 				OwnerUserID: ownerUserID,
+			}
+			if tt.owned {
+				account.ShareMode = AccountShareModePublic
+			}
+			if tt.private {
+				account.ShareMode = AccountShareModePrivate
 			}
 			result := account.IsModelSupported(tt.requestedModel)
 			if result != tt.expected {
@@ -700,6 +726,7 @@ func TestAccountGetModelMapping_GoogleOnePrecedence(t *testing.T) {
 			Platform:    PlatformGemini,
 			Type:        AccountTypeOAuth,
 			OwnerUserID: &ownerUserID,
+			ShareMode:   AccountShareModePublic,
 			Credentials: map[string]any{
 				"oauth_type": "google_one",
 				"model_mapping": map[string]any{
@@ -723,6 +750,7 @@ func TestAccountGetModelMapping_GoogleOnePrecedence(t *testing.T) {
 			Platform:    PlatformGemini,
 			Type:        AccountTypeOAuth,
 			OwnerUserID: &ownerUserID,
+			ShareMode:   AccountShareModePublic,
 			Credentials: map[string]any{
 				"oauth_type":    "google_one",
 				"model_mapping": map[string]any{},

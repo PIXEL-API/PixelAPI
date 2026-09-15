@@ -654,7 +654,7 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 			Extra:        candidate.Extra,
 		}
 		for _, model := range room.AllowedModels {
-			if account.IsModelSupported(model) {
+			if account.IsModelSupportedByMapping(model) {
 				continue
 			}
 			recordFailure(accountID, service.ErrAccountShareModeUnsupportedModel, map[string]string{"model": model})

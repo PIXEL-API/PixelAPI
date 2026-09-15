@@ -2386,7 +2386,12 @@ func (h *UserAccountHandler) Test(c *gin.Context) {
 		response.BadRequest(c, "model_id is required")
 		return
 	}
-	if !account.IsModelSupported(req.ModelID) {
+	if account.UsesPlatformModelInheritance() {
+		if err := h.accountTestService.ValidateExplicitTestModel(c.Request.Context(), account, req.ModelID); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+	} else if !account.IsModelSupported(req.ModelID) {
 		response.ErrorFrom(c, service.ErrOwnedAccountModelNotSelectable.WithMetadata(map[string]string{
 			"platform": account.Platform,
 			"model":    req.ModelID,
@@ -2407,7 +2412,7 @@ func (h *UserAccountHandler) Test(c *gin.Context) {
 
 // GetAvailableModels handles getting available models for a user-owned account.
 // GET /api/v1/accounts/:id/models
-// 复用 service.AvailableTestModels，用户端严格遵守个人账号模型白名单。
+// 私有账号继承平台定价目录，公有账号按模型白名单与定价目录取交集。
 func (h *UserAccountHandler) GetAvailableModels(c *gin.Context) {
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {

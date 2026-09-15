@@ -659,6 +659,16 @@ func NormalizeAccountShareStatus(status string) string {
 	}
 }
 
+// UsesPlatformModelInheritance reports whether an owned account inherits the
+// active model catalog of its platform instead of using its group bindings as
+// the model-list scope. Explicit mappings are still honored as upstream
+// aliases when a request matches one.
+func (a *Account) UsesPlatformModelInheritance() bool {
+	return a != nil &&
+		a.OwnerUserID != nil &&
+		NormalizeAccountShareMode(a.ShareMode) == AccountShareModePrivate
+}
+
 func (a *Account) IsPublicShareApproved() bool {
 	return a != nil &&
 		a.OwnerUserID != nil &&
@@ -1336,9 +1346,18 @@ func resolveRequestedModelInMapping(mapping map[string]string, requestedModel st
 	return matchWildcardMappingResult(mapping, requestedModel)
 }
 
-// IsModelSupported 检查模型是否在 model_mapping 中（支持通配符）。
-// 平台账号未配置 mapping 时保持历史兼容（允许所有）；个人账号的空白名单拒绝全部。
+// IsModelSupported 检查账号模型能力。私有个人账号不以 mapping 限制能力，
+// 可选模型由调用方的渠道定价目录确定；其他账号按 mapping 判断。
 func (a *Account) IsModelSupported(requestedModel string) bool {
+	if a.UsesPlatformModelInheritance() {
+		return strings.TrimSpace(requestedModel) != ""
+	}
+	return a.IsModelSupportedByMapping(requestedModel)
+}
+
+// IsModelSupportedByMapping 保留共享场景的账号模型能力边界（支持通配符）。
+// 个人账号空 mapping 拒绝全部，平台账号未配置 mapping 时保持历史兼容。
+func (a *Account) IsModelSupportedByMapping(requestedModel string) bool {
 	mapping := a.GetModelMapping()
 	if len(mapping) == 0 {
 		return a.OwnerUserID == nil

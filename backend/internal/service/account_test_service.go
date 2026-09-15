@@ -55,12 +55,12 @@ const (
 	defaultGeminiTextTestPrompt  = "hi"
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultGrokTestModel         = xai.DefaultTextModel
-	defaultOpencodeTestModel     = "deepseek-v4-flash"
+	defaultOpencodeTestModel     = "deepseek-v4.1-flash"
 )
 
 // opencodeTestModelFallbacks 是 opencode 校验测试的备选模型。
-// 首选 defaultOpencodeTestModel（deepseek-v4-flash 最新版在 opencode 仅中国区托管），
-// 国际区账号访问会返回 403 RegionError。fallback 用 opencode 国际通用的裸 slug，
+// 首选 defaultOpencodeTestModel（DeepSeek V4.1 Flash 是官方当前目录中的 Chat 模型），
+// 若上游返回模型不可用类错误，则 fallback 用 OpenCode 国际通用的裸 slug，
 // 当首选模型因「模型不可用」类错误（区域限制/上游端点不可用）失败时按序重试，
 // 避免把 key 有效但模型区域不匹配的账号误判为校验失败。
 var opencodeTestModelFallbacks = []string{"gpt-5.6-luna", "grok-4.6"}
@@ -161,6 +161,27 @@ func (s *AccountTestService) ResolveBatchTestModels(ctx context.Context, account
 		return nil, ErrOwnedAccountModelCatalogUnavailable
 	}
 	return s.modelResolver.ResolveBatchTestModels(ctx, accounts)
+}
+
+// ValidateExplicitTestModel 校验手动测试提交的模型，保留已定价图片模型的测试能力。
+// 调用方先校验账号归属；计划测试仍通过 ValidateTestModel 限制为文本模型。
+func (s *AccountTestService) ValidateExplicitTestModel(ctx context.Context, account *Account, modelID string) error {
+	if s == nil || s.modelResolver == nil || s.modelResolver.catalog == nil {
+		return ErrOwnedAccountModelCatalogUnavailable
+	}
+	if account == nil || !isAccountTestablePlatform(account.Platform) {
+		return ErrAccountTestUnsupportedPlatform
+	}
+	models, err := s.modelResolver.resolveTestableModelIDs(ctx, account)
+	if err != nil {
+		return err
+	}
+	for _, model := range models {
+		if model == modelID {
+			return nil
+		}
+	}
+	return ErrAccountTestModelNotAvailable
 }
 
 // ValidateTestModel 校验模型是否仍在账号可测试集合中（供计划测试/runner 服务端校验）。
@@ -632,7 +653,7 @@ func defaultCNProviderTestModel(platform string) string {
 // testOpencodeAccountConnection tests an OpenCode Go subscription account's connection.
 // OpenCode Go 的模型分属 chat/completions、messages、responses 三种协议。探测前必须先完成账号模型映射，
 // 再通过受审核目录解析最终上游模型和协议；未知模型直接失败，不能猜测协议。
-// 首选模型（默认 deepseek-v4-flash）在 opencode 国际区会返回 403 RegionError，故在「模型不可用」
+// 首选模型（默认 deepseek-v4.1-flash）在 opencode 国际区会返回 403 RegionError，故在「模型不可用」
 // 类错误时按序 fallback 到 opencodeTestModelFallbacks，避免把 key 有效但模型区域不匹配的账号误判为校验失败。
 func (s *AccountTestService) testOpencodeAccountConnection(c *gin.Context, account *Account, modelID string) error {
 	ctx := c.Request.Context()

@@ -83,7 +83,7 @@ func (s *AccountShareModeService) modelsForRequest(ctx context.Context, apiKey *
 		if err != nil {
 			return nil, ErrOwnedAccountModelCatalogUnavailable.WithCause(err)
 		}
-		if !accountShareListingAllowsModel(listing, selectionModel) || !account.IsModelSupported(selectionModel) {
+		if !accountShareListingAllowsModel(listing, selectionModel) || !account.IsModelSupportedByMapping(selectionModel) {
 			continue
 		}
 		priced, err := s.pricedModelCatalog.IsModelPriced(ctx, PricedModelQuery{Platform: platform}, model)

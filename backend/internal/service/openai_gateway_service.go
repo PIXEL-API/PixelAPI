@@ -2887,7 +2887,7 @@ func (s *OpenAIGatewayService) resolveAccountShareModeBoundAccount(ctx context.C
 	if requestedModel != "" && !accountShareRoomModelIsPriced(ctx, s.channelService, listing.Platform, requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
-	if account.IsOpenAICompatible() && account.IsSchedulable() && requestedModel != "" && !account.IsModelSupported(requestedModel) {
+	if account.IsOpenAICompatible() && account.IsSchedulable() && requestedModel != "" && !account.IsModelSupportedByMapping(requestedModel) {
 		return nil, true, accountShareModeUnsupportedModelError(requestedModel)
 	}
 	if !isOpenAIAccountEligibleForRequest(account, requestedModel, requireCompact) || s.isOpenAIAccountRequestRuntimeBlocked(account, requestedModel) {
@@ -3148,6 +3148,9 @@ func (s *OpenAIGatewayService) RevalidateSelectedOpenAIAccountForDispatch(
 	}
 	if latest == nil || latest.ID != account.ID {
 		return nil, fmt.Errorf("revalidate selected OpenAI account: repository returned an invalid account for id %d", account.ID)
+	}
+	if isModeGroup && requirements.RequestedModel != "" && !latest.IsModelSupportedByMapping(requirements.RequestedModel) {
+		return nil, accountShareModeUnsupportedModelError(requirements.RequestedModel)
 	}
 	if reason := openAIContinuationRestartRequiredReason(latest, requirements.RequestedModel, requirements.RequireCompact, false, time.Now()); reason != "" {
 		return nil, newOpenAIDispatchAccountUnavailableError(

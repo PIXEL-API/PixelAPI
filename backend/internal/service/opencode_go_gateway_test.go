@@ -897,6 +897,75 @@ func TestOpencodeGoNativeResponsesUsesFixedEndpointBearerAndFinalMappedSlug(t *t
 	require.Len(t, forwarded, 5, "native forwarding must not inject extra request fields")
 }
 
+func TestOpencodeGoNoTopPIsRemovedForAllResponsesTargets(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		body    []byte
+		forward func(*OpenAIGatewayService, *gin.Context, *Account, []byte) (*OpenAIForwardResult, error)
+	}{
+		{
+			name: "native responses",
+			path: "/v1/responses",
+			body: []byte(`{"model":"gpt-5.6-luna","input":"hello","top_p":1,"stream":false}`),
+			forward: func(service *OpenAIGatewayService, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return service.Forward(context.Background(), c, account, body)
+			},
+		},
+		{
+			name: "chat responses-shaped",
+			path: "/v1/chat/completions",
+			body: []byte(`{"model":"gpt-5.6-luna","input":"hello","top_p":1,"stream":false}`),
+			forward: func(service *OpenAIGatewayService, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return service.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+			},
+		},
+		{
+			name: "anthropic messages bridge",
+			path: "/v1/messages",
+			body: []byte(`{"model":"gpt-5.6-luna","messages":[{"role":"user","content":"hello"}],"top_p":1,"stream":false}`),
+			forward: func(service *OpenAIGatewayService, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+				return service.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := &opencodeGoGatewayCaptureUpstream{}
+			if tt.path != "/v1/responses" {
+				upstream.responseContentType = "text/event-stream"
+				upstream.responseBody = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_no_top_p\",\"object\":\"response\",\"model\":\"gpt-5.6-luna\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"role\":\"assistant\",\"status\":\"completed\",\"content\":[{\"type\":\"output_text\",\"text\":\"ok\"}]}],\"usage\":{\"input_tokens\":1,\"output_tokens\":1,\"total_tokens\":2}}}\n\ndata: [DONE]\n\n"
+			}
+			service := newOpencodeGoGatewayTestService(upstream)
+			body := append([]byte(nil), tt.body...)
+			c, recorder := newOpencodeGoGatewayContext(http.MethodPost, tt.path, body)
+
+			result, err := tt.forward(service, c, newOpencodeGoGatewayTestAccount(nil), body)
+
+			require.NoError(t, err)
+			require.NotNil(t, result)
+			require.Equal(t, http.StatusOK, recorder.Code)
+			require.Equal(t, 1, upstream.calls)
+			require.False(t, gjson.GetBytes(upstream.body, "top_p").Exists(), "OpenCode Responses target must not receive unsupported top_p")
+		})
+	}
+}
+
+func TestStripOpencodeUnsupportedResponsesFields(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-luna","top_p":1,"input":"hello"}`)
+
+	stripped, err := stripOpencodeUnsupportedResponsesFields(body, OpencodeGoResolvedModel{
+		Spec: OpencodeGoModelSpec{NoTopP: true},
+	})
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(stripped, "top_p").Exists())
+
+	preserved, err := stripOpencodeUnsupportedResponsesFields(body, OpencodeGoResolvedModel{})
+	require.NoError(t, err)
+	require.Equal(t, float64(1), gjson.GetBytes(preserved, "top_p").Float())
+}
+
 func TestOpencodeGoNativeResponsesAppliesFastPolicy(t *testing.T) {
 	account := newOpencodeGoGatewayTestAccount(map[string]any{
 		"client-responses-alias": "opencode-go/grok-4.6[1m]",
