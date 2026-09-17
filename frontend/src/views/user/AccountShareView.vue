@@ -1115,7 +1115,7 @@
                     <div v-else class="room-preview-history">{{ t('accountShare.card.readonlySnapshot') }}</div>
                   </template>
                   <p v-else class="room-preview-history">{{ t('accountShare.card.snapshotIncomplete') }}</p>
-                  <div v-if="!isArchiveView && (listing.current_membership_id || isListingMembershipEnding(listing))" class="room-preview-membership" :class="{ 'room-preview-membership-ending': isListingMembershipEnding(listing) }">
+                  <div v-if="!isArchiveView && listingMembershipID(listing) > 0" class="room-preview-membership" :class="{ 'room-preview-membership-ending': isListingMembershipEnding(listing) }">
                     <Icon :name="isListingMembershipEnding(listing) ? 'clock' : 'key'" size="sm" />
                     <span>{{ membershipPanelTitle(listing) }} · {{ boundApiKeyDisplayName(listing) }}</span>
                   </div>
@@ -2268,7 +2268,7 @@
           <p v-if="detailIsArchive" class="room-detail-callout">{{ t('accountShare.detail.deletedReadonly') }}</p>
           <template v-else>
             <div
-              v-if="listing.current_membership_id || (isListingMembershipEnding(listing) ? listing.queue_membership_id : undefined)"
+              v-if="listingMembershipID(listing) > 0"
               class="account-share-membership-panel"
               :class="{ 'account-share-membership-panel-ending': isListingMembershipEnding(listing) }"
             >
@@ -2374,7 +2374,7 @@
                         <button
                           class="btn-secondary min-h-11"
                           type="button"
-                          :disabled="savingIdleTimeoutId === Number(listing.current_membership_id || (isListingMembershipEnding(listing) ? listing.queue_membership_id : undefined) || 0)"
+                          :disabled="savingIdleTimeoutId === listingMembershipID(listing)"
                           @click="saveIdleTimeout(listing)"
                         >
                           {{ t('common.save') }}
@@ -2401,7 +2401,7 @@
                 </div>
               </div>
             </div>
-            <section v-if="!listing.current_membership_id && !isListingMembershipEnding(listing)" class="room-detail-section"><h3>{{ t('accountShare.join.startUsing') }}</h3><p class="room-detail-muted">{{ t('accountShare.join.startUsingDesc') }}</p></section>
+            <section v-if="listingMembershipID(listing) <= 0" class="room-detail-section"><h3>{{ t('accountShare.join.startUsing') }}</h3><p class="room-detail-muted">{{ t('accountShare.join.startUsingDesc') }}</p></section>
             <template v-if="isManagementView || isOwnListing(listing) || authStore.isAdmin">
               <div class="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm dark:border-dark-700 dark:bg-dark-800/60">
                 <div class="flex flex-col gap-1 text-gray-600 dark:text-dark-200">
@@ -2531,7 +2531,7 @@
                 </button>
               </div>
             </div>
-            <div v-else class="room-detail-footer-summary"><span>{{ listing.current_membership_id || isListingMembershipEnding(listing) ? membershipPanelTitle(listing) : listingStatusLabel(listing) }}</span><button type="button" class="btn-primary min-h-11" @click="showUsage">{{ t('accountShare.join.viewUsage') }}<Icon name="arrowRight" size="sm" /></button></div>
+            <div v-else class="room-detail-footer-summary"><span>{{ listingMembershipID(listing) > 0 ? membershipPanelTitle(listing) : listingStatusLabel(listing) }}</span><button type="button" class="btn-primary min-h-11" @click="showUsage">{{ t('accountShare.join.viewUsage') }}<Icon name="arrowRight" size="sm" /></button></div>
           </template>
         </div>
       </template>
@@ -5580,8 +5580,7 @@ function listingJoinUnavailableReason(listing: AccountShareListing): string {
 
 function canShowListingJoinSection(listing: AccountShareListing): boolean {
   return !listing.deleted
-    && (!isListingMembershipEnding(listing) || !listing.queue_membership_id)
-    && !listing.current_membership_id
+    && listingMembershipID(listing) <= 0
     && (!isManagementView.value || isOwnListing(listing))
 }
 
@@ -5773,7 +5772,7 @@ function syncIdleTimeoutControls(items: AccountShareListing[]): void {
 }
 
 function idleTimeoutSummary(listing: AccountShareListing): string {
-  const minutes = normalizeIdleTimeoutMinutes(listing.current_idle_timeout_minutes ?? idleTimeoutByListing[listing.id] ?? 0)
+  const minutes = normalizeIdleTimeoutMinutes(listing.current_idle_timeout_minutes ?? listing.queue_idle_timeout_minutes ?? idleTimeoutByListing[listing.id] ?? 0)
   if (minutes <= 0) return t('accountShare.idle.notEnabled')
   if (!listing.current_idle_expires_at) return t('accountShare.idle.minutes', { minutes })
   const countdown = formatCountdownUntil(listing.current_idle_expires_at)
@@ -5785,6 +5784,13 @@ function pendingMembershipEndForListing(
   listing: AccountShareListing
 ): PendingMembershipEnd | null {
   return pendingMembershipEnds.value[listing.id] || null
+}
+
+// 解析查看者在当前房间的活跃成员 ID。queue_membership_id 的 join 不检查
+// paid_until/idle 新鲜度，可覆盖 current_membership_id 在计费续期间隙
+// 短暂为空的窗口，保证成员始终能看到自己的退出入口。
+function listingMembershipID(listing: AccountShareListing): number {
+  return Number(listing.current_membership_id || listing.queue_membership_id || 0)
 }
 
 function isListingMembershipEnding(listing: AccountShareListing): boolean {
@@ -6562,7 +6568,7 @@ async function refreshPageData(): Promise<void> {
 function hasVisibleMembershipState(): boolean {
   if (isMembershipHistoryView.value || isArchiveView.value) return false
   return listings.value.some(listing => Boolean(
-    listing.current_membership_id
+    listingMembershipID(listing) > 0
     || listing.status === 'validating'
   )) || hasPendingMembershipEndState()
 }
@@ -6580,7 +6586,7 @@ function hasPendingMembershipEndState(): boolean {
 
 function hasVisibleTransientStatus(): boolean {
   if (isMembershipHistoryView.value || isArchiveView.value) return false
-  return listings.value.some(listing => Boolean(listing.current_membership_id))
+  return listings.value.some(listing => listingMembershipID(listing) > 0)
     || visibleValidatingListingIDs.value.size > 0
     || hasPendingMembershipEndState()
     || (
@@ -8314,7 +8320,7 @@ async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void
 }
 
 function handleEndUseClick(listing: AccountShareListing): void {
-  const membershipID = Number(listing.current_membership_id || (isListingMembershipEnding(listing) ? listing.queue_membership_id : undefined) || 0)
+  const membershipID = listingMembershipID(listing)
   if (
     membershipID <= 0
     || endingId.value !== null
@@ -8656,7 +8662,7 @@ async function submitReview(): Promise<void> {
 }
 
 async function saveIdleTimeout(listing: AccountShareListing): Promise<void> {
-  const membershipID = Number(listing.current_membership_id || (isListingMembershipEnding(listing) ? listing.queue_membership_id : undefined) || 0)
+  const membershipID = listingMembershipID(listing)
   if (membershipID <= 0 || savingIdleTimeoutId.value === membershipID) return
   errorMessage.value = ''
   const idleTimeoutValue = idleTimeoutByListing[listing.id] ?? listing.current_idle_timeout_minutes ?? listing.queue_idle_timeout_minutes ?? 0
