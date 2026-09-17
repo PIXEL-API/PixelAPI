@@ -423,9 +423,9 @@ func (h *UserAccountHandler) prepareUserAccountRequest(c *gin.Context, ownerUser
 		response.BadRequest(c, "Invalid account request")
 		return false
 	}
-	// 用户端自有账号仅 opencode 与中继上游平台（CN/API聚合）放开 apikey 类型，其余平台仍强制 OAuth。
-	if req.Type == service.AccountTypeAPIKey && req.Platform != service.PlatformOpencode && !service.IsRelayUpstreamProvider(req.Platform) {
-		response.BadRequest(c, "API key accounts are only supported for OpenCode, CN provider or API aggregation platforms")
+	// 用户端自有账号仅 opencode/devin 与中继上游平台（CN/API聚合）放开 apikey 类型，其余平台仍强制 OAuth。
+	if req.Type == service.AccountTypeAPIKey && req.Platform != service.PlatformOpencode && req.Platform != service.PlatformDevin && !service.IsRelayUpstreamProvider(req.Platform) {
+		response.BadRequest(c, "API key accounts are only supported for OpenCode, Devin, CN provider or API aggregation platforms")
 		return false
 	}
 	levelConfigs, err := h.openAIAccountLevelConfigs(c.Request.Context())
