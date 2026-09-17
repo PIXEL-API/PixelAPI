@@ -70,7 +70,13 @@ func classifyConnectError(err *connect.Error) *Failure {
 	case connect.CodeUnauthenticated:
 		failure.StatusCode, failure.CredentialFailed = 401, true
 	case connect.CodePermissionDenied:
-		failure.StatusCode, failure.CredentialFailed = 403, true
+		// 上游对「内容策略拦截」和「凭证无权限」都回 permission_denied。
+		// 前者是请求级拒绝，按客户端错误处理；不能把账号标成凭证失效。
+		if isContentPolicyRejection(message) {
+			failure.StatusCode, failure.ClientFault = 400, true
+		} else {
+			failure.StatusCode, failure.CredentialFailed = 403, true
+		}
 	case connect.CodeNotFound:
 		failure.StatusCode = 404
 	case connect.CodeResourceExhausted:
@@ -136,4 +142,11 @@ func IsTransientConnectError(err error) bool {
 		return true
 	}
 	return false
+}
+
+// isContentPolicyRejection 识别上游内容审核拦截文案（permission_denied 复用场景），
+// 例如 "Your request was blocked by our content policy..."。
+func isContentPolicyRejection(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "content policy") || strings.Contains(lower, "content_policy")
 }
