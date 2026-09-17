@@ -111,7 +111,9 @@ func (g *Group) ResolveMessagesDispatchModel(requestedModel string) string {
 }
 
 func sanitizeGroupMessagesDispatchFields(g *Group) {
-	if g == nil || g.Platform == PlatformOpenAI {
+	// OpenAI 与 Devin 分组的 /v1/messages 均为桥接实现，沿用显式开关语义：
+	// 是否放行由 allow_messages_dispatch 决定，claude→目标模型映射仅对 OpenAI 生效。
+	if g == nil || g.Platform == PlatformOpenAI || g.Platform == PlatformDevin {
 		return
 	}
 	if g.Platform == PlatformOpencode || IsRelayUpstreamProvider(g.Platform) {

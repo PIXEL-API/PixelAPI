@@ -5348,7 +5348,7 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
-  if (isUserScope.value && !isOAuthFlow.value && form.platform !== 'opencode' && form.platform !== 'devin' && !isCNPlatform(form.platform)) {
+  if (isUserScope.value && !isOAuthFlow.value && form.platform !== 'opencode' && form.platform !== 'devin' && !isCNPlatform(form.platform) && form.platform !== 'api_aggregation') {
     accountCategory.value = 'oauth-based'
     addMethod.value = 'oauth'
     antigravityAccountType.value = 'oauth'
