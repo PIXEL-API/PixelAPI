@@ -68,12 +68,21 @@ func classifyConnectError(err *connect.Error) *Failure {
 	case connect.CodeInvalidArgument, connect.CodeOutOfRange, connect.CodeFailedPrecondition:
 		failure.StatusCode, failure.ClientFault = 400, true
 	case connect.CodeUnauthenticated:
-		failure.StatusCode, failure.CredentialFailed = 401, true
+		// 上游抖动会把内部错误包装成 unauthenticated/permission_denied
+		// （如 "an internal error occurred"），此类按可重试上游错误处理，
+		// 不能把账号标成凭证失效。
+		if isUpstreamInternalError(message) {
+			failure.StatusCode, failure.Retryable = 502, true
+		} else {
+			failure.StatusCode, failure.CredentialFailed = 401, true
+		}
 	case connect.CodePermissionDenied:
 		// 上游对「内容策略拦截」和「凭证无权限」都回 permission_denied。
 		// 前者是请求级拒绝，按客户端错误处理；不能把账号标成凭证失效。
 		if isContentPolicyRejection(message) {
 			failure.StatusCode, failure.ClientFault = 400, true
+		} else if isUpstreamInternalError(message) {
+			failure.StatusCode, failure.Retryable = 502, true
 		} else {
 			failure.StatusCode, failure.CredentialFailed = 403, true
 		}
@@ -149,4 +158,11 @@ func IsTransientConnectError(err error) bool {
 func isContentPolicyRejection(message string) bool {
 	lower := strings.ToLower(message)
 	return strings.Contains(lower, "content policy") || strings.Contains(lower, "content_policy")
+}
+
+// isUpstreamInternalError 识别上游内部错误被包装成 auth 类 code 的措辞，
+// 例如 "an internal error occurred (trace ID: ...)"。
+func isUpstreamInternalError(message string) bool {
+	lower := strings.ToLower(message)
+	return strings.Contains(lower, "internal error") || strings.Contains(lower, "internal_error")
 }
