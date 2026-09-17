@@ -265,7 +265,7 @@ func accountHasExplicitModelMapping(account *Account) bool {
 func isAccountTestablePlatform(platform string) bool {
 	switch platform {
 	case PlatformOpenAI, PlatformGemini, PlatformAntigravity, PlatformGrok, PlatformOpencode, PlatformAnthropic,
-		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformQwen, PlatformAPIAggregation:
+		PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformQwen, PlatformAPIAggregation, PlatformDevin:
 		return true
 	default:
 		return false

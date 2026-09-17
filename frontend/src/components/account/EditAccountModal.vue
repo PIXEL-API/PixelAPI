@@ -4500,7 +4500,7 @@ const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
 
-  if (isUserScope.value && props.account.type !== 'oauth' && props.account.platform !== 'opencode' && !isCNPlatform(props.account.platform) && props.account.platform !== 'api_aggregation') {
+  if (isUserScope.value && props.account.type !== 'oauth' && props.account.platform !== 'opencode' && props.account.platform !== 'devin' && !isCNPlatform(props.account.platform) && props.account.platform !== 'api_aggregation') {
     appStore.showError(t('userAccounts.typeNotAllowed'))
     return
   }
