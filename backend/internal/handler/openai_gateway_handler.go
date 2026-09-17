@@ -335,10 +335,6 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
 		return
 	}
-	if isDevinGroupRequest(c) {
-		h.errorResponse(c, http.StatusNotImplemented, "unsupported_protocol", "Devin groups only support /v1/chat/completions")
-		return
-	}
 
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -952,7 +948,12 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 			})
 		}
 		upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
-		result, err := h.gatewayService.ForwardWithAnalysis(forwardCtx, c, account, forwardBody, forwardAnalysis)
+		var result *service.OpenAIForwardResult
+		if account.IsDevin() {
+			result, err = h.forwardDevinResponses(forwardCtx, c, account, forwardBody, sessionHash, &streamStarted)
+		} else {
+			result, err = h.gatewayService.ForwardWithAnalysis(forwardCtx, c, account, forwardBody, forwardAnalysis)
+		}
 		cancelForward()
 		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(dispatchCtx, c, currentAPIKey, upstreamAttemptID)
 		forwardDurationMs := time.Since(forwardStart).Milliseconds()
@@ -1312,10 +1313,6 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
 		h.anthropicErrorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
-		return
-	}
-	if isDevinGroupRequest(c) {
-		h.anthropicErrorResponse(c, http.StatusNotImplemented, "unsupported_protocol", "Devin groups only support /v1/chat/completions")
 		return
 	}
 
@@ -1690,7 +1687,12 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 			})
 		}
 		upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
-		result, err := h.gatewayService.ForwardAsAnthropic(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
+		var result *service.OpenAIForwardResult
+		if account.IsDevin() {
+			result, err = h.forwardDevinAnthropic(forwardCtx, c, account, forwardBody, sessionHash, &streamStarted)
+		} else {
+			result, err = h.gatewayService.ForwardAsAnthropic(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
+		}
 		cancelForward()
 		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(c.Request.Context(), c, currentAPIKey, upstreamAttemptID)
 

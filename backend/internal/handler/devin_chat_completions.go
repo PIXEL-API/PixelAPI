@@ -384,21 +384,50 @@ func (h *OpenAIGatewayHandler) pumpDevinStream(
 	header.Set("Connection", "keep-alive")
 	header.Set("X-Accel-Buffering", "no")
 
+	flusher, _ := c.Writer.(http.Flusher)
+	return h.pumpDevinStreamCore(ctx, account, stream, reqModel, result, streamStarted,
+		func(chunk []byte) error {
+			if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", chunk); err != nil {
+				return err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return nil
+		},
+		func() error {
+			if _, err := fmt.Fprint(c.Writer, "data: [DONE]\n\n"); err != nil {
+				return err
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return nil
+		},
+	)
+}
+
+// pumpDevinStreamCore 把 devin 事件流转成连续的 chat.completion.chunk JSON，
+// 由 emitChunk 决定下游协议形态（OpenAI SSE / Responses SSE / Anthropic SSE），
+// finish 负责协议收尾（[DONE] 或各协议的终止事件）。
+func (h *OpenAIGatewayHandler) pumpDevinStreamCore(
+	ctx context.Context,
+	account *service.Account,
+	stream *devinpkg.ChatStream,
+	reqModel string,
+	result *service.OpenAIForwardResult,
+	streamStarted *bool,
+	emitChunk func(chunkJSON []byte) error,
+	finish func() error,
+) error {
 	created := time.Now().Unix()
 	responseID := "chatcmpl-" + strings.ReplaceAll(strings.ToLower(fmt.Sprintf("%x", created)), " ", "")
-	flusher, _ := c.Writer.(http.Flusher)
 	roleSent := false
 	toolIndexes := make(map[string]int)
 	firstTokenAt := time.Now()
 
 	writeChunk := func(delta map[string]any, finishReason *string, usage map[string]any) error {
-		if _, err := fmt.Fprintf(c.Writer, "data: %s\n\n", devinChunkJSON(responseID, reqModel, created, delta, finishReason, usage)); err != nil {
-			return err
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
-		return nil
+		return emitChunk(devinChunkJSON(responseID, reqModel, created, delta, finishReason, usage))
 	}
 	sendRole := func() error {
 		if roleSent {
@@ -486,11 +515,7 @@ func (h *OpenAIGatewayHandler) pumpDevinStream(
 						return err
 					}
 				}
-				_, _ = fmt.Fprint(c.Writer, "data: [DONE]\n\n")
-				if flusher != nil {
-					flusher.Flush()
-				}
-				return nil
+				return finish()
 			case devinpkg.EventError:
 				if event.Message != nil {
 					fillDevinUsage(result, event.Message.Usage)
@@ -518,6 +543,25 @@ func (h *OpenAIGatewayHandler) collectDevinResponse(
 	result *service.OpenAIForwardResult,
 	streamStarted *bool,
 ) error {
+	response, err := h.collectDevinCCResponse(ctx, account, stream, reqModel, result)
+	if err != nil {
+		return err
+	}
+	*streamStarted = true
+	c.Header("Content-Type", "application/json")
+	c.JSON(http.StatusOK, response)
+	return nil
+}
+
+// collectDevinCCResponse 排空 devin 流并聚合为 chat.completion JSON map，
+// 供 OpenAI 直写或协议桥接（Responses/Anthropic）二次转换。
+func (h *OpenAIGatewayHandler) collectDevinCCResponse(
+	ctx context.Context,
+	account *service.Account,
+	stream *devinpkg.ChatStream,
+	reqModel string,
+	result *service.OpenAIForwardResult,
+) (map[string]any, error) {
 	var done *devinpkg.AssistantResult
 	for {
 		events, err := stream.Next()
@@ -525,7 +569,7 @@ func (h *OpenAIGatewayHandler) collectDevinResponse(
 			break
 		}
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, event := range events {
 			switch event.Kind {
@@ -539,14 +583,14 @@ func (h *OpenAIGatewayHandler) collectDevinResponse(
 					h.devinGatewayService.MarkCredentialFailure(ctx, account, failure)
 				}
 				if event.Err != nil {
-					return event.Err
+					return nil, event.Err
 				}
-				return errors.New("devin stream error")
+				return nil, errors.New("devin stream error")
 			}
 		}
 	}
 	if done == nil {
-		return errors.New("devin stream ended without a terminal event")
+		return nil, errors.New("devin stream ended without a terminal event")
 	}
 	fillDevinUsage(result, done.Usage)
 	firstMs := int(result.Duration.Milliseconds())
@@ -595,8 +639,5 @@ func (h *OpenAIGatewayHandler) collectDevinResponse(
 	if response["id"] == "chatcmpl-" {
 		response["id"] = fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
 	}
-	*streamStarted = true
-	c.Header("Content-Type", "application/json")
-	c.JSON(http.StatusOK, response)
-	return nil
+	return response, nil
 }
