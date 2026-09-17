@@ -158,7 +158,8 @@
           <input
             v-model="editBaseUrl"
             type="text"
-            class="input"
+            class="input disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="account.platform === 'devin'"
             :placeholder="
               account.platform === 'openai'
                 ? 'https://api.openai.com'
@@ -3614,7 +3615,9 @@ const syncFormFromAccount = (newAccount: Account | null) => {
             ? 'https://api.x.ai/v1'
             : newAccount.platform === 'opencode'
               ? ''
-              : 'https://api.anthropic.com'
+              : newAccount.platform === 'devin'
+                ? 'https://server.codeium.com'
+                : 'https://api.anthropic.com'
     editOpencodeAccountMode.value = credentials.account_mode === 'zen' ? 'zen' : 'go'
     editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
     if (isCNPlatform(newAccount.platform)) {

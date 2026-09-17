@@ -1315,7 +1315,8 @@
           <input
             v-model="apiKeyBaseUrl"
             type="text"
-            class="input"
+            class="input disabled:cursor-not-allowed disabled:opacity-60"
+            :disabled="form.platform === 'devin'"
             :placeholder="
               form.platform === 'openai'
                 ? 'https://api.openai.com'
