@@ -117,7 +117,73 @@ func responsesInputToChatMessages(instructions string, input json.RawMessage) ([
 			messages = append(messages, ChatMessage{Role: role, Content: item.Content})
 		}
 	}
-	return messages, nil
+	return normalizeResponsesDerivedChatMessageRoles(messages), nil
+}
+
+// normalizeResponsesDerivedChatMessageRoles merges leading system/developer
+// messages and downgrades later ones to user messages. Some Chat Completions
+// upstreams only accept system content at the very start of the conversation.
+func normalizeResponsesDerivedChatMessageRoles(messages []ChatMessage) []ChatMessage {
+	isInstructionRole := func(role string) bool {
+		role = strings.TrimSpace(role)
+		return strings.EqualFold(role, "system") || strings.EqualFold(role, "developer")
+	}
+
+	leading := 0
+	for leading < len(messages) && isInstructionRole(messages[leading].Role) {
+		leading++
+	}
+
+	out := make([]ChatMessage, 0, len(messages))
+	switch leading {
+	case 0:
+	case 1:
+		out = append(out, messages[0])
+	default:
+		merged := make([]string, 0, leading)
+		for _, message := range messages[:leading] {
+			if text := strings.TrimSpace(responsesDerivedChatMessageContentText(message.Content)); text != "" {
+				merged = append(merged, text)
+			}
+		}
+		if len(merged) > 0 {
+			content, _ := json.Marshal(strings.Join(merged, "\n\n"))
+			out = append(out, ChatMessage{Role: "system", Content: content})
+		}
+	}
+
+	for _, message := range messages[leading:] {
+		if isInstructionRole(message.Role) {
+			message.Role = "user"
+		}
+		out = append(out, message)
+	}
+	return out
+}
+
+func responsesDerivedChatMessageContentText(raw json.RawMessage) string {
+	raw = bytesTrimSpace(raw)
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		return text
+	}
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err != nil {
+		return ""
+	}
+	texts := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part.Text != "" && (part.Type == "text" || part.Type == "input_text" || part.Type == "output_text") {
+			texts = append(texts, part.Text)
+		}
+	}
+	return strings.Join(texts, "\n\n")
 }
 
 func bytesTrimSpace(value []byte) []byte {

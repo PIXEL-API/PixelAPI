@@ -29,11 +29,16 @@
               autofocus
               autocomplete="email"
               :disabled="formControlsDisabled"
+              :aria-invalid="Boolean(errors.email)"
+              :aria-describedby="errors.email ? 'emailError' : undefined"
               class="input pl-11"
               :class="{ 'input-error': errors.email }"
               :placeholder="t('auth.emailPlaceholder')"
             />
           </div>
+          <p v-if="errors.email" id="emailError" class="mt-1 text-sm text-red-600 dark:text-red-400" role="alert">
+            {{ errors.email }}
+          </p>
         </div>
 
         <!-- Password Input -->
@@ -52,6 +57,8 @@
               required
               autocomplete="current-password"
               :disabled="formControlsDisabled"
+              :aria-invalid="Boolean(errors.password)"
+              :aria-describedby="errors.password ? 'passwordError' : undefined"
               class="input pl-11 pr-11"
               :class="{ 'input-error': errors.password }"
               :placeholder="t('auth.passwordPlaceholder')"
@@ -60,12 +67,18 @@
               type="button"
               @click="showPassword = !showPassword"
               :disabled="formControlsDisabled"
-              class="absolute inset-y-0 right-0 flex items-center pr-3.5 text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-dark-300"
+              :aria-label="t('auth.passwordLabel')"
+              :aria-pressed="showPassword"
+              aria-controls="password"
+              class="absolute inset-y-0 right-0 flex min-w-11 items-center justify-center pr-3 text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-dark-300"
             >
               <Icon v-if="showPassword" name="eyeOff" size="md" />
               <Icon v-else name="eye" size="md" />
             </button>
           </div>
+          <p v-if="errors.password" id="passwordError" class="mt-1 text-sm text-red-600 dark:text-red-400" role="alert">
+            {{ errors.password }}
+          </p>
           <div class="mt-1 flex items-center justify-between">
             <span></span>
             <router-link
@@ -87,6 +100,18 @@
             @expire="onTurnstileExpire"
             @error="onTurnstileError"
           />
+          <p v-if="errors.turnstile" class="mt-1 text-sm text-red-600 dark:text-red-400" role="alert">
+            {{ errors.turnstile }}
+          </p>
+        </div>
+
+        <!-- Form-level error (server/auth failures) -->
+        <div
+          v-if="errorMessage"
+          class="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
+          role="alert"
+        >
+          {{ errorMessage }}
         </div>
 
         <!-- Submit Button -->
@@ -127,7 +152,6 @@
           :updated-at="loginAgreementUpdatedAt"
           :visible="showAgreementModal"
           :error-message="agreementError"
-          action-name="登录"
           @accept="acceptLoginAgreement"
           @reject="rejectLoginAgreement"
           @open="showAgreementModal = true"
@@ -203,7 +227,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, reactive, onMounted, watch } from 'vue'
+import { computed, ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { AuthLayout } from '@/components/layout'
@@ -278,10 +302,6 @@ const errors = reactive({
   turnstile: ''
 })
 
-const validationToastMessage = computed(
-  () => errors.email || errors.password || errors.turnstile || ''
-)
-
 const agreementGateActive = computed(
   () => loginAgreementEnabled.value && !agreementAccepted.value
 )
@@ -299,12 +319,6 @@ const showOAuthLogin = computed(
       githubOAuthEnabled.value ||
       googleOAuthEnabled.value)
 )
-
-watch(validationToastMessage, (value, previousValue) => {
-  if (value && value !== previousValue) {
-    appStore.showError(value)
-  }
-})
 
 // ==================== Lifecycle ====================
 
@@ -399,7 +413,7 @@ function rejectLoginAgreement(): void {
   localStorage.removeItem(LOGIN_AGREEMENT_STORAGE_KEY)
   agreementAccepted.value = false
   showAgreementModal.value = false
-  agreementError.value = '请先阅读并同意最新条款后再登录。'
+  agreementError.value = t('auth.agreementRequired')
   appStore.showWarning(agreementError.value)
 }
 
@@ -409,7 +423,7 @@ function validateAgreementBeforeSubmit(): boolean {
     return true
   }
 
-  agreementError.value = '请先阅读并同意最新条款后再登录。'
+  agreementError.value = t('auth.agreementRequired')
   appStore.showWarning(agreementError.value)
   if (loginAgreementMode.value !== 'checkbox') {
     showAgreementModal.value = true

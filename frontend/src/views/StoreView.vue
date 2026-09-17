@@ -142,207 +142,190 @@
       </template>
     </div>
 
-    <Teleport to="body">
-      <Transition name="modal">
-        <div v-if="checkoutProduct" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" @click.self="closeCheckout">
-          <div class="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl dark:bg-dark-900">
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ checkoutProduct.name }}</h2>
-                <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('store.checkoutTitle') }}</p>
-              </div>
-              <button type="button" class="rounded-lg p-2 text-gray-400 hover:bg-gray-100 dark:hover:bg-dark-800" @click="closeCheckout">
-                <span class="sr-only">{{ t('common.close') }}</span>
-                x
-              </button>
-            </div>
+    <BaseDialog
+      :show="!!checkoutProduct"
+      :title="checkoutProduct?.name ?? ''"
+      width="normal"
+      close-on-click-outside
+      @close="closeCheckout"
+    >
+      <div v-if="checkoutProduct" class="space-y-4">
+        <p class="-mt-1 text-sm text-gray-500 dark:text-dark-400">{{ t('store.checkoutTitle') }}</p>
+        <div>
+          <label class="input-label">{{ t('store.quantity') }}</label>
+          <input v-model.number="quantity" type="number" :min="checkoutMinQuantity" :max="checkoutMaxQuantity" class="input" />
+        </div>
 
-            <div class="mt-5 space-y-4">
-              <div>
-                <label class="input-label">{{ t('store.quantity') }}</label>
-                <input v-model.number="quantity" type="number" :min="checkoutMinQuantity" :max="checkoutMaxQuantity" class="input" />
-              </div>
-
-              <div class="rounded-lg bg-gray-50 p-4 text-sm dark:bg-dark-800">
-                <div class="flex justify-between">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.unitPrice') }}</span>
-                  <span class="font-medium text-gray-900 dark:text-white">¥{{ checkoutProduct.price.toFixed(2) }}</span>
-                </div>
-                <div class="mt-2 flex justify-between">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.totalAmount') }}</span>
-                  <span class="text-lg font-bold text-primary-600 dark:text-primary-400">¥{{ checkoutAmount.toFixed(2) }}</span>
-                </div>
-                <div v-if="isCheckoutDrawProduct" class="mt-2 flex justify-between gap-3">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawRewardRange') }}</span>
-                  <span class="text-right font-medium text-gray-900 dark:text-white">
-                    {{ drawRewardRangeText }}
-                  </span>
-                </div>
-                <div v-if="isCheckoutLoadFactorCreditsProduct" class="mt-2 flex justify-between gap-3">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.loadFactorCreditsAwarded') }}</span>
-                  <span class="text-right font-medium text-emerald-600 dark:text-emerald-300">
-                    +{{ checkoutLoadFactorCreditsAmount }}
-                  </span>
-                </div>
-                <div v-if="isCheckoutDrawProduct" class="mt-2 flex justify-between gap-3">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawProgress') }}</span>
-                  <span class="text-right font-medium text-gray-900 dark:text-white">
-                    {{ drawProgressText(checkoutProduct) }}
-                  </span>
-                </div>
-                <div v-if="authStore.isAuthenticated && checkoutProduct.allow_balance_payment !== false" class="mt-2 flex justify-between">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('payment.currentBalance') }}</span>
-                  <span class="font-medium text-gray-900 dark:text-white">${{ currentBalance.toFixed(2) }}</span>
-                </div>
-                <div v-if="authStore.isAuthenticated && checkoutProduct.allow_points_payment" class="mt-2 flex justify-between">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.currentPoints') }}</span>
-                  <span class="font-medium text-gray-900 dark:text-white">{{ currentPoints.toFixed(10).replace(/\.?0+$/, '') || '0' }}</span>
-                </div>
-              </div>
-
-              <div>
-                <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  {{ t('store.payMethod') }}
-                </label>
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                  <button
-                    v-if="isBalancePaymentAllowed"
-                    type="button"
-                    class="store-pay-option"
-                    :class="{ 'store-pay-option-active': payMethod === 'balance' }"
-                    :disabled="!canPayByBalance"
-                    @click="payMethod = 'balance'"
-                  >
-                    <span class="font-semibold">{{ t('store.balancePay') }}</span>
-                    <span class="text-xs text-gray-500 dark:text-dark-400">{{ balancePayHint }}</span>
-                  </button>
-                  <button
-                    v-if="isPointsPaymentAllowed"
-                    type="button"
-                    class="store-pay-option"
-                    :class="{ 'store-pay-option-active': payMethod === 'points' }"
-                    :disabled="!canPayByPoints"
-                    @click="payMethod = 'points'"
-                  >
-                    <span class="font-semibold">{{ t('store.pointsPay') }}</span>
-                    <span class="text-xs text-gray-500 dark:text-dark-400">{{ pointsPayHint }}</span>
-                  </button>
-                  <button
-                    v-if="isPlatformPaymentAllowed"
-                    type="button"
-                    class="store-pay-option"
-                    :class="{ 'store-pay-option-active': payMethod === 'payment' }"
-                    :disabled="methodOptions.length === 0"
-                    @click="payMethod = 'payment'"
-                  >
-                    <span class="font-semibold">{{ t('store.gatewayPay') }}</span>
-                    <span class="text-xs text-gray-500 dark:text-dark-400">{{ t('store.gatewayPayHint') }}</span>
-                  </button>
-                </div>
-              </div>
-
-              <PaymentMethodSelector
-                v-if="payMethod === 'payment' && methodOptions.length > 0"
-                :methods="methodOptions"
-                :selected="selectedMethod"
-                @select="selectedMethod = $event"
-              />
-
-              <button
-                type="button"
-                class="btn btn-primary w-full min-h-[44px]"
-                :disabled="!canSubmitCheckout || submitting"
-                @click="submitCheckout"
-              >
-                {{ submitting ? t('common.processing') : t('store.confirmBuy') }}
-              </button>
-            </div>
+        <div class="rounded-lg bg-gray-50 p-4 text-sm dark:bg-dark-800">
+          <div class="flex justify-between">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('store.unitPrice') }}</span>
+            <span class="font-medium text-gray-900 dark:text-white">¥{{ checkoutProduct.price.toFixed(2) }}</span>
+          </div>
+          <div class="mt-2 flex justify-between">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('store.totalAmount') }}</span>
+            <span class="text-lg font-bold text-primary-600 dark:text-primary-400">¥{{ checkoutAmount.toFixed(2) }}</span>
+          </div>
+          <div v-if="isCheckoutDrawProduct" class="mt-2 flex justify-between gap-3">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawRewardRange') }}</span>
+            <span class="text-right font-medium text-gray-900 dark:text-white">
+              {{ drawRewardRangeText }}
+            </span>
+          </div>
+          <div v-if="isCheckoutLoadFactorCreditsProduct" class="mt-2 flex justify-between gap-3">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('store.loadFactorCreditsAwarded') }}</span>
+            <span class="text-right font-medium text-emerald-600 dark:text-emerald-300">
+              +{{ checkoutLoadFactorCreditsAmount }}
+            </span>
+          </div>
+          <div v-if="isCheckoutDrawProduct" class="mt-2 flex justify-between gap-3">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawProgress') }}</span>
+            <span class="text-right font-medium text-gray-900 dark:text-white">
+              {{ drawProgressText(checkoutProduct) }}
+            </span>
+          </div>
+          <div v-if="authStore.isAuthenticated && checkoutProduct.allow_balance_payment !== false" class="mt-2 flex justify-between">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('payment.currentBalance') }}</span>
+            <span class="font-medium text-gray-900 dark:text-white">${{ currentBalance.toFixed(2) }}</span>
+          </div>
+          <div v-if="authStore.isAuthenticated && checkoutProduct.allow_points_payment" class="mt-2 flex justify-between">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('store.currentPoints') }}</span>
+            <span class="font-medium text-gray-900 dark:text-white">{{ currentPoints.toFixed(10).replace(/\.?0+$/, '') || '0' }}</span>
           </div>
         </div>
-      </Transition>
-    </Teleport>
 
-    <Teleport to="body">
-      <Transition name="modal">
-        <div v-if="completedOrder" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" @click.self="closeCompletedOrder">
-          <div class="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl dark:bg-dark-900">
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('store.purchaseSuccess') }}</h2>
-                <p class="mt-1 text-sm text-gray-500 dark:text-dark-400">
-                  {{ t('store.deliveryReady', { orderNo: completedOrder.order_no }) }}
-                </p>
-              </div>
-              <button type="button" class="rounded-lg p-2 text-gray-400 hover:bg-gray-100 dark:hover:bg-dark-800" @click="closeCompletedOrder">
-                <span class="sr-only">{{ t('common.close') }}</span>
-                x
-              </button>
-            </div>
-
-            <div class="mt-5 space-y-4">
-              <div class="rounded-lg bg-gray-50 p-4 text-sm dark:bg-dark-800">
-                <div class="flex justify-between gap-3">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.product') }}</span>
-                  <span class="text-right font-medium text-gray-900 dark:text-white">{{ completedOrder.product_name }}</span>
-                </div>
-                <div class="mt-2 flex justify-between gap-3">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.quantity') }}</span>
-                  <span class="font-medium text-gray-900 dark:text-white">{{ completedOrder.quantity }}</span>
-                </div>
-                <div v-if="completedOrder.draw_reward_amount !== null && completedOrder.draw_reward_amount !== undefined" class="mt-2 flex justify-between gap-3">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawReward') }}</span>
-                  <span class="font-medium text-emerald-600 dark:text-emerald-300">
-                    {{ formatDrawReward(completedOrder) }}
-                  </span>
-                </div>
-                <div v-if="completedOrder.load_factor_credits_awarded > 0" class="mt-2 flex justify-between gap-3">
-                  <span class="text-gray-500 dark:text-dark-400">{{ t('store.loadFactorCreditsAwarded') }}</span>
-                  <span class="font-medium text-emerald-600 dark:text-emerald-300">
-                    +{{ completedOrder.load_factor_credits_awarded }}
-                  </span>
-                </div>
-              </div>
-
-              <div v-if="shouldShowDeliveredCards(completedOrder)">
-                <div class="mb-2 flex items-center justify-between gap-3">
-                  <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('store.deliveredCards') }}</label>
-                  <button
-                    v-if="completedOrder.delivered_cards.length > 0"
-                    type="button"
-                    class="btn btn-secondary btn-sm"
-                    @click="copyDeliveredCards"
-                  >
-                    {{ t('common.copy') }}
-                  </button>
-                </div>
-                <div v-if="completedOrder.delivered_cards.length > 0" class="max-h-72 space-y-2 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-800">
-                  <code
-                    v-for="(card, index) in completedOrder.delivered_cards"
-                    :key="index"
-                    class="block break-all rounded-md bg-white px-3 py-2 font-mono text-xs text-gray-900 dark:bg-dark-900 dark:text-dark-100"
-                  >
-                    {{ card }}
-                  </code>
-                </div>
-                <p v-else class="rounded-lg bg-gray-50 p-4 text-sm text-gray-500 dark:bg-dark-800 dark:text-dark-400">
-                  {{ t('store.deliveryPending') }}
-                </p>
-              </div>
-
-              <DeliveredFilesList
-                v-if="completedOrder.delivered_files.length > 0"
-                :order-id="completedOrder.id"
-                :files="completedOrder.delivered_files"
-              />
-
-              <button type="button" class="btn btn-primary w-full min-h-[44px]" @click="closeCompletedOrder">
-                {{ t('common.confirm') }}
-              </button>
-            </div>
+        <div>
+          <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-gray-300">
+            {{ t('store.payMethod') }}
+          </label>
+          <div class="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <button
+              v-if="isBalancePaymentAllowed"
+              type="button"
+              class="store-pay-option"
+              :class="{ 'store-pay-option-active': payMethod === 'balance' }"
+              :disabled="!canPayByBalance"
+              @click="payMethod = 'balance'"
+            >
+              <span class="font-semibold">{{ t('store.balancePay') }}</span>
+              <span class="text-xs text-gray-500 dark:text-dark-400">{{ balancePayHint }}</span>
+            </button>
+            <button
+              v-if="isPointsPaymentAllowed"
+              type="button"
+              class="store-pay-option"
+              :class="{ 'store-pay-option-active': payMethod === 'points' }"
+              :disabled="!canPayByPoints"
+              @click="payMethod = 'points'"
+            >
+              <span class="font-semibold">{{ t('store.pointsPay') }}</span>
+              <span class="text-xs text-gray-500 dark:text-dark-400">{{ pointsPayHint }}</span>
+            </button>
+            <button
+              v-if="isPlatformPaymentAllowed"
+              type="button"
+              class="store-pay-option"
+              :class="{ 'store-pay-option-active': payMethod === 'payment' }"
+              :disabled="methodOptions.length === 0"
+              @click="payMethod = 'payment'"
+            >
+              <span class="font-semibold">{{ t('store.gatewayPay') }}</span>
+              <span class="text-xs text-gray-500 dark:text-dark-400">{{ t('store.gatewayPayHint') }}</span>
+            </button>
           </div>
         </div>
-      </Transition>
-    </Teleport>
+
+        <PaymentMethodSelector
+          v-if="payMethod === 'payment' && methodOptions.length > 0"
+          :methods="methodOptions"
+          :selected="selectedMethod"
+          @select="selectedMethod = $event"
+        />
+      </div>
+      <template #footer>
+        <button
+          type="button"
+          class="btn btn-primary min-h-[44px]"
+          :disabled="!canSubmitCheckout || submitting"
+          @click="submitCheckout"
+        >
+          {{ submitting ? t('common.processing') : t('store.confirmBuy') }}
+        </button>
+      </template>
+    </BaseDialog>
+
+    <BaseDialog
+      :show="!!completedOrder"
+      :title="t('store.purchaseSuccess')"
+      width="normal"
+      close-on-click-outside
+      @close="closeCompletedOrder"
+    >
+      <div v-if="completedOrder" class="space-y-4">
+        <p class="-mt-1 text-sm text-gray-500 dark:text-dark-400">
+          {{ t('store.deliveryReady', { orderNo: completedOrder.order_no }) }}
+        </p>
+
+        <div class="rounded-lg bg-gray-50 p-4 text-sm dark:bg-dark-800">
+          <div class="flex justify-between gap-3">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('store.product') }}</span>
+            <span class="text-right font-medium text-gray-900 dark:text-white">{{ completedOrder.product_name }}</span>
+          </div>
+          <div class="mt-2 flex justify-between gap-3">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('store.quantity') }}</span>
+            <span class="font-medium text-gray-900 dark:text-white">{{ completedOrder.quantity }}</span>
+          </div>
+          <div v-if="completedOrder.draw_reward_amount !== null && completedOrder.draw_reward_amount !== undefined" class="mt-2 flex justify-between gap-3">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('store.drawReward') }}</span>
+            <span class="font-medium text-emerald-600 dark:text-emerald-300">
+              {{ formatDrawReward(completedOrder) }}
+            </span>
+          </div>
+          <div v-if="completedOrder.load_factor_credits_awarded > 0" class="mt-2 flex justify-between gap-3">
+            <span class="text-gray-500 dark:text-dark-400">{{ t('store.loadFactorCreditsAwarded') }}</span>
+            <span class="font-medium text-emerald-600 dark:text-emerald-300">
+              +{{ completedOrder.load_factor_credits_awarded }}
+            </span>
+          </div>
+        </div>
+
+        <div v-if="shouldShowDeliveredCards(completedOrder)">
+          <div class="mb-2 flex items-center justify-between gap-3">
+            <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('store.deliveredCards') }}</label>
+            <button
+              v-if="completedOrder.delivered_cards.length > 0"
+              type="button"
+              class="btn btn-secondary btn-sm"
+              @click="copyDeliveredCards"
+            >
+              {{ t('common.copy') }}
+            </button>
+          </div>
+          <div v-if="completedOrder.delivered_cards.length > 0" class="max-h-72 space-y-2 overflow-y-auto rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-dark-700 dark:bg-dark-800">
+            <code
+              v-for="(card, index) in completedOrder.delivered_cards"
+              :key="index"
+              class="block break-all rounded-md bg-white px-3 py-2 font-mono text-xs text-gray-900 dark:bg-dark-900 dark:text-dark-100"
+            >
+              {{ card }}
+            </code>
+          </div>
+          <p v-else class="rounded-lg bg-gray-50 p-4 text-sm text-gray-500 dark:bg-dark-800 dark:text-dark-400">
+            {{ t('store.deliveryPending') }}
+          </p>
+        </div>
+
+        <DeliveredFilesList
+          v-if="completedOrder.delivered_files.length > 0"
+          :order-id="completedOrder.id"
+          :files="completedOrder.delivered_files"
+        />
+      </div>
+      <template #footer>
+        <button type="button" class="btn btn-primary min-h-[44px]" @click="closeCompletedOrder">
+          {{ t('common.confirm') }}
+        </button>
+      </template>
+    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -358,6 +341,7 @@ import { extractI18nErrorMessage } from '@/utils/apiError'
 import { useClipboard } from '@/composables/useClipboard'
 import { isMobileDevice } from '@/utils/device'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 import DeliveredFilesList from '@/components/store/DeliveredFilesList.vue'
 import PaymentMethodSelector from '@/components/payment/PaymentMethodSelector.vue'
 import PaymentStatusPanel from '@/components/payment/PaymentStatusPanel.vue'

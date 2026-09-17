@@ -56,6 +56,7 @@ type GatewayHandler struct {
 	noAccountBackoffLimiter   service.NoAccountBackoffLimiter
 	concurrencyHelper         *ConcurrencyHelper
 	userMsgQueueHelper        *UserMsgQueueHelper
+	devinGatewayService       *service.DevinGatewayService
 	maxAccountSwitches        int
 	maxAccountSwitchesGemini  int
 	cfg                       *config.Config
@@ -78,6 +79,7 @@ func NewGatewayHandler(
 	userModerationService *service.UserContentModerationService,
 	userMsgQueueService *service.UserMessageQueueService,
 	noAccountBackoffLimiter service.NoAccountBackoffLimiter,
+	devinGatewayService *service.DevinGatewayService,
 	cfg *config.Config,
 	settingService *service.SettingService,
 ) *GatewayHandler {
@@ -115,6 +117,7 @@ func NewGatewayHandler(
 		noAccountBackoffLimiter:   noAccountBackoffLimiter,
 		concurrencyHelper:         NewConcurrencyHelper(concurrencyService, SSEPingFormatClaude, pingInterval),
 		userMsgQueueHelper:        umqHelper,
+		devinGatewayService:       devinGatewayService,
 		maxAccountSwitches:        maxAccountSwitches,
 		maxAccountSwitchesGemini:  maxAccountSwitchesGemini,
 		cfg:                       cfg,
@@ -1428,6 +1431,18 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
+	// Devin 分组无白名单时回实时上游目录（模型 UID 由上游下发，静态兜底不可靠）。
+	if platform == service.PlatformDevin && h.devinGatewayService != nil {
+		if models, err := h.devinGatewayService.ListModels(c.Request.Context(), groupID); err == nil && len(models) > 0 {
+			items := make([]claude.Model, 0, len(models))
+			for _, model := range models {
+				items = append(items, claude.Model{ID: model.ID, Type: "model", DisplayName: model.ID, CreatedAt: fallbackModelCreatedAt})
+			}
+			c.JSON(http.StatusOK, gin.H{"object": "list", "data": items})
+			return
+		}
+	}
+
 	// Fallback to default models
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
@@ -1513,8 +1528,18 @@ func defaultModelsForPlatform(platform string) any {
 		return geminiDefaultModelsClaudeShape()
 	case service.PlatformOpencode:
 		return opencodeDefaultModelsClaudeShape()
+	case service.PlatformDevin:
+		return devinDefaultModelsClaudeShape()
 	default:
 		return claude.DefaultModels
+	}
+}
+
+// devinDefaultModelsClaudeShape 是 Devin 分组在上游目录不可达时的兜底列表。
+// 上游 UID 由服务端下发且会轮换，这里只放已知稳定的旗舰项。
+func devinDefaultModelsClaudeShape() []claude.Model {
+	return []claude.Model{
+		{ID: "swe-2-max", Type: "model", DisplayName: "swe-2-max", CreatedAt: fallbackModelCreatedAt},
 	}
 }
 

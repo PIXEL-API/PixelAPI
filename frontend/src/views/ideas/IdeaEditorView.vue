@@ -6,6 +6,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { getIdea, createIdea, updateIdea, publishIdea, listIdeaTags } from '@/api/ideas'
 import Skeleton from '@/components/common/Skeleton.vue'
+import Icon from '@/components/icons/Icon.vue'
 import IdeasHeader from '@/components/ideas/IdeasHeader.vue'
 import { useAppStore } from '@/stores/app'
 import type { IdeaTag } from '@/types/ideas'
@@ -41,9 +42,9 @@ const toolbarTools = computed(() => [
   { key: 'h2', label: t('ideas.editor.toolbar.heading'), icon: 'H2-', before: '## ', block: true },
   { key: 'b', label: t('ideas.editor.toolbar.bold'), icon: 'B', before: '**', after: '**' },
   { key: 'i', label: t('ideas.editor.toolbar.italic'), icon: 'I', before: '*', after: '*' },
-  { key: 'quote', label: t('ideas.editor.toolbar.quote'), icon: '❝', before: '> ', block: true },
+  { key: 'quote', label: t('ideas.editor.toolbar.quote'), icon: '“', before: '> ', block: true },
   { key: 'code', label: t('ideas.editor.toolbar.code'), icon: '</>', before: '```\n', after: '\n```', block: true },
-  { key: 'link', label: t('ideas.editor.toolbar.link'), icon: '🔗', before: '[', after: '](url)' },
+  { key: 'link', label: t('ideas.editor.toolbar.link'), icon: '', iconName: 'link' as const, before: '[', after: '](url)' },
   { key: 'ul', label: t('ideas.editor.toolbar.list'), icon: '•', before: '- ', block: true },
   { key: 'hr', label: t('ideas.editor.toolbar.separator'), icon: '—', before: '\n---\n', block: true },
 ])
@@ -299,8 +300,9 @@ onMounted(load)
                 :key="tool.key"
                 class="rounded px-2 py-1 text-xs font-semibold text-content-muted transition-colors hover:bg-surface-hover hover:text-content"
                 :title="tool.label"
+                :aria-label="tool.label"
                 @click="applyTool(tool)"
-              >{{ tool.icon }}</button>
+              ><Icon v-if="'iconName' in tool && tool.iconName" :name="tool.iconName" size="sm" /><template v-else>{{ tool.icon }}</template></button>
               <span class="flex-1"></span>
               <div class="inline-flex rounded-control border border-line bg-surface p-0.5">
                 <button class="rounded px-2.5 py-1 text-xs font-medium" :class="mode === 'editor' ? 'bg-surface text-brand shadow-sm' : 'text-content-muted'" @click="mode = 'editor'">{{ t('ideas.editor.editorTab') }}</button>

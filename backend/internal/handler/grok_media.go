@@ -196,14 +196,26 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 		if failoverClientGone(c) {
 			return
 		}
-		selection, scheduleDecision, err := h.gatewayService.SelectAccountWithSchedulerForGrok(
-			requestCtx,
-			apiKey.GroupID,
-			sessionHash,
-			routingModel,
-			failedAccountIDs,
-			requiredCapability,
-		)
+		var selection *service.AccountSelectionResult
+		var scheduleDecision service.OpenAIAccountScheduleDecision
+		if boundLookupAccountID > 0 {
+			selection, scheduleDecision, err = h.gatewayService.SelectGrokMediaVideoRequestAccount(
+				requestCtx,
+				apiKey.GroupID,
+				sessionHash,
+				boundLookupAccountID,
+				routingModel,
+			)
+		} else {
+			selection, scheduleDecision, err = h.gatewayService.SelectAccountWithSchedulerForGrok(
+				requestCtx,
+				apiKey.GroupID,
+				sessionHash,
+				routingModel,
+				failedAccountIDs,
+				requiredCapability,
+			)
+		}
 		if err != nil {
 			if failoverClientGone(c) {
 				return
@@ -246,6 +258,10 @@ func (h *OpenAIGatewayHandler) handleGrokMedia(c *gin.Context, endpoint service.
 			}
 			cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, requestModel, routingModel, service.PlatformGrok)
 			h.errorResponse(c, cls.Status, cls.ErrType, cls.Message)
+			return
+		}
+		if failoverClientGone(c) {
+			releaseRejectedGrokMediaSelection(selection)
 			return
 		}
 		if boundLookupAccountID > 0 && selection.Account.ID != boundLookupAccountID {

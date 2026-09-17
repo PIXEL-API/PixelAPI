@@ -33,7 +33,7 @@ func (s *OpenAIGatewayService) forwardAsRawAnthropicMessages(
 ) (*OpenAIForwardResult, error) {
 	startTime := time.Now()
 	endpoint := opencodeMessagesRawEndpoint
-	if account.IsCNProvider() {
+	if account.IsRelayUpstream() {
 		endpoint = "/v1/messages"
 	}
 	SetActualOpenAIUpstreamEndpoint(c, endpoint)
@@ -65,7 +65,7 @@ func (s *OpenAIGatewayService) forwardAsRawAnthropicMessages(
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
 	}
 	baseURL := account.GetOpencodeBaseURL()
-	if account.IsCNProvider() {
+	if account.IsRelayUpstream() {
 		baseURL = account.GetAnthropicProtocolBaseURL()
 	}
 	validatedURL, err := s.validateUpstreamBaseURL(baseURL)

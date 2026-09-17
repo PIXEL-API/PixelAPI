@@ -212,6 +212,8 @@
             { value: 'deepseek', label: 'DeepSeek' },
             { value: 'minimax', label: 'MiniMax' },
             { value: 'qwen', label: '通义千问' },
+            { value: 'devin', label: 'Devin' },
+            { value: 'api_aggregation', label: 'APIKEY' },
           ]" :key="option.value" type="button"
             class="flex flex-1 items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-all"
             :class="form.platform === option.value
@@ -664,18 +666,18 @@
                   Google One
                 </span>
                 <span class="text-xs text-gray-500 dark:text-gray-400">
-                  个人账号，享受 Google One 订阅配额
+                  {{ t('admin.accounts.gemini.oauthType.googleOneDesc') }}
                 </span>
                 <div class="mt-2 flex flex-wrap gap-1">
                   <span
                     class="rounded bg-purple-100 px-2 py-0.5 text-[10px] font-semibold text-purple-700 dark:bg-purple-900/40 dark:text-purple-300"
                   >
-                    推荐个人用户
+                    {{ t('admin.accounts.gemini.oauthType.badges.personal') }}
                   </span>
                   <span
                     class="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
                   >
-                    无需 GCP
+                    {{ t('admin.accounts.gemini.oauthType.badges.noGcp') }}
                   </span>
                 </div>
               </div>
@@ -707,10 +709,10 @@
                   GCP Code Assist
                 </span>
                 <span class="text-xs text-gray-500 dark:text-gray-400">
-                  企业级，需要 GCP 项目
+                  {{ t('admin.accounts.gemini.oauthType.codeAssistDesc') }}
                 </span>
                 <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  需要激活 GCP 项目并绑定信用卡
+                  {{ t('admin.accounts.gemini.oauthType.codeAssistRequirement') }}
                   <a
                     :href="geminiHelpLinks.gcpProject"
                     class="ml-1 text-blue-600 hover:underline dark:text-blue-400"
@@ -724,12 +726,12 @@
                   <span
                     class="rounded bg-blue-100 px-2 py-0.5 text-[10px] font-semibold text-blue-700 dark:bg-blue-900/40 dark:text-blue-300"
                   >
-                    企业用户
+                    {{ t('admin.accounts.gemini.oauthType.badges.enterprise') }}
                   </span>
                   <span
                     class="rounded bg-emerald-100 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
                   >
-                    高并发
+                    {{ t('admin.accounts.gemini.oauthType.badges.highConcurrency') }}
                   </span>
                 </div>
               </div>
@@ -752,7 +754,7 @@
               >
                 <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
               </svg>
-              <span>{{ showAdvancedOAuth ? '隐藏' : '显示' }}高级选项（自建 OAuth Client）</span>
+              <span>{{ showAdvancedOAuth ? t('admin.accounts.gemini.advancedOptionsHide') : t('admin.accounts.gemini.advancedOptionsShow') }}</span>
             </button>
           </div>
 
@@ -825,7 +827,7 @@
 
             <div
               v-if="!geminiAIStudioOAuthEnabled"
-              class="pointer-events-none absolute right-0 top-full z-50 mt-2 w-80 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 opacity-0 shadow-lg transition-opacity group-hover:opacity-100 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
+              class="pointer-events-none absolute right-0 top-full z-[var(--ui-z-tooltip)] mt-2 w-80 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 opacity-0 shadow-lg transition-opacity group-hover:opacity-100 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-200"
             >
               {{ t('admin.accounts.oauth.gemini.aiStudioNotConfiguredTip') }}
             </div>
@@ -1276,13 +1278,20 @@
       <!-- Opencode API Key input (API key only, endpoint locked to official) -->
       <div v-if="form.platform === 'opencode'" class="space-y-4">
         <div>
+          <label for="create-opencode-mode" class="input-label">{{ t('admin.accounts.opencode.accountMode') }}</label>
+          <select id="create-opencode-mode" v-model="opencodeAccountMode" class="input">
+            <option value="go">{{ t('admin.accounts.opencode.go') }}</option>
+            <option value="zen">{{ t('admin.accounts.opencode.zen') }}</option>
+          </select>
+        </div>
+        <div>
           <label class="input-label">{{ t('admin.accounts.apiKeyRequired') }}</label>
           <input
             v-model="apiKeyValue"
             type="password"
             required
             class="input font-mono"
-            :placeholder="'opencode-go-api-key...'"
+            :placeholder="'opencode-api-key...'"
           />
           <p class="input-hint">{{ t('admin.accounts.opencode.apiKeyHint') }}</p>
         </div>
@@ -1296,8 +1305,12 @@
       />
 
       <!-- API Key input (only for apikey type, excluding Antigravity which has its own fields) -->
-      <div v-if="( !isUserScope || isCNPlatform(form.platform) ) && form.type === 'apikey' && form.platform !== 'antigravity' && form.platform !== 'opencode'" class="space-y-4">
-        <div v-if="!isCNPlatform(form.platform)">
+      <div v-if="( !isUserScope || isCNPlatform(form.platform) || form.platform === 'devin' || form.platform === 'api_aggregation' ) && form.type === 'apikey' && form.platform !== 'antigravity' && form.platform !== 'opencode'" class="space-y-4">
+        <APIAggregationSettings
+          v-if="form.platform === 'api_aggregation'"
+          v-model="apiAggregationConfig"
+        />
+        <div v-if="!isCNPlatform(form.platform) && form.platform !== 'api_aggregation'">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="apiKeyBaseUrl"
@@ -1308,7 +1321,9 @@
                 ? 'https://api.openai.com'
                 : form.platform === 'gemini'
                   ? 'https://generativelanguage.googleapis.com'
-                  : 'https://api.anthropic.com'
+                  : form.platform === 'devin'
+                    ? 'https://server.codeium.com'
+                    : 'https://api.anthropic.com'
             "
           />
           <p class="input-hint">{{ baseUrlHint }}</p>
@@ -1348,7 +1363,9 @@
                 ? 'sk-proj-...'
                 : form.platform === 'gemini'
                   ? 'AIza...'
-                  : 'sk-ant-...'
+                  : form.platform === 'devin'
+                    ? 'devin-session-token$...'
+                    : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ apiKeyHint }}</p>
@@ -1917,7 +1934,7 @@
           <div v-else class="space-y-3">
             <div v-for="(mapping, index) in modelMappings" :key="index" class="flex items-center gap-2">
               <input v-model="mapping.from" type="text" class="input flex-1" :placeholder="t('admin.accounts.fromModel')" />
-              <span class="text-gray-400">→</span>
+              <span class="text-gray-400" aria-hidden="true">→</span>
               <input v-model="mapping.to" type="text" class="input flex-1" :placeholder="t('admin.accounts.toModel')" />
               <button type="button" @click="modelMappings.splice(index, 1)" class="text-red-500 hover:text-red-700">
                 <Icon name="trash" size="sm" />
@@ -3098,7 +3115,7 @@
               class="flex items-center gap-2"
             >
               <input v-model="mapping.from" type="text" class="input flex-1" :placeholder="t('admin.accounts.fromModel')" />
-              <span class="text-gray-400">→</span>
+              <span class="text-gray-400" aria-hidden="true">→</span>
               <input v-model="mapping.to" type="text" class="input flex-1" :placeholder="t('admin.accounts.toModel')" />
               <button type="button" @click="removeOpenAICompactModelMapping(index)" class="text-red-500 hover:text-red-700">
                 <Icon name="trash" size="sm" />
@@ -3377,7 +3394,7 @@
                 rel="noreferrer"
                 class="text-sm text-blue-600 hover:underline dark:text-blue-400"
               >
-                修改归属地
+                {{ t('admin.accounts.geminiChangeRegion') }}
               </a>
               <span class="text-gray-400">·</span>
               <a
@@ -3611,6 +3628,7 @@ import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import CNProviderSettings from '@/components/account/CNProviderSettings.vue'
+import APIAggregationSettings, { type APIAggregationConfig } from '@/components/account/APIAggregationSettings.vue'
 import {
   applyHeaderOverride,
   applyInterceptWarmup,
@@ -3683,7 +3701,7 @@ function isCNPlatform(platform: AccountPlatform): boolean {
 }
 
 function platformLabel(platform: AccountPlatform): string {
-  return ({ openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', antigravity: 'Antigravity', grok: 'Grok', opencode: 'OpenCode', kimi: 'Kimi', zhipu: '智谱 GLM', deepseek: 'DeepSeek', minimax: 'MiniMax', qwen: '通义千问' } as Record<string, string>)[platform] || platform
+  return ({ openai: 'OpenAI', anthropic: 'Anthropic', gemini: 'Gemini', antigravity: 'Antigravity', grok: 'Grok', opencode: 'OpenCode', kimi: 'Kimi', zhipu: t('common.platforms.zhipu'), deepseek: 'DeepSeek', minimax: 'MiniMax', qwen: t('common.platforms.qwen'), devin: 'Devin', api_aggregation: 'APIKEY' } as Record<string, string>)[platform] || platform
 }
 
 const oauthStepTitle = computed(() => {
@@ -3699,6 +3717,7 @@ const baseUrlHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
   if (form.platform === 'grok') return t('admin.accounts.grokCustomBaseUrl.hint')
+  if (form.platform === 'devin') return t('admin.accounts.devin.baseUrlHint')
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -3706,6 +3725,7 @@ const apiKeyHint = computed(() => {
   if (form.platform === 'openai') return t('admin.accounts.openai.apiKeyHint')
   if (form.platform === 'gemini') return t('admin.accounts.gemini.apiKeyHint')
   if (form.platform === 'grok') return t('admin.accounts.apiKeyHint')
+  if (form.platform === 'devin') return t('admin.accounts.devin.apiKeyHint')
   return t('admin.accounts.apiKeyHint')
 })
 
@@ -3811,7 +3831,9 @@ const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'service_acco
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
+const opencodeAccountMode = ref<'go' | 'zen'>('go')
 const cnProviderConfig = ref({ mode: 'payg' as 'payg' | 'coding', protocol: 'chat_completions' as 'adaptive' | 'chat_completions' | 'anthropic' | 'responses', base_url: '', api_base_urls: {} as Record<string, string> })
+const apiAggregationConfig = ref<APIAggregationConfig>({ protocol: 'adaptive', base_url: '', api_base_urls: {} })
 const grokCustomBaseUrlEnabled = ref(false)
 const grokBaseUrl = ref('')
 const headerOverrideEnabled = ref(false)
@@ -4439,8 +4461,8 @@ watch(
 watch(
   [accountCategory, addMethod, antigravityAccountType, () => form.platform, isUserScope],
   ([category, method, agType]) => {
-    // Opencode 仅支持 apikey（用户端自有账号），无 OAuth 流程。
-    if (form.platform === 'opencode') {
+    // Opencode/Devin/API聚合 仅支持 apikey，无 OAuth 流程。
+    if (form.platform === 'opencode' || form.platform === 'devin' || form.platform === 'api_aggregation') {
       accountCategory.value = 'apikey'
       addMethod.value = 'oauth'
       antigravityAccountType.value = 'oauth'
@@ -4515,13 +4537,20 @@ watch(
             ? 'https://api.x.ai/v1'
             : newPlatform === 'opencode'
               ? OPENCODE_DEFAULT_BASE_URL
-              : (CN_PLATFORM_BASE_URLS[newPlatform] || 'https://api.anthropic.com')
-    // Opencode 仅 apikey（用户端自有账号），无 OAuth / 上游分支。
-    if (newPlatform === 'opencode') {
+              : newPlatform === 'devin'
+                ? 'https://server.codeium.com'
+                : newPlatform === 'api_aggregation'
+                  ? ''
+                  : (CN_PLATFORM_BASE_URLS[newPlatform] || 'https://api.anthropic.com')
+    // Opencode/Devin/API聚合 仅 apikey，无 OAuth / 上游分支。
+    if (newPlatform === 'opencode' || newPlatform === 'devin' || newPlatform === 'api_aggregation') {
       accountCategory.value = 'apikey'
       addMethod.value = 'oauth'
       antigravityAccountType.value = 'oauth'
       form.type = 'apikey'
+    }
+    if (newPlatform === 'api_aggregation') {
+      apiAggregationConfig.value = { protocol: 'adaptive', base_url: '', api_base_urls: {} }
     }
     if (isCNPlatform(newPlatform as AccountPlatform)) {
       accountCategory.value = 'apikey'
@@ -5318,7 +5347,7 @@ const handleVertexServiceAccountDrop = async (event: DragEvent) => {
 }
 
 const handleSubmit = async () => {
-  if (isUserScope.value && !isOAuthFlow.value && form.platform !== 'opencode' && !isCNPlatform(form.platform)) {
+  if (isUserScope.value && !isOAuthFlow.value && form.platform !== 'opencode' && form.platform !== 'devin' && !isCNPlatform(form.platform)) {
     accountCategory.value = 'oauth-based'
     addMethod.value = 'oauth'
     antigravityAccountType.value = 'oauth'
@@ -5490,7 +5519,8 @@ const handleSubmit = async () => {
     }
     // 只传 api_key；base_url 由后端 GetOpencodeBaseURL 锁定官方地址，前端不传（后端凭证校验禁止 base_url 字段）。
     const credentials: Record<string, unknown> = {
-      api_key: apiKeyValue.value.trim()
+      api_key: apiKeyValue.value.trim(),
+      account_mode: opencodeAccountMode.value
     }
     await createAccountAndFinish('opencode', 'apikey', credentials)
     return
@@ -5499,6 +5529,12 @@ const handleSubmit = async () => {
   // For apikey type, create directly
   if (!apiKeyValue.value.trim()) {
     appStore.showError(t('admin.accounts.pleaseEnterApiKey'))
+    return
+  }
+
+  // API 聚合渠道：上游地址必填（服务端强制 https + 公网校验）
+  if (form.platform === 'api_aggregation' && !apiAggregationConfig.value.base_url.trim()) {
+    appStore.showError(t('admin.accounts.apiAggregation.baseUrlRequired'))
     return
   }
 
@@ -5564,6 +5600,15 @@ const handleSubmit = async () => {
       credentials.base_url = (credentials.api_base_urls as Record<string, string>).chat_completions || base
     } else {
       credentials.base_url = base || defaultCNBaseUrl(form.platform, cnProviderConfig.value.mode, cnProviderConfig.value.protocol)
+      delete credentials.api_base_urls
+    }
+  }
+  if (form.platform === 'api_aggregation') {
+    credentials.api_protocol = apiAggregationConfig.value.protocol
+    credentials.base_url = apiAggregationConfig.value.base_url.trim()
+    if (apiAggregationConfig.value.protocol === 'adaptive' && Object.keys(apiAggregationConfig.value.api_base_urls).length > 0) {
+      credentials.api_base_urls = { ...apiAggregationConfig.value.api_base_urls }
+    } else {
       delete credentials.api_base_urls
     }
   }

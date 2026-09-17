@@ -3,6 +3,10 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({ t: (key: string) => key })
+}))
+
 const DEFAULT_VIEWPORT_WIDTH = window.innerWidth
 const DEFAULT_VIEWPORT_HEIGHT = window.innerHeight
 const DEFAULT_SCROLL_X = window.scrollX
@@ -100,7 +104,7 @@ describe('HelpTooltip', () => {
     expect(tooltip.style.display).not.toBe('none')
     expect(tooltip.textContent).toContain('click details')
 
-    const closeButton = tooltip.querySelector('button[aria-label="Close"]')
+    const closeButton = tooltip.querySelector('button[aria-label="common.close"]')
     if (!(closeButton instanceof HTMLButtonElement)) {
       throw new Error('close button not found')
     }

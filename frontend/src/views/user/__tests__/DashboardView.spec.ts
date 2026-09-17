@@ -37,6 +37,22 @@ vi.mock('@/api/usage', () => ({
   }
 }))
 
+vi.mock('vue-i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vue-i18n')>()
+  return {
+    ...actual,
+    useI18n: () => ({ t: (key: string) => key })
+  }
+})
+
+vi.mock('@/stores/app', () => ({
+  useAppStore: () => ({
+    showError: vi.fn(),
+    showSuccess: vi.fn(),
+    showWarning: vi.fn()
+  })
+}))
+
 const DashboardChartsStub = {
   name: 'DashboardChartsStub',
   props: {

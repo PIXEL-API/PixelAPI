@@ -4,17 +4,17 @@
       <div class="marketplace-header">
         <section class="marketplace-hero" aria-labelledby="marketplace-title">
           <div class="marketplace-intro">
-            <h1 id="marketplace-title">账号广场</h1>
-            <p>选择适合你的共享房间，比较费用与能力，绑定账号模式 Key 即可使用。</p>
+            <h1 id="marketplace-title">{{ t('accountShare.title') }}</h1>
+            <p>{{ t('accountShare.page.subtitle') }}</p>
           </div>
           <label v-if="!isMembershipHistoryView" class="filter-search">
             <Icon name="search" size="md" />
-            <input v-model.trim="searchQuery" class="filter-search-input" aria-label="搜索账号、号主或模型" placeholder="搜索账号、号主或模型" />
-            <span class="marketplace-search-hint" aria-hidden="true">搜索</span>
+            <input v-model.trim="searchQuery" class="filter-search-input" :aria-label="t('accountShare.page.searchPlaceholder')" :placeholder="t('accountShare.page.searchPlaceholder')" />
+            <span class="marketplace-search-hint" aria-hidden="true">{{ t('common.search') }}</span>
           </label>
         </section>
 
-        <nav class="marketplace-navigation" aria-label="账号广场分类">
+        <nav class="marketplace-navigation" :aria-label="t('accountShare.page.categoriesAria')">
           <div class="marketplace-utility-bar">
             <div class="hero-actions">
               <button
@@ -25,11 +25,11 @@
                 @click="openCreateDialog"
               >
                 <Icon name="plus" size="sm" class="mr-2" />
-                创建房间
+                {{ t('accountShare.createRoom.title') }}
               </button>
               <button class="btn-secondary min-h-11" type="button" @click="openRecommendationDialog">
                 <Icon name="sparkles" size="sm" class="mr-2" />
-                费用估算
+                {{ t('accountShare.page.costEstimate') }}
               </button>
             </div>
             <div class="hero-utility-actions">
@@ -41,15 +41,15 @@
                 @click="openAdminQuotaDialog"
               >
                 <Icon name="cog" size="sm" class="mr-2" />
-                房间配额
+                {{ t('accountShare.page.roomQuota') }}
               </button>
               <button class="account-share-guide-button" type="button" @click="openUsageGuideDialog">
                 <Icon name="book" size="sm" class="mr-2" />
-                使用说明
+                {{ t('affiliate.tips.title') }}
               </button>
               <button class="account-share-spend-button" type="button" @click="openMySpendDialog()">
                 <Icon name="dollar" size="sm" class="mr-2" />
-                我的消费
+                {{ t('accountShare.page.mySpend') }}
               </button>
             </div>
           </div>
@@ -78,22 +78,21 @@
           <template v-if="capabilities">
             <span>
               <strong>{{ capabilities.live_rooms.used }}/{{ capabilities.live_rooms.limit }}</strong>
-              未删除房间
+              {{ t('accountShare.quotaAdmin.liveRooms') }}
             </span>
             <span>
               <strong>{{ capabilities.room_creates_24_hours.used }}/{{ capabilities.room_creates_24_hours.limit }}</strong>
-              24 小时创建
+              {{ t('accountShare.quotaAdmin.creates24h') }}
             </span>
             <span>
               <strong>{{ capabilities.owner_room_accounts.used }}/{{ capabilities.owner_room_accounts.limit }}</strong>
-              房间账号
+              {{ t('accountShare.lifecycle.roomAccounts') }}
             </span>
             <small v-if="capabilities.capability_blockers.length > 0">
               {{ capabilityBlockerMessage(capabilities.capability_blockers[0]) }}
             </small>
             <small v-else>
-              每个房间最多 {{ capabilities.max_accounts_per_room }} 个账号，成员上限可设为
-              {{ capabilities.seat_limit_minimum }}～{{ capabilities.seat_limit_maximum }} 人。
+              {{ t('accountShare.page.quotaHint', { maxAccountsPerRoom: capabilities.max_accounts_per_room, seatLimitMinimum: capabilities.seat_limit_minimum, seatLimitMaximum: capabilities.seat_limit_maximum }) }}
             </small>
           </template>
           <small v-else>{{ capabilitiesError }}</small>
@@ -104,7 +103,7 @@
           class="key-resolution-panel"
           :class="keyResolutionPanelToneClass"
           role="region"
-          aria-label="API Key 关联处置"
+          :aria-label="t('accountShare.keyResolution.panelLabel')"
           :aria-busy="keyResolutionLoading"
         >
           <div class="key-resolution-main">
@@ -112,19 +111,19 @@
               <Icon :name="keyResolutionAllClear ? 'checkCircle' : (keyResolutionError ? 'exclamationCircle' : 'key')" size="md" />
             </span>
             <div class="key-resolution-copy" aria-live="polite">
-              <span class="key-resolution-eyebrow">API Key 关联处置</span>
+              <span class="key-resolution-eyebrow">{{ t('accountShare.keyResolution.panelLabel') }}</span>
               <h2>{{ keyResolutionAllClear ? '关联已全部解除' : `正在处理 ${keyResolutionKeyLabel}` }}</h2>
               <p>{{ keyResolutionStatusMessage }}</p>
             </div>
           </div>
 
-          <div class="key-resolution-counts grid grid-cols-1 gap-2 sm:grid-cols-2" aria-label="待处理关联数量">
+          <div class="key-resolution-counts grid grid-cols-1 gap-2 sm:grid-cols-2" :aria-label="t('accountShare.keyResolution.pendingCount')">
             <div>
-              <span>正在使用</span>
+              <span>{{ t('keys.accountShareConflict.activeLabel') }}</span>
               <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionActiveCount }}</strong>
             </div>
             <div>
-              <span>退出/结算中</span>
+              <span>{{ t('keys.accountShareConflict.endingLabel') }}</span>
               <strong>{{ (keyResolutionLoading && !keyResolutionLoaded) || keyResolutionError ? '—' : keyResolutionEndingCount }}</strong>
             </div>
           </div>
@@ -137,34 +136,34 @@
               @click="refreshKeyResolutionContext"
             >
               <Icon name="refresh" size="sm" :class="{ 'animate-spin': keyResolutionLoading }" />
-              {{ keyResolutionLoading ? '核对中' : '刷新状态' }}
+              {{ keyResolutionLoading ? t('accountShare.keyResolution.checkingShort') : t('accountShare.lifecycle.refreshStatus') }}
             </button>
             <button type="button" class="key-resolution-return-button" @click="returnToApiKeyManagement">
               <Icon name="arrowLeft" size="sm" />
-              返回 API Key 管理
+              {{ t('accountShare.keyResolution.backToKeys') }}
             </button>
           </div>
         </section>
 
       </div>
 
-      <BaseDialog :show="showUsageGuideDialog" title="账号广场使用说明" width="wide" :z-index="55" @close="closeUsageGuideDialog">
+      <BaseDialog :show="showUsageGuideDialog" :title="t('accountShare.guide.title')" width="wide" :z-index="55" @close="closeUsageGuideDialog">
         <div class="space-y-5 text-sm leading-7 text-gray-600 dark:text-dark-200">
-          <p>选择房间并绑定账号模式 Key，即可开始使用。每个 Key 同时只能使用一个房间；更换房间前，请先在“我的使用”结束当前使用。</p>
-          <p>请求费用按用量和加入时确认的倍率结算。占位费按实际激活分钟预扣；每个低消核销窗口最长 1 小时，窗口消费达标后退回该窗口占位费，不跨窗口累计抵扣。</p>
-          <p>连续空闲达到设定时间后自动退出。主动结束后，如果仍有请求或结算进行中，页面会显示真实处理进度；完成后才能再次绑定该 Key。</p>
-          <p>房主可以上架或下架房间。下架会停止新加入并处理已有使用；完成后可在更多操作中删除。每次使用的条款与消费记录保留在“我的使用 → 历史记录”。</p>
-          <p>使用自己的房间不收占位费；请求费按平台自用规则执行。费用估算按输入用量均匀分布到各小时窗口计算，实际消费集中在个别窗口时，减免结果可能不同。</p>
+          <p>{{ t('accountShare.guide.ruleJoin') }}</p>
+          <p>{{ t('accountShare.guide.ruleBilling') }}</p>
+          <p>{{ t('accountShare.guide.ruleIdle') }}</p>
+          <p>{{ t('accountShare.guide.ruleOwner') }}</p>
+          <p>{{ t('accountShare.guide.ruleSelfUse') }}</p>
         </div>
         <template #footer>
-          <button type="button" class="btn-secondary min-h-11" @click="closeUsageGuideDialog">我知道了</button>
-          <button type="button" class="btn-primary min-h-11" @click="openRecommendationFromUsageGuide">费用估算</button>
+          <button type="button" class="btn-secondary min-h-11" @click="closeUsageGuideDialog">{{ t('accountShare.guide.gotIt') }}</button>
+          <button type="button" class="btn-primary min-h-11" @click="openRecommendationFromUsageGuide">{{ t('accountShare.page.costEstimate') }}</button>
         </template>
       </BaseDialog>
 
       <BaseDialog
         :show="showRecommendationDialog"
-        title="账号模式费用估算"
+        :title="t('accountShare.estimate.title')"
         width="full"
         :z-index="55"
         @close="closeRecommendationDialog"
@@ -176,11 +175,11 @@
                 <Icon name="sparkles" size="sm" />
               </span>
               <div class="min-w-0">
-                <h2>费用比较</h2>
-                <p>{{ platformLabel(activeListingPlatform) }} · {{ accountModeGroupName(activeListingPlatform) }} · 按预计每小时费用排序</p>
+                <h2>{{ t('accountShare.estimate.comparison') }}</h2>
+                <p>{{ t('accountShare.estimate.sortedBy', { platform: platformLabel(activeListingPlatform), group: accountModeGroupName(activeListingPlatform) }) }}</p>
               </div>
             </div>
-            <div class="recommendation-preset-row" aria-label="测算预设">
+            <div class="recommendation-preset-row" :aria-label="t('accountShare.estimate.presets')">
               <button
                 v-for="preset in recommendationPresets"
                 :key="preset.key"
@@ -198,18 +197,18 @@
                 @click="applyRecentUsageProfile"
               >
                 <Icon name="clock" size="sm" class="mr-1.5" :class="{ 'animate-spin': recommendationUsageProfileLoading }" />
-                {{ recommendationUsageProfileLoading ? '读取中' : '近3天均值' }}
+                {{ recommendationUsageProfileLoading ? t('accountShare.estimate.loadingAvg') : t('accountShare.estimate.avg3d') }}
               </button>
             </div>
             <p class="recommendation-profile-help">
-              估算假设请求消费均匀分布在各小时窗口；实际按最长 1 小时的独立窗口核销，集中使用时占位费减免可能不同。近 3 天均值汇总当前平台全部 Key；无法拆分的 Cache 用量请手工填写。
+              {{ t('accountShare.estimate.assumption') }}
             </p>
           </div>
 
         <div class="recommendation-layout">
           <div class="recommendation-form-grid">
             <label class="field">
-              <span>账号模式 Key</span>
+              <span>{{ t('accountShare.estimate.modeKey') }}</span>
               <select v-model.number="recommendationForm.api_key_id" class="input h-10" :disabled="modeKeysLoading">
                 <option :value="0">{{ modeKeysLoading ? '加载中' : `选择${accountModeGroupName(activeListingPlatform)} Key` }}</option>
                 <option v-for="key in recommendationKeyOptions" :key="key.id" :value="key.id">
@@ -218,7 +217,7 @@
               </select>
             </label>
             <label class="field">
-              <span>模型</span>
+              <span>{{ t('keyUsage.model') }}</span>
               <select v-model="recommendationForm.model" class="input h-10">
                 <option v-for="model in recommendationModelOptions" :key="model" :value="model">
                   {{ model }}
@@ -226,39 +225,39 @@
               </select>
             </label>
             <label class="field">
-              <span>请求次数</span>
+              <span>{{ t('accountShare.estimate.requestCount') }}</span>
               <input v-model.number="recommendationForm.request_count" class="input h-10" type="number" min="1" step="1" />
             </label>
             <label class="field">
-              <span>使用时长（小时）</span>
+              <span>{{ t('accountShare.estimate.hours') }}</span>
               <input v-model.number="recommendationForm.active_hours" class="input h-10" type="number" min="0.1" step="0.1" />
             </label>
             <label class="field">
-              <span>单次文本输入 Token</span>
+              <span>{{ t('accountShare.estimate.inputTokens') }}</span>
               <input v-model.number="recommendationForm.input_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
             <label class="field">
-              <span>单次文本输出 Token</span>
+              <span>{{ t('accountShare.estimate.outputTokens') }}</span>
               <input v-model.number="recommendationForm.output_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
             <label class="field">
-              <span>单次 Cache 写入</span>
+              <span>{{ t('accountShare.estimate.cacheWrite') }}</span>
               <input v-model.number="recommendationForm.cache_creation_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
             <label class="field">
-              <span>单次文本 Cache 读取</span>
+              <span>{{ t('accountShare.estimate.cacheRead') }}</span>
               <input v-model.number="recommendationForm.cache_read_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
             <label class="field">
-              <span>单次图片输入 Token</span>
+              <span>{{ t('accountShare.estimate.imageInput') }}</span>
               <input v-model.number="recommendationForm.image_input_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
             <label class="field">
-              <span>单次图片输出 Token</span>
+              <span>{{ t('accountShare.estimate.imageOutput') }}</span>
               <input v-model.number="recommendationForm.image_output_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
             <label class="field">
-              <span>单次图片 Cache 读取</span>
+              <span>{{ t('accountShare.estimate.imageCacheRead') }}</span>
               <input v-model.number="recommendationForm.image_cache_read_tokens_per_request" class="input h-10" type="number" min="0" step="1" />
             </label>
           </div>
@@ -266,35 +265,35 @@
           <div class="recommendation-action-box">
             <button class="btn-primary h-11 w-full" type="button" :disabled="recommendationLoading" @click="runRecommendation">
               <Icon name="sparkles" size="sm" class="mr-2" :class="{ 'animate-spin': recommendationLoading }" />
-              {{ recommendationLoading ? '测算中' : '计算费用' }}
+              {{ recommendationLoading ? t('accountShare.estimate.running') : t('accountShare.estimate.run') }}
             </button>
             <p v-if="recommendationUsageProfileMessage" class="recommendation-profile-message">{{ recommendationUsageProfileMessage }}</p>
             <p v-if="recommendationError" class="recommendation-error">{{ recommendationError }}</p>
             <div v-if="recommendationResult" class="recommendation-summary">
-              <small>最低预计每小时额度</small>
+              <small>{{ t('accountShare.estimate.minHourly') }}</small>
               <span>{{ recommendationInputSummary }}</span>
-              <strong>{{ recommendationBest ? formatRecommendationCost(recommendationEstimatedHourlyCost(recommendationBest)) : '无可用结果' }}</strong>
-              <small>可比较 {{ recommendationCandidates.length }} 个 / 扫描候选 {{ recommendationResult.candidate_count }} 个</small>
+              <strong>{{ recommendationBest ? formatRecommendationCost(recommendationEstimatedHourlyCost(recommendationBest)) : t('accountShare.estimate.noResults') }}</strong>
+              <small>{{ t('accountShare.estimate.comparable', { length: recommendationCandidates.length, candidateCount: recommendationResult.candidate_count }) }}</small>
             </div>
           </div>
         </div>
 
         <div v-if="recommendationResult" class="recommendation-results">
           <div v-if="recommendationCandidates.length === 0" class="recommendation-empty">
-            当前平台没有匹配模型、席位和可用状态的账号。
+            {{ t('accountShare.estimate.noMatch') }}
           </div>
           <template v-else>
             <div class="recommendation-results-head">
               <div>
-                <strong>费用比较</strong>
-                <span>{{ recommendationPageRangeText }} · 按预计每小时额度从小到大</span>
+                <strong>{{ t('accountShare.estimate.comparison') }}</strong>
+                <span>{{ t('accountShare.estimate.rangeSort', { range: recommendationPageRangeText }) }}</span>
               </div>
               <div class="recommendation-page-controls">
                 <button
                   type="button"
                   class="recommendation-page-button"
                   :disabled="recommendationPage <= 1"
-                  aria-label="上一页"
+                  :aria-label="t('accountShare.quotaAdmin.prevPage')"
                   @click="setRecommendationPage(recommendationPage - 1)"
                 >
                   <Icon name="chevronLeft" size="sm" />
@@ -304,7 +303,7 @@
                   type="button"
                   class="recommendation-page-button"
                   :disabled="recommendationPage >= recommendationPageCount"
-                  aria-label="下一页"
+                  :aria-label="t('accountShare.quotaAdmin.nextPage')"
                   @click="setRecommendationPage(recommendationPage + 1)"
                 >
                   <Icon name="chevronRight" size="sm" />
@@ -325,7 +324,7 @@
                   </div>
                 </div>
                 <div class="recommendation-total">
-                  <span>预计每小时额度</span>
+                  <span>{{ t('accountShare.estimate.hourlyQuota') }}</span>
                   <strong>{{ formatRecommendationCost(recommendationEstimatedHourlyCost(candidate)) }}</strong>
                 </div>
               </div>
@@ -336,19 +335,19 @@
                   <strong>{{ formatRecommendationCost(candidate.estimate.request_cost) }}</strong>
                 </div>
                 <div>
-                  <span>{{ candidate.estimate.owner_self_use ? '自用单次均摊' : '单次均摊' }}</span>
+                  <span>{{ candidate.estimate.owner_self_use ? t('accountShare.estimate.selfUsePerRequest') : t('accountShare.estimate.perRequest') }}</span>
                   <strong>{{ formatRecommendationCost(candidate.estimate.per_request_cost) }}</strong>
                 </div>
                 <div>
-                  <span>{{ candidate.estimate.owner_self_use ? '自用小时费' : '小时费合计' }}</span>
+                  <span>{{ candidate.estimate.owner_self_use ? t('accountShare.estimate.selfUseHourly') : t('accountShare.estimate.hourlyTotal') }}</span>
                   <strong>{{ recommendationHourlyCostText(candidate) }}</strong>
                 </div>
                 <div>
-                  <span>{{ candidate.estimate.owner_self_use ? '自用准入' : '准入预估' }}</span>
+                  <span>{{ candidate.estimate.owner_self_use ? t('accountShare.estimate.selfUseAdmission') : t('accountShare.estimate.admission') }}</span>
                   <strong>{{ recommendationUpfrontCostText(candidate) }}</strong>
                 </div>
                 <div>
-                  <span>{{ candidate.estimate.owner_self_use ? '自用倍率' : '倍率' }}</span>
+                  <span>{{ candidate.estimate.owner_self_use ? t('accountShare.estimate.selfUseRate') : t('groups.rateLabel') }}</span>
                   <strong>{{ formatNumber(candidate.estimate.effective_rate_multiplier) }}x</strong>
                 </div>
               </div>
@@ -367,7 +366,7 @@
               </div>
 
               <div class="recommendation-card-actions">
-                <span>消费者名额 {{ candidate.listing.active_seats }}/{{ candidate.listing.seat_limit }} · 配置并发 {{ candidate.listing.account_concurrency }}</span>
+                <span>{{ t('accountShare.card.seatSummary', { activeSeats: candidate.listing.active_seats, seatLimit: candidate.listing.seat_limit, accountConcurrency: candidate.listing.account_concurrency }) }}</span>
                 <button
                   class="btn-primary h-10"
                   type="button"
@@ -376,7 +375,7 @@
                   @click="useRecommendedListing(candidate)"
                 >
                   <Icon name="login" size="sm" class="mr-2" />
-                  {{ preparingJoinId === candidate.listing.id ? '准备确认中' : '加入使用' }}
+                  {{ preparingJoinId === candidate.listing.id ? t('accountShare.join.preparing') : t('accountShare.join.joinUse') }}
                 </button>
               </div>
             </article>
@@ -398,16 +397,16 @@
           :class="{ 'create-capability-summary-blocked': !capabilities.can_create_room }"
         >
           <span>
-            房间 {{ capabilities.live_rooms.used }}/{{ capabilities.live_rooms.limit }}
+            {{ t('accountShare.quota.rooms', { used: capabilities.live_rooms.used, limit: capabilities.live_rooms.limit }) }}
           </span>
           <span>
-            24 小时创建 {{ capabilities.room_creates_24_hours.used }}/{{ capabilities.room_creates_24_hours.limit }}
+            {{ t('accountShare.quota.created24h', { used: capabilities.room_creates_24_hours.used, limit: capabilities.room_creates_24_hours.limit }) }}
           </span>
           <span>
-            房间账号 {{ capabilities.owner_room_accounts.used }}/{{ capabilities.owner_room_accounts.limit }}
+            {{ t('accountShare.quota.accounts', { used: capabilities.owner_room_accounts.used, limit: capabilities.owner_room_accounts.limit }) }}
           </span>
           <strong v-if="!capabilities.can_create_room">
-            {{ capabilities.capability_blockers[0]?.message || '当前暂不能创建房间' }}
+            {{ capabilities.capability_blockers[0]?.message || t('accountShare.quota.cannotCreate') }}
           </strong>
         </div>
 
@@ -415,24 +414,24 @@
           <div class="create-room-stage-heading">
             <span class="create-room-stage-index">1</span>
             <div>
-              <strong>选择账号来源</strong>
-              <small>选择自有账号创建房间，也可以先添加新账号。</small>
+              <strong>{{ t('accountShare.create.stepSource') }}</strong>
+              <small>{{ t('accountShare.create.sourceDesc') }}</small>
             </div>
           </div>
           <button type="button" class="btn-secondary min-h-11" :disabled="creating" data-testid="create-room-new-account" @click="openStandaloneAccountCreator">
-            <Icon name="plus" size="sm" class="mr-2" />添加新账号
+            <Icon name="plus" size="sm" class="mr-2" />{{ t('accountShare.create.addAccount') }}
           </button>
           <div class="create-room-account-picker">
             <div class="flex flex-col gap-3 md:flex-row md:items-end">
               <label class="field min-w-0 flex-1">
-                <span>已有自有账号</span>
+                <span>{{ t('accountShare.create.existingAccount') }}</span>
                 <select
                   v-model.number="selectedOwnedAccountID"
                   class="input"
                   :disabled="ownedAccountsLoading || creating"
                 >
                   <option :value="0">
-                    {{ ownedAccountsLoading ? '正在加载账号...' : '请选择未外投的健康账号' }}
+                    {{ ownedAccountsLoading ? t('accountShare.ownerDialog.loadingAccounts') : t('accountShare.create.selectHealthy') }}
                   </option>
                   <option
                     v-for="account in eligibleOwnedAccounts"
@@ -451,7 +450,7 @@
                 @click="loadOwnedAccounts(true)"
               >
                 <Icon name="refresh" size="sm" class="mr-2" :class="{ 'animate-spin': ownedAccountsLoading }" />
-                刷新账号
+                {{ t('accountShare.create.refreshAccounts') }}
               </button>
             </div>
           </div>
@@ -463,13 +462,13 @@
               <div class="section-heading create-room-stage-heading">
                 <span class="create-room-stage-index">2</span>
                 <div>
-                  <span>房间规则与计费</span>
-                <small>房间沿用所选账号的凭证、代理和配置并发。</small>
+                  <span>{{ t('accountShare.create.stepRules') }}</span>
+                <small>{{ t('accountShare.create.rulesDesc') }}</small>
                 </div>
               </div>
               <div class="create-room-field-grid">
                 <div class="field">
-                  <span>账号平台</span>
+                  <span>{{ t('admin.accounts.bulkTest.platformLabel') }}</span>
                   <div class="grid grid-cols-2 gap-2">
                     <button
                       v-for="option in ACCOUNT_SHARE_PLATFORM_OPTIONS"
@@ -487,19 +486,19 @@
                       {{ option.label }}
                     </button>
                   </div>
-                  <small>选择要共享的账号平台。凭证和代理在账号管理中维护。</small>
+                  <small>{{ t('accountShare.create.platformDesc') }}</small>
                 </div>
 
                 <label class="field">
-                  <span>房间名称</span>
+                  <span>{{ t('accountShare.create.roomName') }}</span>
                   <input v-model="createForm.name" class="input" :placeholder="ACCOUNT_NAME_BASE_BY_PLATFORM[createPlatform]" />
                   <small :class="accountNameValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
-                    {{ accountNameValidationMessage || '同一号主下房间名称必须唯一，且不能包含空格、换行或制表符。' }}
+                    {{ accountNameValidationMessage || t('accountShare.create.roomNameHint') }}
                   </small>
                 </label>
 
                 <label class="field">
-                  <span>成员上限（1～30）</span>
+                  <span>{{ t('accountShare.create.seatLimit') }}</span>
                   <input
                     v-model.number="createForm.seat_limit"
                     class="input"
@@ -510,19 +509,19 @@
                     inputmode="numeric"
                     data-testid="create-room-seat-limit"
                   />
-                  <small>{{ ACCOUNT_SHARE_MEMBER_LIMIT_HELP }}</small>
+                  <small>{{ t('accountShare.memberLimitHelp') }}</small>
                 </label>
 
                 <div class="field">
-                  <span>配置并发/运行时请求能力</span>
+                  <span>{{ t('accountShare.roomAccounts.concurrency') }}</span>
                   <div class="input flex items-center bg-gray-50 text-gray-700 dark:bg-dark-800 dark:text-dark-200">
                     {{ selectedOwnedAccount?.concurrency ?? '—' }}
                   </div>
-                  <small>沿用已有账号的运行时请求能力配置，不在创建房间时修改，也不决定成员上限。</small>
+                  <small>{{ t('accountShare.create.concurrencyHint') }}</small>
                 </div>
 
                 <label class="field">
-                  <span>单用户最高并发</span>
+                  <span>{{ t('accountShare.create.perUserConcurrency') }}</span>
                   <input v-model.number="createForm.per_user_concurrency" class="input" type="number" min="1" :max="maxPerUserConcurrency" step="1" />
                   <small :class="perUserConcurrencyValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
                     {{ perUserConcurrencyValidationMessage || perUserConcurrencyLimitTip }}
@@ -530,25 +529,39 @@
                 </label>
 
                 <label class="field">
-                  <span>账号倍率</span>
+                  <span>{{ t('usage.accountMultiplier') }}</span>
                   <input v-model.number="createForm.rate_multiplier" class="input" type="number" min="0" step="0.01" />
                 </label>
 
                 <label class="field">
-                  <span>每小时扣费额度</span>
+                  <span>{{ t('accountShare.create.hourlyRate') }}</span>
                   <input v-model.number="createForm.hourly_rate" class="input" type="number" min="0" step="0.0001" />
-                  <small>默认 0.2，加入后按占位时长预付，用于防止长期占位不使用。</small>
+                  <small>{{ t('accountShare.create.hourlyRateHint') }}</small>
                 </label>
 
                 <label class="field">
-                  <span>满低消免小时费</span>
+                  <span>{{ t('accountShare.featureTags.hourlyFeeWaiver') }}</span>
                   <input v-model.number="createForm.hourly_fee_waiver_minimum" class="input" type="number" min="0" step="0.0001" />
-                  <small>填 0 表示关闭；按每小时低消门槛折算到实际占用时长。</small>
+                  <small>{{ t('accountShare.create.waiverHint') }}</small>
                 </label>
 
                 <label class="field">
-                  <span>最低余额准入</span>
+                  <span>{{ t('accountShare.create.minBalance') }}</span>
                   <input v-model.number="createForm.min_balance_required" class="input" type="number" min="0" step="0.01" />
+                </label>
+
+                <label class="field">
+                  <span>{{ t('accountShare.create.password') }}</span>
+                  <input
+                    v-model="createForm.join_password"
+                    class="input"
+                    type="password"
+                    maxlength="64"
+                    autocomplete="new-password"
+                    :placeholder="t('accountShare.create.passwordPlaceholder')"
+                    data-testid="create-room-join-password"
+                  />
+                  <small>{{ t('accountShare.create.passwordHint') }}</small>
                 </label>
               </div>
             </div>
@@ -557,13 +570,13 @@
               <div class="section-heading create-room-stage-heading">
                 <span class="create-room-stage-index">3</span>
                 <div>
-                  <span>模型与额度保护</span>
-                <small>选择房间允许使用的模型，并设置额度保护。</small>
+                  <span>{{ t('accountShare.create.stepModels') }}</span>
+                <small>{{ t('accountShare.create.modelsDesc') }}</small>
                 </div>
               </div>
               <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
                 <div class="field">
-                  <span>模型白名单</span>
+                  <span>{{ t('admin.accounts.modelWhitelist') }}</span>
                   <div class="model-selector-shell">
                     <ModelWhitelistSelector
                       v-model="allowedModels"
@@ -571,29 +584,29 @@
                       :allowed-options="roomCatalogModels ?? []"
                     />
                   </div>
-                  <small v-if="roomCatalogLoading">正在加载该平台已定价模型…</small>
+                  <small v-if="roomCatalogLoading">{{ t('accountShare.create.loadingModels') }}</small>
                   <small v-else-if="roomCatalogError" class="text-red-600 dark:text-red-300">{{ roomCatalogError }}</small>
-                  <small v-else-if="roomCatalogModels !== null && roomCatalogModels.length === 0" class="text-red-600 dark:text-red-300">当前平台没有已定价模型，无法创建房间</small>
-                  <small v-else>复用“我的账号”新增账号的模型选择器，可搜索、多选并添加自定义模型。</small>
+                  <small v-else-if="roomCatalogModels !== null && roomCatalogModels.length === 0" class="text-red-600 dark:text-red-300">{{ t('accountShare.create.noPricedModels') }}</small>
+                  <small v-else>{{ t('accountShare.create.modelPickerHint') }}</small>
                 </div>
 
                 <div v-if="createPlatform === 'openai'" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
                   <label class="field">
-                    <span>Codex 5h 保护 %</span>
+                    <span>{{ t('accountShare.create.codex5h') }}</span>
                     <input v-model.number="createForm.codex_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                   <label class="field">
-                    <span>Codex 7d 保护 %</span>
+                    <span>{{ t('accountShare.create.codex7d') }}</span>
                     <input v-model.number="createForm.codex_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                 </div>
                 <div v-else-if="createPlatform === 'anthropic'" class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
                   <label class="field">
-                    <span>Claude 5h 保护 %</span>
+                    <span>{{ t('accountShare.create.claude5h') }}</span>
                     <input v-model.number="createForm.anthropic_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                   <label class="field">
-                    <span>Claude 7d 保护 %</span>
+                    <span>{{ t('accountShare.create.claude7d') }}</span>
                     <input v-model.number="createForm.anthropic_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                 </div>
@@ -607,8 +620,8 @@
               <label v-if="createPlatform === 'openai'" class="toggle-row mt-3">
                 <input v-model="createForm.codex_cli_only" type="checkbox" />
                 <span>
-                  <strong>仅允许 Codex 官方客户端</strong>
-                  <small>关闭后会允许更多客户端加入该账号房间。</small>
+                  <strong>{{ t('admin.accounts.openai.codexCLIOnly') }}</strong>
+                  <small>{{ t('accountShare.create.cliOnlyHint') }}</small>
                 </span>
               </label>
             </div>
@@ -619,31 +632,31 @@
               <div class="create-room-stage-heading">
                 <span class="create-room-stage-index">4</span>
                 <div>
-                  <small class="create-room-summary-eyebrow">最后一步</small>
-                  <strong>确认创建</strong>
-                  <small>确认配置后即可发布房间。</small>
+                  <small class="create-room-summary-eyebrow">{{ t('accountShare.create.stepConfirm') }}</small>
+                  <strong>{{ t('accountShare.createRoom.step4Title') }}</strong>
+                  <small>{{ t('accountShare.create.confirmDesc') }}</small>
                 </div>
               </div>
-              <div class="create-room-summary-list" aria-label="房间配置摘要">
+              <div class="create-room-summary-list" :aria-label="t('accountShare.create.summary')">
                 <div>
-                  <span>账号来源</span>
-                  <strong>{{ selectedOwnedAccount?.name || '尚未选择' }}</strong>
+                  <span>{{ t('accountShare.createRoom.step1Desc') }}</span>
+                  <strong>{{ selectedOwnedAccount?.name || t('accountShare.create.notSelected') }}</strong>
                 </div>
                 <div>
-                  <span>平台</span>
+                  <span>{{ t('accountShare.roomAccounts.platform') }}</span>
                   <strong>{{ ACCOUNT_SHARE_PLATFORM_OPTIONS.find((option) => option.value === createPlatform)?.label || createPlatform }}</strong>
                 </div>
                 <div>
-                  <span>房间名称</span>
-                  <strong>{{ createForm.name || '尚未填写' }}</strong>
+                  <span>{{ t('accountShare.create.roomName') }}</span>
+                  <strong>{{ createForm.name || t('accountShare.create.notFilled') }}</strong>
                 </div>
                 <div>
-                  <span>模型白名单</span>
+                  <span>{{ t('admin.accounts.modelWhitelist') }}</span>
                   <strong>{{ allowedModels.length ? `${allowedModels.length} 个模型` : '尚未选择' }}</strong>
                 </div>
               </div>
               <p class="create-room-summary-note">
-                系统仅保存账号凭证、代理和账号 ID 的关联关系，不会复制账号密钥。
+                {{ t('accountShare.create.credentialNote') }}
               </p>
               <p
                 v-if="createErrorMessage"
@@ -659,10 +672,10 @@
                 @click="createRoomFromOwnedAccount"
               >
                 <Icon name="plus" size="sm" class="mr-2" :class="{ 'animate-pulse': creating }" />
-                {{ creating ? '创建房间中...' : '使用已有账号创建房间' }}
+                {{ creating ? t('accountShare.create.creating') : t('accountShare.create.submit') }}
               </button>
               <small v-if="!canCreateRoomFromOwnedAccount && !creating" class="create-room-submit-hint">
-                请先选择健康账号并完成必填配置
+                {{ t('accountShare.create.submitDisabled') }}
               </small>
             </div>
           </div>
@@ -683,14 +696,14 @@
       />
 
       <div class="marketplace-workspace" :class="{ 'marketplace-workspace-history': isMembershipHistoryView }">
-      <section ref="filterPanelRef" class="filter-panel" aria-label="房间筛选" @keydown.esc="handleFilterPopoverEscape">
+      <section ref="filterPanelRef" class="filter-panel" :aria-label="t('accountShare.filters.title')" @keydown.esc="handleFilterPopoverEscape">
         <div class="marketplace-sidebar-title">
-          <div><Icon name="filter" size="sm" /><h2>筛选房间</h2></div>
-          <span>找到与你的需求匹配的账号</span>
+          <div><Icon name="filter" size="sm" /><h2>{{ t('accountShare.filters.filterRooms') }}</h2></div>
+          <span>{{ t('accountShare.filters.subtitle') }}</span>
         </div>
         <div v-if="!isMembershipHistoryView" class="marketplace-platform-section">
-          <span class="filter-section-label">账号平台</span>
-          <div class="account-share-platform-tabs" aria-label="账号模式平台">
+          <span class="filter-section-label">{{ t('admin.accounts.bulkTest.platformLabel') }}</span>
+          <div class="account-share-platform-tabs" :aria-label="t('accountShare.filters.platform')">
             <button
               v-for="option in ACCOUNT_SHARE_PLATFORM_OPTIONS"
               :key="option.value"
@@ -707,17 +720,17 @@
           </div>
         </div>
         <div class="filter-toolbar">
-          <div v-if="mainViewTab === 'using'" class="marketplace-subviews" aria-label="我的使用视图">
-            <button type="button" class="btn-secondary min-h-11" :aria-pressed="!isMembershipHistoryView" @click="setFilter(usingFilter)">当前使用</button>
-            <button type="button" class="btn-secondary min-h-11" :aria-pressed="isMembershipHistoryView" @click="setFilter(historyFilter)">历史记录</button>
+          <div v-if="mainViewTab === 'using'" class="marketplace-subviews" :aria-label="t('accountShare.filters.myUsageView')">
+            <button type="button" class="btn-secondary min-h-11" :aria-pressed="!isMembershipHistoryView" @click="setFilter(usingFilter)">{{ t('accountShare.mySpend.tabUsing') }}</button>
+            <button type="button" class="btn-secondary min-h-11" :aria-pressed="isMembershipHistoryView" @click="setFilter(historyFilter)">{{ t('accountShare.membership.statusHistory') }}</button>
           </div>
           <div v-if="mainViewTab === 'mine'" class="marketplace-owner-filter">
-            <label for="owner-room-state" class="text-sm">房间状态</label>
+            <label for="owner-room-state" class="text-sm">{{ t('accountShare.filters.roomStatus') }}</label>
             <select id="owner-room-state" class="input min-h-11 w-auto" :value="isArchiveView ? 'archive' : listingFilters.status" @change="setOwnerRoomState(($event.target as HTMLSelectElement).value)">
-              <option value="">全部未删除房间</option>
-              <option value="active">已上架</option>
-              <option value="paused">已下架</option>
-              <option value="archive">已删除</option>
+              <option value="">{{ t('accountShare.filters.allActiveRooms') }}</option>
+              <option value="active">{{ t('accountShare.statusFilter.active') }}</option>
+              <option value="paused">{{ t('accountShare.lifecycle.statusDelisted') }}</option>
+              <option value="archive">{{ t('ideas.status.deleted') }}</option>
             </select>
           </div>
           <div
@@ -726,32 +739,32 @@
             data-testid="archive-readonly-notice"
           >
             <Icon name="document" size="sm" class="flex-none" />
-            <span>归档仅展示已删除房间的不可变快照；实时状态、运行时用量和管理操作不会在这里显示。</span>
+            <span>{{ t('accountShare.filters.archiveHint') }}</span>
           </div>
           <details v-else-if="!isMembershipHistoryView" class="filter-body" :open="isWideMarketplace" data-testid="advanced-listing-filters">
-            <summary>筛选与排序 <span v-if="activeAdvancedFilterCount">· 已选 {{ activeAdvancedFilterCount }} 项</span><Icon name="chevronDown" size="sm" /></summary>
+            <summary>{{ t('accountShare.filters.filterSort') }} <span v-if="activeAdvancedFilterCount">{{ t('accountShare.filters.selectedCount', { count: activeAdvancedFilterCount }) }}</span><Icon name="chevronDown" size="sm" /></summary>
             <div class="filter-body-head">
               <div class="filter-body-title">
                 <span class="filter-body-icon"><Icon name="filter" size="sm" /></span>
                 <div>
-                  <small>{{ activeResultFilterCount > 0 ? `已启用 ${activeResultFilterCount} 项` : '按你的偏好缩小范围' }}</small>
+                  <small>{{ activeResultFilterCount > 0 ? t('accountShare.filters.enabledCount', { count: activeResultFilterCount }) : t('accountShare.filters.narrowHint') }}</small>
                 </div>
               </div>
               <div class="filter-button-row">
                 <button class="filter-reset-button" type="button" :disabled="loading || !hasResultFilters" @click="resetListingFilters">
                   <Icon name="x" size="sm" />
-                  <span>重置</span>
+                  <span>{{ t('accountShare.createRoom.reset') }}</span>
                 </button>
                 <button class="filter-apply-button" type="button" :disabled="loading" @click="applyListingFilters">
                   <Icon name="filter" size="sm" />
-                  <span>应用</span>
+                  <span>{{ t('keyUsage.apply') }}</span>
                 </button>
               </div>
             </div>
 
-            <div class="advanced-filter-grid" aria-label="账号广场高级筛选">
+            <div class="advanced-filter-grid" :aria-label="t('accountShare.filters.advanced')">
               <div class="filter-popover-wrap">
-                <span class="filter-section-label">状态</span>
+                <span class="filter-section-label">{{ t('common.status') }}</span>
                 <button
                   ref="statusFilterTriggerRef"
                   type="button"
@@ -770,7 +783,7 @@
                   id="account-share-status-filter"
                   class="filter-popover status-popover"
                   role="group"
-                  aria-label="状态选项"
+                  :aria-label="t('accountShare.filters.statusOptions')"
                   @keydown.escape.stop="handleFilterPopoverEscape"
                 >
                   <button
@@ -789,7 +802,7 @@
               </div>
 
               <div v-if="isOpenAIListingPlatform" class="filter-popover-wrap">
-                <span class="filter-section-label">账号等级</span>
+                <span class="filter-section-label">{{ t('accountShare.roomAccounts.level') }}</span>
                 <button
                   ref="levelFilterTriggerRef"
                   type="button"
@@ -808,7 +821,7 @@
                   id="account-share-level-filter"
                   class="filter-popover level-popover"
                   role="group"
-                  aria-label="账号等级选项"
+                  :aria-label="t('accountShare.filters.levelOptions')"
                   @keydown.escape.stop="handleFilterPopoverEscape"
                 >
                   <button
@@ -827,7 +840,7 @@
               </div>
 
               <div class="filter-popover-wrap">
-                <span class="filter-section-label">账号席位</span>
+                <span class="filter-section-label">{{ t('accountShare.filters.seats') }}</span>
                 <button
                   ref="seatFilterTriggerRef"
                   type="button"
@@ -846,7 +859,7 @@
                   id="account-share-seat-filter"
                   class="filter-popover seat-popover"
                   role="group"
-                  aria-label="账号席位选项"
+                  :aria-label="t('accountShare.filters.seatOptions')"
                   @keydown.escape.stop="handleFilterPopoverEscape"
                 >
                   <div class="seat-chip-grid">
@@ -859,14 +872,14 @@
                       :aria-pressed="listingFilters.seatLimits.includes(seat)"
                       @click="toggleSeatFilter(seat)"
                     >
-                      {{ seat }}人
+                      {{ t('accountShare.filters.seatPeople', { seat }) }}
                     </button>
                   </div>
                 </div>
               </div>
 
               <div class="filter-popover-wrap">
-                <span class="filter-section-label">标签</span>
+                <span class="filter-section-label">{{ t('accountShare.filters.tags') }}</span>
                 <button
                   ref="featureFilterTriggerRef"
                   type="button"
@@ -885,7 +898,7 @@
                   id="account-share-feature-filter"
                   class="filter-popover tag-popover"
                   role="group"
-                  aria-label="标签选项"
+                  :aria-label="t('accountShare.filters.tagOptions')"
                   @keydown.escape.stop="handleFilterPopoverEscape"
                 >
                   <button
@@ -904,7 +917,7 @@
               </div>
 
               <div class="filter-popover-wrap model-filter-wrap">
-                <span class="filter-section-label">可用模型</span>
+                <span class="filter-section-label">{{ t('accountShare.filters.models') }}</span>
                 <button
                   ref="modelFilterTriggerRef"
                   type="button"
@@ -923,7 +936,7 @@
                   id="account-share-model-filter"
                   class="filter-popover model-popover"
                   role="group"
-                  aria-label="可用模型选项"
+                  :aria-label="t('accountShare.filters.modelOptions')"
                   @keydown.escape.stop="handleFilterPopoverEscape"
                 >
                   <div class="model-filter-options">
@@ -944,18 +957,18 @@
                     <input
                       v-model.trim="modelFilterInput"
                       class="input h-10"
-                      placeholder="输入模型名回车添加"
+                      :placeholder="t('accountShare.filters.addModel')"
                       @keydown.enter.prevent="addModelFilterFromInput"
                     />
-                    <button type="button" class="btn-secondary h-10" @click="addModelFilterFromInput">添加</button>
+                    <button type="button" class="btn-secondary h-10" @click="addModelFilterFromInput">{{ t('common.add') }}</button>
                   </div>
                 </div>
               </div>
             </div>
 
-            <div class="sort-section" aria-label="账号广场排序">
+            <div class="sort-section" :aria-label="t('accountShare.sort.title')">
               <div class="sort-section-head">
-                <span class="filter-section-label">排序</span>
+                <span class="filter-section-label">{{ t('admin.activities.fields.sortOrder') }}</span>
               </div>
               <div class="sort-button-grid">
                 <button
@@ -963,11 +976,11 @@
                   class="sort-option-button sort-default-button"
                   :class="listingFilters.sortKeys.length === 0 && 'sort-option-active'"
                   :aria-pressed="listingFilters.sortKeys.length === 0"
-                  title="清空所有排序条件，恢复账号广场默认排序"
+                  :title="t('accountShare.sort.reset')"
                   @click="clearListingSorts"
                 >
                   <Icon name="sort" size="sm" />
-                  <span>默认</span>
+                  <span>{{ t('keys.endpoints.default') }}</span>
                   <Icon v-if="listingFilters.sortKeys.length === 0" name="check" size="xs" class="sort-option-check" />
                 </button>
                 <button
@@ -992,7 +1005,7 @@
               </div>
             </div>
 
-            <div v-if="activeFilterChips.length > 0" class="active-filter-row" aria-label="已选筛选">
+            <div v-if="activeFilterChips.length > 0" class="active-filter-row" :aria-label="t('accountShare.filterChips.title')">
               <button
                 v-for="chip in activeFilterChips"
                 :key="chip.key"
@@ -1011,22 +1024,22 @@
         <div class="marketplace-results" :aria-busy="currentViewLoading">
           <div class="marketplace-results-toolbar">
             <div class="marketplace-result-count">
-              <h2>{{ isMembershipHistoryView ? '历史记录' : isArchiveView ? '已删除房间' : mainViewTab === 'using' ? '当前使用' : mainViewTab === 'mine' ? '我的房间' : '发现房间' }}</h2>
+              <h2>{{ isMembershipHistoryView ? t('accountShare.membership.statusHistory') : isArchiveView ? t('accountShare.tabs.deleted') : mainViewTab === 'using' ? t('accountShare.mySpend.tabUsing') : mainViewTab === 'mine' ? t('accountShare.filters.mine') : t('accountShare.tabs.discover') }}</h2>
               <span v-if="!isMembershipHistoryView">{{ loading ? '加载中…' : `${pagination.total_exact ? '' : '至少 '}${pagination.total} 个房间` }}</span>
-              <span v-if="!isMembershipHistoryView && !isKeyResolutionMode" class="marketplace-page-capacity">每页 {{ pagination.page_size }} 个</span>
+              <span v-if="!isMembershipHistoryView && !isKeyResolutionMode" class="marketplace-page-capacity">{{ t('accountShare.list.pageSize', { pageSize: pagination.page_size }) }}</span>
             </div>
             <div v-if="!isMembershipHistoryView && !isArchiveView" class="marketplace-result-stats">
-              <span>本页可用席位 <strong>{{ loading ? '—' : availableSeatCount }}</strong></span>
-              <span>本页已用席位 <strong>{{ loading ? '—' : activeSeatCount }}</strong></span>
-              <span>账号模式 Key <strong>{{ modeKeysLoading && !modeKeysLoaded ? '…' : modeApiKeys.length }}</strong></span>
+              <span>{{ t('accountShare.list.pageSeatsAvailable') }} <strong>{{ loading ? '—' : availableSeatCount }}</strong></span>
+              <span>{{ t('accountShare.list.pageSeatsUsed') }} <strong>{{ loading ? '—' : activeSeatCount }}</strong></span>
+              <span>{{ t('accountShare.estimate.modeKey') }} <strong>{{ modeKeysLoading && !modeKeysLoaded ? '…' : modeApiKeys.length }}</strong></span>
             </div>
             <button class="marketplace-refresh" type="button" :disabled="currentViewLoading || isAnyModeKeysLoading || selfUseSettingsLoading" @click="refreshPageData">
               <Icon name="refresh" size="sm" :class="{ 'animate-spin': currentViewLoading || isAnyModeKeysLoading || selfUseSettingsLoading }" />
-              刷新
+              {{ t('common.refresh') }}
             </button>
           </div>
           <div ref="roomGridViewportRef" class="marketplace-result-body" data-testid="listing-viewport">
-            <p v-if="isMembershipHistoryView" class="marketplace-history-note">按每次加入独立展示，包含所有平台。这里保留当次使用的条款与消费记录。</p>
+            <p v-if="isMembershipHistoryView" class="marketplace-history-note">{{ t('accountShare.list.usageNote') }}</p>
             <MembershipHistoryPanel
               v-if="isMembershipHistoryView"
               :items="membershipHistoryEntries"
@@ -1049,8 +1062,8 @@
 
               <div v-if="loading" class="marketplace-empty" role="status">
                 <Icon name="refresh" size="lg" class="animate-spin" />
-                <strong>正在加载账号广场...</strong>
-                <span>正在获取房间与席位信息</span>
+                <strong>{{ t('accountShare.list.loading') }}</strong>
+                <span>{{ t('accountShare.list.loadingHint') }}</span>
               </div>
 
               <section v-else-if="displayedListings.length > 0" ref="roomGridRef" class="listing-grid">
@@ -1061,7 +1074,7 @@
                   :class="{ 'key-resolution-listing-card': isKeyResolutionListing(listing) }"
                   role="button"
                   tabindex="0"
-                  :aria-label="'查看 ' + (isUnknownHistorySnapshot(listing) ? '房间 #' + listing.id : listingDisplayName(listing)) + ' 的房间详情'"
+                  :aria-label="t('accountShare.detail.viewRoomDetails', { name: isUnknownHistorySnapshot(listing) ? t('accountShare.common.roomIdHash', { id: listing.id }) : listingDisplayName(listing) })"
                   aria-haspopup="dialog"
                   :aria-expanded="detailListing?.id === listing.id"
                   @click="openRoomDetails(listing, $event)"
@@ -1071,57 +1084,59 @@
                   <div class="room-preview-heading">
                     <span class="listing-platform-icon" aria-hidden="true"><PlatformIcon :platform="listingPlatform(listing)" size="lg" /></span>
                     <div class="room-preview-name">
-                      <h2>{{ isUnknownHistorySnapshot(listing) ? '房间 #' + listing.id : listingDisplayName(listing) }}</h2>
+                      <h2>{{ isUnknownHistorySnapshot(listing) ? t('accountShare.common.roomIdHash', { id: listing.id }) : listingDisplayName(listing) }}</h2>
                       <span v-if="!isUnknownHistorySnapshot(listing)">{{ platformLabel(listingPlatform(listing)) }}<template v-if="isOpenAIListing(listing)"> · {{ accountLevelBadgeLabel(listing) }}</template></span>
-                      <span v-else>历史记录</span>
+                      <span v-else>{{ t('accountShare.membership.statusHistory') }}</span>
                     </div>
-                    <span :class="listingStatusBadgeClass(listing)">{{ isArchiveView ? '已删除' : listingStatusLabel(listing) }}</span>
+                    <span :class="listingStatusBadgeClass(listing)">{{ isArchiveView ? t('ideas.status.deleted') : listingStatusLabel(listing) }}</span>
                   </div>
                   <template v-if="!isUnknownHistorySnapshot(listing)">
                     <div class="room-preview-prices">
-                      <div><span>请求倍率</span><strong>{{ formatNumber(listing.rate_multiplier) }}<small>×</small></strong></div>
-                      <div><span>占位费</span><strong>{{ formatNumber(listing.hourly_rate) }}<small>/ 小时</small></strong></div>
+                      <div><span>{{ t('accountShare.card.requestRate') }}</span><strong>{{ formatNumber(listing.rate_multiplier) }}<small>×</small></strong></div>
+                      <div><span>{{ t('accountShare.card.holdingFee') }}</span><strong>{{ formatNumber(listing.hourly_rate) }}<small>{{ t('accountShare.card.perHourSuffix') }}</small></strong></div>
                     </div>
                     <div class="room-preview-features">
-                      <span v-if="isOpenAIListing(listing) && supportsImageGeneration(listing)">支持生图</span>
-                      <span v-if="listing.hourly_fee_waiver_minimum > 0">满低消免占位费</span>
-                      <span v-if="isOpenAIListing(listing) && listing.codex_cli_only">仅官方客户端</span>
-                      <span v-if="listing.hourly_rate === 0">无占位费</span>
+                      <span v-if="isAPIAggregationListing(listing)" class="room-preview-feature-apikey" :title="t('accountShare.card.apikeyRoomTitle')">APIKEY</span>
+                      <span v-if="listing.has_password" class="room-preview-feature-lock" :title="t('accountShare.card.needsPassword')">{{ t('accountShare.card.passwordRequired') }}</span>
+                      <span v-if="isOpenAIListing(listing) && supportsImageGeneration(listing)">{{ t('accountShare.featureTags.imageGeneration') }}</span>
+                      <span v-if="listing.hourly_fee_waiver_minimum > 0">{{ t('accountShare.card.feeWaived') }}</span>
+                      <span v-if="isOpenAIListing(listing) && listing.codex_cli_only">{{ t('accountShare.card.officialClientOnly') }}</span>
+                      <span v-if="listing.hourly_rate === 0">{{ t('accountShare.card.noHoldingFee') }}</span>
                     </div>
-                    <div class="room-preview-models" aria-label="主要支持模型">
+                    <div class="room-preview-models" :aria-label="t('accountShare.card.mainModels')">
                       <span v-for="model in listing.allowed_models.slice(0, 2)" :key="model" :title="model">{{ model }}</span>
                       <span v-if="listing.allowed_models.length > 2">+{{ listing.allowed_models.length - 2 }}</span>
-                      <span v-if="listing.allowed_models.length === 0">{{ isArchiveView ? '未记录模型' : '暂无可用模型' }}</span>
+                      <span v-if="listing.allowed_models.length === 0">{{ isArchiveView ? t('accountShare.card.modelsNotRecorded') : t('accountShare.card.noModels') }}</span>
                     </div>
                     <div v-if="!isArchiveView" class="room-preview-availability">
-                      <span><Icon name="users" size="sm" />剩余席位 <strong>{{ Math.max(0, listing.seat_limit - listing.active_seats) }}/{{ listing.seat_limit }}</strong></span>
-                      <span><span aria-hidden="true">★</span>{{ listingRatingLabel(listing) }}</span>
+                      <span><Icon name="users" size="sm" />{{ t('accountShare.sortField.remainingSeats') }} <strong>{{ Math.max(0, listing.seat_limit - listing.active_seats) }}/{{ listing.seat_limit }}</strong></span>
+                      <span><Icon name="star" size="sm" aria-hidden="true" />{{ listingRatingLabel(listing) }}</span>
                     </div>
-                    <div v-else class="room-preview-history">只读历史快照 · 查看当时的房间条款</div>
+                    <div v-else class="room-preview-history">{{ t('accountShare.card.readonlySnapshot') }}</div>
                   </template>
-                  <p v-else class="room-preview-history">历史详情未完整保留，点击查看记录说明。</p>
+                  <p v-else class="room-preview-history">{{ t('accountShare.card.snapshotIncomplete') }}</p>
                   <div v-if="!isArchiveView && (listing.current_membership_id || isListingMembershipEnding(listing))" class="room-preview-membership" :class="{ 'room-preview-membership-ending': isListingMembershipEnding(listing) }">
                     <Icon :name="isListingMembershipEnding(listing) ? 'clock' : 'key'" size="sm" />
                     <span>{{ membershipPanelTitle(listing) }} · {{ boundApiKeyDisplayName(listing) }}</span>
                   </div>
                   <footer class="room-preview-footer">
-                    <span v-if="isUnknownHistorySnapshot(listing)">历史信息未完整保留</span>
-                    <span v-else :title="ownerDisplayName(listing)">{{ isOwnListing(listing) ? '我的房间 · 自用费率见详情' : '号主 · ' + ownerDisplayName(listing) }}</span>
-                    <span class="room-preview-open">查看详情 <Icon name="arrowRight" size="sm" /></span>
+                    <span v-if="isUnknownHistorySnapshot(listing)">{{ t('accountShare.card.historyIncomplete') }}</span>
+                    <span v-else :title="ownerDisplayName(listing)">{{ isOwnListing(listing) ? t('accountShare.card.myRoom') : t('accountShare.card.ownerPrefix') + ownerDisplayName(listing) }}</span>
+                    <span class="room-preview-open">{{ t('accountShare.card.viewDetail') }} <Icon name="arrowRight" size="sm" /></span>
                   </footer>
                 </article>
               </section>
 
               <div v-else class="marketplace-empty" role="status">
                 <Icon :name="hasResultFilters ? 'search' : 'grid'" size="xl" />
-                <strong>{{ isKeyResolutionMode ? (keyResolutionError ? '关联房间详情暂时无法加载，请在上方刷新状态后重试。' : '当前 API Key 没有需要处理的关联房间。') : (pagination.total === 0 ? (hasResultFilters ? '没有匹配的账号房间。' : (isArchiveView ? '暂无已删除房间。' : (isManagementView ? '暂无可管理房间。' : '当前分类暂无房间。'))) : '当前页暂无房间。') }}</strong>
-                <button v-if="hasResultFilters && !isKeyResolutionMode" type="button" class="btn-secondary min-h-11" @click="resetListingFilters">重置筛选</button>
+                <strong>{{ isKeyResolutionMode ? (keyResolutionError ? t('accountShare.list.linkedUnavailable') : t('accountShare.list.noLinkedRooms')) : (pagination.total === 0 ? (hasResultFilters ? t('accountShare.list.noMatch') : (isArchiveView ? t('accountShare.list.noDeleted') : (isManagementView ? t('accountShare.list.noManaged') : t('accountShare.list.emptyCategory')))) : t('accountShare.list.emptyPage')) }}</strong>
+                <button v-if="hasResultFilters && !isKeyResolutionMode" type="button" class="btn-secondary min-h-11" @click="resetListingFilters">{{ t('accountShare.list.resetFilters') }}</button>
               </div>
 
             </template>
           </div>
           <div class="marketplace-pagination" data-testid="listing-pagination-footer" :aria-busy="currentViewLoading">
-            <span v-if="isKeyResolutionMode" class="marketplace-pagination-note">所有需要处理的关联房间均在此展示</span>
+            <span v-if="isKeyResolutionMode" class="marketplace-pagination-note">{{ t('accountShare.list.linkedShown') }}</span>
             <template v-else-if="isMembershipHistoryView">
               <Pagination
                 v-if="membershipHistoryPagination.total > 0"
@@ -1134,7 +1149,7 @@
                 compact
                 @update:page="handleMembershipHistoryPageChange"
               />
-              <span v-else class="marketplace-pagination-note">{{ membershipHistoryLoading ? '正在加载历史记录…' : '暂无历史记录' }}</span>
+              <span v-else class="marketplace-pagination-note">{{ membershipHistoryLoading ? t('accountShare.mySpend.loadingHistory') : t('admin.ops.alertEvents.detail.historyEmpty') }}</span>
             </template>
             <template v-else>
               <Pagination
@@ -1158,7 +1173,7 @@
                 data-testid="listing-cursor-pagination"
                 @update:page="handlePageChange"
               />
-              <span v-else class="marketplace-pagination-note">{{ loading ? '正在加载房间…' : '暂无匹配房间' }}</span>
+              <span v-else class="marketplace-pagination-note">{{ loading ? t('accountShare.list.loadingRooms') : t('accountShare.list.noRoomsMatched') }}</span>
             </template>
           </div>
         </div>
@@ -1167,7 +1182,7 @@
 
     <BaseDialog
       :show="pendingJoinConfirmation !== null"
-      :title="pendingJoinIsOwnerSelfUse ? '确认使用自己的账号' : '确认加入账号房间'"
+      :title="pendingJoinIsOwnerSelfUse ? t('accountShare.join.confirmOwnAccount') : t('accountShare.join.confirmJoin')"
       width="wide"
       :z-index="60"
       :close-disabled="joinDialogBusy"
@@ -1180,7 +1195,7 @@
             <Icon :name="pendingJoinPriceWarnings.length > 0 ? 'exclamationCircle' : 'infoCircle'" size="md" />
           </span>
           <div class="min-w-0">
-            <strong>{{ pendingJoinTerms.room_name || `房间 #${pendingJoinIntent.listing_id}` }}</strong>
+            <strong>{{ pendingJoinTerms.room_name || t('accountShare.common.roomIdHash', { id: pendingJoinIntent.listing_id }) }}</strong>
             <span>{{ pendingJoinIsOwnerSelfUse ? `这是你自己的房间。绑定后按全局自用倍率 ${ownerSelfUseRateMultiplierLabel} 计算请求费用，不收小时费，也不占用消费者名额。` : '以下内容来自服务端刚刚签发的条款快照；确认后，该 API Key 会按这份快照加入房间。' }}</span>
           </div>
         </div>
@@ -1192,57 +1207,72 @@
           </div>
         </div>
 
+        <div v-if="pendingJoinRequiresUnverifiedAck" class="join-warning-list join-warning-unverified" data-testid="join-unverified-warning">
+          <div class="join-warning-item">
+            <Icon name="exclamationCircle" size="sm" />
+            <span>{{ t('accountShare.join.unverifiedWarning') }}</span>
+          </div>
+          <label class="join-unverified-ack">
+            <input
+              v-model="joinUnverifiedAcknowledged"
+              type="checkbox"
+              data-testid="join-unverified-ack"
+            />
+            <span>{{ t('accountShare.join.unverifiedAckLabel') }}</span>
+          </label>
+        </div>
+
         <div class="join-confirmation-grid">
           <div class="join-confirmation-field">
-            <span>条款版本</span>
+            <span>{{ t('accountShare.join.termsVersion') }}</span>
             <strong>v{{ pendingJoinTerms.row_version }} · rev {{ pendingJoinTerms.listing_revision_id || 0 }}</strong>
           </div>
           <div class="join-confirmation-field">
-            <span>房间状态</span>
-            <strong>{{ pendingJoinTerms.status === 'active' ? '可加入' : pendingJoinTerms.status }}</strong>
+            <span>{{ t('accountShare.filters.roomStatus') }}</span>
+            <strong>{{ pendingJoinTerms.status === 'active' ? t('accountShare.join.joinable') : pendingJoinTerms.status }}</strong>
           </div>
           <div class="join-confirmation-field">
-            <span>消费者名额</span>
+            <span>{{ t('accountShare.join.consumerSeats') }}</span>
             <strong>{{ pendingJoinTerms.seat_limit }}</strong>
           </div>
           <div class="join-confirmation-field" :class="{ 'join-price-danger': !pendingJoinIsOwnerSelfUse && pendingJoinTerms.rate_multiplier > 1 }">
-            <span>{{ pendingJoinIsOwnerSelfUse ? '自用请求倍率' : '倍率' }}</span>
+            <span>{{ pendingJoinIsOwnerSelfUse ? t('accountShare.join.selfUseRate') : t('groups.rateLabel') }}</span>
             <strong>{{ pendingJoinIsOwnerSelfUse ? ownerSelfUseRateMultiplierLabel : `${formatNumber(pendingJoinTerms.rate_multiplier)}x` }}</strong>
           </div>
           <div v-if="pendingJoinIsOwnerSelfUse" class="join-confirmation-field">
-            <span>公开条款倍率</span>
+            <span>{{ t('accountShare.join.publicRate') }}</span>
             <strong>{{ formatNumber(pendingJoinTerms.rate_multiplier) }}x</strong>
           </div>
           <div class="join-confirmation-field" :class="{ 'join-price-danger': !pendingJoinIsOwnerSelfUse && pendingJoinTerms.hourly_rate > EXPENSIVE_HOURLY_RATE }">
-            <span>小时费</span>
-            <strong>{{ pendingJoinIsOwnerSelfUse ? '不收取' : formatNumber(pendingJoinTerms.hourly_rate) }}</strong>
+            <span>{{ t('accountShare.membership.fieldHourlyRate') }}</span>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? t('accountShare.estimate.notCharged') : formatNumber(pendingJoinTerms.hourly_rate) }}</strong>
           </div>
           <div class="join-confirmation-field">
-            <span>免小时费低消</span>
-            <strong>{{ pendingJoinIsOwnerSelfUse ? '不适用' : hourlyFeeWaiverLabel(pendingJoinTerms.hourly_fee_waiver_minimum) }}</strong>
+            <span>{{ t('accountShare.membership.fieldFeeWaiver') }}</span>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? t('accountShare.join.notApplicable') : hourlyFeeWaiverLabel(pendingJoinTerms.hourly_fee_waiver_minimum) }}</strong>
           </div>
           <div class="join-confirmation-field">
-            <span>最低余额</span>
-            <strong>{{ pendingJoinIsOwnerSelfUse ? '不校验' : formatNumber(pendingJoinTerms.min_balance_required) }}</strong>
+            <span>{{ t('accountShare.membership.fieldMinBalance') }}</span>
+            <strong>{{ pendingJoinIsOwnerSelfUse ? t('accountShare.estimate.notChecked') : formatNumber(pendingJoinTerms.min_balance_required) }}</strong>
           </div>
           <div class="join-confirmation-field">
-            <span>单用户并发</span>
+            <span>{{ t('accountShare.join.perUserConcurrency') }}</span>
             <strong>{{ pendingJoinTerms.per_user_concurrency }}</strong>
           </div>
           <div class="join-confirmation-field">
-            <span>绑定 Key</span>
+            <span>{{ t('accountShare.join.boundKey') }}</span>
             <strong>{{ pendingJoinApiKeyLabel }}</strong>
           </div>
           <div class="join-confirmation-field">
-            <span>空闲退出</span>
+            <span>{{ t('accountShare.membership.fieldIdleTimeout') }}</span>
             <strong>{{ pendingJoinIdleTimeoutLabel }}</strong>
           </div>
           <div v-if="pendingJoinHasOpenAIProtection" class="join-confirmation-field">
-            <span>Codex保护</span>
+            <span>{{ t('accountShare.join.codexProtection') }}</span>
             <strong>{{ pendingJoinTerms.codex_5h_limit_percent }}% / {{ pendingJoinTerms.codex_7d_limit_percent }}%</strong>
           </div>
           <div v-if="pendingJoinHasAnthropicProtection" class="join-confirmation-field">
-            <span>Claude保护</span>
+            <span>{{ t('accountShare.join.claudeProtection') }}</span>
             <strong>{{ pendingJoinTerms.anthropic_5h_limit_percent || 0 }}% / {{ pendingJoinTerms.anthropic_7d_limit_percent || 0 }}%</strong>
           </div>
         </div>
@@ -1259,14 +1289,14 @@
         </div>
 
         <div class="join-model-confirmation">
-          <span>可用模型</span>
+          <span>{{ t('accountShare.filters.models') }}</span>
           <div>
             <button
               v-for="model in pendingJoinVisibleModels"
               :key="model"
               type="button"
               class="model-copy-chip"
-              :title="`复制 ${model}`"
+              :title="t('accountShare.common.copyModel', { model })"
               @click="copyModelName(model)"
             >
               {{ model }}
@@ -1277,7 +1307,7 @@
       </div>
 
       <template #footer>
-        <button type="button" class="btn-secondary min-h-11" :disabled="joinDialogBusy" @click="closeJoinConfirmation">取消</button>
+        <button type="button" class="btn-secondary min-h-11" :disabled="joinDialogBusy" @click="closeJoinConfirmation">{{ t('common.cancel') }}</button>
         <button
           type="button"
           class="btn-primary min-h-11"
@@ -1290,7 +1320,53 @@
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
-          {{ joiningId !== null ? '确认中' : (pendingJoinExpired ? '核对绑定状态' : (joinIntentError ? '重试确认结果' : (pendingJoinIsOwnerSelfUse ? '确认使用' : '确认加入'))) }}
+          {{ joiningId !== null ? t('accountShare.join.confirming') : (pendingJoinExpired ? t('accountShare.join.checkBinding') : (joinIntentError ? t('accountShare.join.retryConfirm') : (pendingJoinIsOwnerSelfUse ? t('accountShare.join.confirmUse') : t('accountShare.join.confirmJoinShort')))) }}
+        </button>
+      </template>
+    </BaseDialog>
+
+    <BaseDialog
+      :show="joinPasswordPrompt !== null"
+      :title="t('accountShare.join.enterPassword')"
+      width="narrow"
+      :z-index="70"
+      :close-disabled="preparingJoinId !== null"
+      :close-on-escape="preparingJoinId === null"
+      @close="closeJoinPasswordPrompt"
+    >
+      <div v-if="joinPasswordPrompt" class="grid gap-4" data-testid="join-password-prompt">
+        <p class="text-sm leading-6 text-slate-600 dark:text-dark-300">
+          {{ t('accountShare.join.passwordGate', { id: joinPasswordPrompt.listing.room_name || t('accountShare.common.roomIdHash', { id: joinPasswordPrompt.listing.id }) }) }}
+        </p>
+        <label class="field">
+          <span>{{ t('accountShare.join.passwordLabel') }}</span>
+          <input
+            v-model="joinPasswordInput"
+            class="input"
+            type="password"
+            maxlength="64"
+            autocomplete="off"
+            :placeholder="t('accountShare.join.passwordPlaceholder')"
+            :disabled="preparingJoinId !== null"
+            data-testid="join-password-input"
+            @keydown.enter.prevent="submitJoinPassword"
+          />
+        </label>
+        <p v-if="joinPasswordError" class="join-intent-state join-intent-state-error" role="alert">
+          <Icon name="exclamationCircle" size="sm" />
+          <span>{{ joinPasswordError }}</span>
+        </p>
+      </div>
+      <template #footer>
+        <button type="button" class="btn-secondary min-h-11" :disabled="preparingJoinId !== null" @click="closeJoinPasswordPrompt">{{ t('common.cancel') }}</button>
+        <button
+          type="button"
+          class="btn-primary min-h-11"
+          :disabled="preparingJoinId !== null || !joinPasswordInput.trim()"
+          data-testid="join-password-submit"
+          @click="submitJoinPassword"
+        >
+          {{ preparingJoinId !== null ? t('accountShare.join.verifying') : t('auth.continue') }}
         </button>
       </template>
     </BaseDialog>
@@ -1312,7 +1388,7 @@
       </div>
 
       <template #footer>
-        <button type="button" class="btn-secondary" @click="closeActionErrorDialog">我知道了</button>
+        <button type="button" class="btn-secondary" @click="closeActionErrorDialog">{{ t('accountShare.guide.gotIt') }}</button>
         <button
           v-if="actionErrorDialog.action === 'create-mode-key'"
           type="button"
@@ -1320,14 +1396,14 @@
           @click="goCreateModeApiKey"
         >
           <Icon name="key" size="sm" class="mr-2" />
-          去创建 API Key
+          {{ t('accountShare.join.goCreateKey') }}
         </button>
       </template>
     </BaseDialog>
 
     <BaseDialog
       :show="showMySpendDialog"
-      title="我的消费"
+      :title="t('accountShare.page.mySpend')"
       width="wide"
       :z-index="65"
       @close="closeMySpendDialog"
@@ -1336,13 +1412,13 @@
         <div class="my-spend-account-picker">
           <div class="my-spend-account-picker-head">
             <div>
-              <span>选择使用过的账号</span>
+              <span>{{ t('accountShare.mySpend.selectAccount') }}</span>
               <strong>{{ mySpendAccountPickerTitle }}</strong>
-              <small>包含当前使用和历史使用记录；选择账号后下方统计会按该账号刷新。</small>
+              <small>{{ t('accountShare.mySpend.selectHint') }}</small>
             </div>
             <button type="button" class="btn-secondary min-h-11" :disabled="mySpendAccountsLoading" @click="loadMySpendAccountOptions()">
               <Icon name="refresh" size="xs" class="mr-2" :class="{ 'animate-spin': mySpendAccountsLoading }" />
-              刷新账号
+              {{ t('accountShare.create.refreshAccounts') }}
             </button>
           </div>
 
@@ -1351,7 +1427,7 @@
             <span>{{ mySpendAccountsError }}</span>
           </div>
 
-          <div class="my-spend-range-tabs my-spend-source-tabs" role="tablist" aria-label="消费账号记录类型">
+          <div class="my-spend-range-tabs my-spend-source-tabs" role="tablist" :aria-label="t('accountShare.mySpend.recordType')">
             <button
               type="button"
               role="tab"
@@ -1360,7 +1436,7 @@
               :disabled="mySpendAccountsLoading"
               @click="setMySpendPickerSource('using')"
             >
-              当前使用 {{ countLabel(mySpendUsingPagination.total, mySpendUsingPagination.totalExact) }}
+              {{ t('accountShare.mySpend.usingCount', { totalExact: countLabel(mySpendUsingPagination.total, mySpendUsingPagination.totalExact) }) }}
             </button>
             <button
               type="button"
@@ -1370,17 +1446,17 @@
               :disabled="mySpendAccountsLoading"
               @click="setMySpendPickerSource('history')"
             >
-              消费历史 {{ mySpendHistoryPagination.total }}
+              {{ t('accountShare.mySpend.historyCount', { total: mySpendHistoryPagination.total }) }}
             </button>
           </div>
 
           <div v-if="mySpendAccountsLoading && mySpendAccountOptions.length === 0" class="my-spend-loading">
-            正在加载使用过的账号...
+            {{ t('accountShare.mySpend.loadingAccounts') }}
           </div>
           <div v-else-if="!mySpendAccountsLoading && mySpendAccountOptions.length === 0" class="my-spend-empty">
             {{ mySpendPickerSource === 'using'
-              ? '暂无当前使用记录。'
-              : '暂无已结束的消费历史。每次使用都会在结束后单独保留。' }}
+              ? t('accountShare.mySpend.noUsing')
+              : t('accountShare.mySpend.noHistory') }}
           </div>
           <template v-else>
             <div class="my-spend-account-grid">
@@ -1401,7 +1477,7 @@
                 <strong>{{ mySpendAccountDisplayName(option) }}</strong>
                 <small>{{ mySpendAccountUsagePeriod(option) }}</small>
                 <span class="my-spend-account-option-foot">
-                  <span>记录 #{{ option.membershipID }}</span>
+                  <span>{{ t('accountShare.mySpend.recordId', { id: option.membershipID  }) }}</span>
                   <span>{{ mySpendAccountStatusLabel(option) }}</span>
                 </span>
               </button>
@@ -1421,7 +1497,7 @@
               :total="mySpendActivePickerPagination.total"
               :has-more="mySpendActivePickerPagination.hasMore"
               :loading="mySpendAccountsLoading"
-              label="消费记录分页"
+              :label="t('accountShare.mySpend.pagination')"
               data-testid="my-spend-cursor-pagination"
               @update:page="handleMySpendAccountPageChange"
             />
@@ -1434,19 +1510,18 @@
           </span>
           <div class="min-w-0">
             <span class="my-spend-eyebrow">
-              {{ platformLabel(mySpendSelectedOption.platform) }} · 房间 #{{ mySpendSelectedOption.listingID }}
-              <template v-if="mySpendSelectedOption.roomDeleted"> · 已删除</template>
+              {{ t('accountShare.mySpend.platformRoom', { platform: platformLabel(mySpendSelectedOption.platform), listingID: mySpendSelectedOption.listingID }) }}
+              <template v-if="mySpendSelectedOption.roomDeleted"> {{ t('accountShare.mySpend.deletedSuffix') }}</template>
             </span>
             <strong>{{ mySpendAccountDisplayName(mySpendSelectedOption) }}</strong>
             <small>
-              号主：{{ mySpendSelectedOption.ownerUsername || `用户 ${mySpendSelectedOption.ownerUserID}` }}
-              · 使用记录 #{{ mySpendSelectedOption.membershipID }}
+              {{ t('accountShare.mySpend.ownerRecord', { ownerUserID: mySpendSelectedOption.ownerUsername || t('accountShare.common.userId', { id: mySpendSelectedOption.ownerUserID }), membershipID: mySpendSelectedOption.membershipID }) }}
             </small>
           </div>
         </div>
 
         <div class="my-spend-toolbar">
-          <div class="my-spend-range-tabs" role="tablist" aria-label="消费统计范围">
+          <div class="my-spend-range-tabs" role="tablist" :aria-label="t('accountShare.mySpend.statRange')">
             <button
               v-for="option in MY_SPEND_RANGE_OPTIONS"
               :key="option.value"
@@ -1454,7 +1529,7 @@
               :class="{ active: mySpendRange === option.value }"
               :aria-selected="mySpendRange === option.value"
               :disabled="mySpendHistorySelection && option.value !== 'current_membership'"
-              :title="mySpendHistorySelection && option.value !== 'current_membership' ? '历史记录仅按选中的这一次使用精确统计' : undefined"
+              :title="mySpendHistorySelection && option.value !== 'current_membership' ? t('accountShare.mySpend.historyPreciseHint') : undefined"
               role="tab"
               @click="setMySpendRange(option.value)"
             >
@@ -1463,7 +1538,7 @@
           </div>
           <button type="button" class="btn-secondary min-h-11" :disabled="mySpendLoading || !mySpendSelectedOption" @click="loadMySpendSummary">
             <Icon name="refresh" size="xs" class="mr-2" />
-            刷新
+            {{ t('common.refresh') }}
           </button>
         </div>
 
@@ -1472,14 +1547,14 @@
           class="notice-row border-sky-200 bg-sky-50 text-sky-800 dark:border-sky-900/60 dark:bg-sky-950/30 dark:text-sky-200"
         >
           <Icon name="infoCircle" size="sm" class="mt-0.5 flex-shrink-0" />
-          <span>历史记录按选中的 membership 精确统计，不会合并同一房间的其他使用记录。</span>
+          <span>{{ t('accountShare.mySpend.historyScopeDesc') }}</span>
         </div>
 
         <div
           v-if="!mySpendLoading && !mySpendSelectedOption && (mySpendUsingPagination.total + mySpendHistoryPagination.total) > 0"
           class="my-spend-empty"
         >
-          请选择一个账号查看使用时间段、费用明细和统计面板。
+          {{ t('accountShare.mySpend.selectToView') }}
         </div>
 
         <div v-if="mySpendError" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
@@ -1488,7 +1563,7 @@
         </div>
 
         <div v-if="mySpendLoading && !mySpendSummary" class="my-spend-loading">
-          正在加载消费统计...
+          {{ t('accountShare.mySpend.loadingStats') }}
         </div>
 
         <template v-else-if="mySpendSummary">
@@ -1498,7 +1573,7 @@
               <strong>{{ mySpendWindowLabel(mySpendSummary) }}</strong>
             </div>
             <div>
-              <span>最近入账</span>
+              <span>{{ t('accountShare.mySpend.lastSettled') }}</span>
               <strong>{{ mySpendLastActivityLabel(mySpendSummary) }}</strong>
             </div>
           </div>
@@ -1516,47 +1591,47 @@
 
           <div class="my-spend-detail-grid">
             <div>
-              <span>统计账号</span>
+              <span>{{ t('accountShare.mySpend.statAccount') }}</span>
               <strong>{{ mySpendAccountName(mySpendSummary) }}</strong>
             </div>
             <div>
-              <span>绑定 Key</span>
+              <span>{{ t('accountShare.join.boundKey') }}</span>
               <strong>{{ mySpendBoundApiKeyName(mySpendSummary.membership) }}</strong>
               <small v-if="mySpendSummary.membership?.api_key_id">ID #{{ mySpendSummary.membership.api_key_id }}</small>
             </div>
             <div>
-              <span>使用状态</span>
+              <span>{{ t('accountShare.mySpend.useStatus') }}</span>
               <strong>{{ mySpendStatusLabel(mySpendSummary.membership?.status) }}</strong>
             </div>
             <div>
-              <span>加入时间</span>
+              <span>{{ t('accountShare.mySpend.joinedAt') }}</span>
               <strong>{{ formatDate(mySpendSummary.membership?.joined_at) }}</strong>
             </div>
             <div>
-              <span>请求均价</span>
+              <span>{{ t('accountShare.mySpend.avgRequestCost') }}</span>
               <strong>{{ mySpendAverageRequestCost(mySpendSummary) }}</strong>
             </div>
             <div>
-              <span>低消门槛</span>
+              <span>{{ t('accountShare.mySpend.minSpendThreshold') }}</span>
               <strong>{{ mySpendSummary.membership ? hourlyFeeWaiverLabel(mySpendSummary.membership.waiver_minimum) : '-' }}</strong>
             </div>
           </div>
 
           <div class="my-spend-hourly-panel">
             <div>
-              <span>小时费已预扣</span>
+              <span>{{ t('accountShare.mySpend.hourlyPrecharged') }}</span>
               <strong>{{ formatSpendCost(mySpendSummary.hourly_charge) }}</strong>
             </div>
             <div>
-              <span>普通退回</span>
+              <span>{{ t('accountShare.mySpend.normalRefund') }}</span>
               <strong>{{ formatSpendCost(mySpendSummary.hourly_refund) }}</strong>
             </div>
             <div>
-              <span>低消退回</span>
+              <span>{{ t('accountShare.mySpend.waiverRefund') }}</span>
               <strong>{{ formatSpendCost(mySpendSummary.hourly_waiver_refund) }}</strong>
             </div>
             <div>
-              <span>实际扣费</span>
+              <span>{{ t('accountShare.mySpend.actualCharge') }}</span>
               <strong>{{ formatSpendCost(mySpendSummary.hourly_net_cost) }}</strong>
             </div>
           </div>
@@ -1564,22 +1639,22 @@
           <div class="my-spend-breakdown">
             <div class="my-spend-section-head">
               <div>
-                <strong>按模型请求费用</strong>
-                <small>仅统计账号模式请求消费，小时费在上方单独列出。</small>
+                <strong>{{ t('accountShare.mySpend.byModel') }}</strong>
+                <small>{{ t('accountShare.mySpend.byModelHint') }}</small>
               </div>
             </div>
             <div v-if="mySpendSummary.model_breakdown.length === 0" class="my-spend-empty">
-              当前范围内暂无请求消费记录。
+              {{ t('accountShare.mySpend.noRecordsInRange') }}
             </div>
             <div v-else class="my-spend-table-wrap">
               <table class="my-spend-table">
                 <thead>
                   <tr>
-                    <th>模型</th>
-                    <th>请求数</th>
+                    <th>{{ t('keyUsage.model') }}</th>
+                    <th>{{ t('home.requestsLabel') }}</th>
                     <th>Token</th>
-                    <th>请求费用</th>
-                    <th>均价</th>
+                    <th>{{ t('accountShare.mySpend.requestCost') }}</th>
+                    <th>{{ t('accountShare.mySpend.avgPrice') }}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1598,7 +1673,7 @@
       </div>
 
       <template #footer>
-        <button type="button" class="btn-secondary" @click="closeMySpendDialog">关闭</button>
+        <button type="button" class="btn-secondary" @click="closeMySpendDialog">{{ t('common.close') }}</button>
       </template>
     </BaseDialog>
 
@@ -1612,7 +1687,7 @@
 
     <BaseDialog
       :show="showConfigEditDialog"
-      title="编辑房间配置"
+      :title="t('accountShare.roomEdit.title')"
       width="extra-wide"
       :close-disabled="savingConfigEdit || pendingDraftDiscardTarget === 'config'"
       @close="closeConfigEditDialog"
@@ -1620,13 +1695,13 @@
       <div class="space-y-5">
         <div v-if="editingConfigListing" class="edit-context-panel">
           <div class="min-w-0">
-            <span class="edit-context-eyebrow">房间 #{{ editingConfigListing.id }}</span>
+            <span class="edit-context-eyebrow">{{ t('accountShare.common.roomIdHash', { id: editingConfigListing.id }) }}</span>
             <strong>{{ listingDisplayName(editingConfigListing) }}</strong>
             <small>
-              消费者名额 {{ editingConfigListing.active_seats }} / {{ editingConfigListing.seat_limit }}
+              {{ t('accountShare.roomEdit.seats', { activeSeats: editingConfigListing.active_seats, seatLimit: editingConfigListing.seat_limit }) }}
             </small>
           </div>
-          <span v-if="editForceActive" class="edit-force-badge">管理员强制编辑</span>
+          <span v-if="editForceActive" class="edit-force-badge">{{ t('accountShare.roomEdit.adminForce') }}</span>
         </div>
 
         <div
@@ -1634,14 +1709,14 @@
           class="notice-row border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-200"
         >
           <Icon name="exclamationTriangle" size="sm" class="mt-0.5 flex-shrink-0" />
-          <span>管理员强制编辑已确认；保存时将使用下方“本次修改原因”写入审计记录。</span>
+          <span>{{ t('accountShare.roomEdit.adminConfirmed') }}</span>
         </div>
         <div
           v-else-if="editConsumerProtected"
           class="notice-row border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200"
         >
           <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
-          <span>房间正在被使用：只允许降费、提高单用户并发、增加模型，或在保留现有席位的前提下减少席位。</span>
+          <span>{{ t('accountShare.roomEdit.inUseLimits') }}</span>
         </div>
 
         <div v-if="editErrorMessage" data-testid="config-edit-error" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
@@ -1655,7 +1730,7 @@
               data-testid="reload-conflicted-room-config"
               @click="reloadConfigEditAfterConflict"
             >
-              刷新房间并重新编辑
+              {{ t('accountShare.roomEdit.refreshReopen') }}
             </button>
           </div>
         </div>
@@ -1664,20 +1739,20 @@
           <div class="space-y-5">
             <div class="form-section">
               <div class="section-heading">
-                <span>基础配置</span>
-                <small>这里只修改房间级策略；成员账号的代理和配置并发请在“我的账号”中单独管理。</small>
+                <span>{{ t('accountShare.roomEdit.baseConfig') }}</span>
+                <small>{{ t('accountShare.roomEdit.baseConfigHint') }}</small>
               </div>
               <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
                 <label class="field">
-                  <span>房间名称</span>
+                  <span>{{ t('accountShare.create.roomName') }}</span>
                   <input v-model="editForm.name" class="input" :placeholder="ACCOUNT_NAME_BASE_BY_PLATFORM[listingPlatform(editingConfigListing)]" />
                   <small :class="editAccountNameValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
-                    {{ editAccountNameValidationMessage || '名称必须唯一，且不能包含空格、换行或制表符。' }}
+                    {{ editAccountNameValidationMessage || t('accountShare.roomEdit.nameHint') }}
                   </small>
                 </label>
 
                 <label class="field">
-                  <span>成员上限（1～30）</span>
+                  <span>{{ t('accountShare.create.seatLimit') }}</span>
                   <input
                     v-model.number="editForm.seat_limit"
                     class="input"
@@ -1688,11 +1763,11 @@
                     inputmode="numeric"
                     data-testid="edit-room-seat-limit"
                   />
-                  <small>{{ ACCOUNT_SHARE_MEMBER_LIMIT_HELP }}</small>
+                  <small>{{ t('accountShare.memberLimitHelp') }}</small>
                 </label>
 
                 <label class="field">
-                  <span>单用户最高并发</span>
+                  <span>{{ t('accountShare.create.perUserConcurrency') }}</span>
                   <input v-model.number="editForm.per_user_concurrency" class="input" type="number" min="1" :max="editMaxPerUserConcurrency" step="1" />
                   <small :class="editPerUserConcurrencyValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
                     {{ editPerUserConcurrencyValidationMessage || editPerUserConcurrencyLimitTip }}
@@ -1700,22 +1775,22 @@
                 </label>
 
                 <label class="field">
-                  <span>账号倍率</span>
+                  <span>{{ t('usage.accountMultiplier') }}</span>
                   <input v-model.number="editForm.rate_multiplier" class="input" type="number" min="0" step="0.01" />
                 </label>
 
                 <label class="field">
-                  <span>每小时扣费额度</span>
+                  <span>{{ t('accountShare.create.hourlyRate') }}</span>
                   <input v-model.number="editForm.hourly_rate" class="input" type="number" min="0" step="0.0001" />
                 </label>
 
                 <label class="field">
-                  <span>满低消免小时费</span>
+                  <span>{{ t('accountShare.featureTags.hourlyFeeWaiver') }}</span>
                   <input v-model.number="editForm.hourly_fee_waiver_minimum" class="input" type="number" min="0" step="0.0001" />
                 </label>
 
                 <label class="field">
-                  <span>最低余额准入</span>
+                  <span>{{ t('accountShare.create.minBalance') }}</span>
                   <input v-model.number="editForm.min_balance_required" class="input" type="number" min="0" step="0.01" />
                 </label>
               </div>
@@ -1723,12 +1798,12 @@
 
             <div class="form-section">
               <div class="section-heading">
-                <span>模型与保护</span>
-                <small>模型白名单与其他房间条款统一提交，共用同一个版本校验和审计记录。</small>
+                <span>{{ t('accountShare.roomEdit.modelsProtection') }}</span>
+                <small>{{ t('accountShare.roomEdit.modelsHint') }}</small>
               </div>
               <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
                 <div class="field">
-                  <span>模型白名单</span>
+                  <span>{{ t('admin.accounts.modelWhitelist') }}</span>
                   <div class="model-selector-shell">
                     <ModelWhitelistSelector
                       v-model="editAllowedModels"
@@ -1741,21 +1816,21 @@
 
                 <div v-if="listingPlatform(editingConfigListing) === 'openai'" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                   <label class="field">
-                    <span>Codex 5h 保护 %</span>
+                    <span>{{ t('accountShare.create.codex5h') }}</span>
                     <input v-model.number="editForm.codex_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                   <label class="field">
-                    <span>Codex 7d 保护 %</span>
+                    <span>{{ t('accountShare.create.codex7d') }}</span>
                     <input v-model.number="editForm.codex_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                 </div>
                 <div v-else-if="listingPlatform(editingConfigListing) === 'anthropic'" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
                   <label class="field">
-                    <span>Claude 5h 保护 %</span>
+                    <span>{{ t('accountShare.create.claude5h') }}</span>
                     <input v-model.number="editForm.anthropic_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                   <label class="field">
-                    <span>Claude 7d 保护 %</span>
+                    <span>{{ t('accountShare.create.claude7d') }}</span>
                     <input v-model.number="editForm.anthropic_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
                   </label>
                 </div>
@@ -1769,62 +1844,90 @@
               <label v-if="listingPlatform(editingConfigListing) === 'openai'" class="toggle-row mt-3">
                 <input v-model="editForm.codex_cli_only" type="checkbox" />
                 <span>
-                  <strong>仅允许 Codex 官方客户端</strong>
-                  <small>关闭后会允许更多客户端加入该账号房间。</small>
+                  <strong>{{ t('admin.accounts.openai.codexCLIOnly') }}</strong>
+                  <small>{{ t('accountShare.create.cliOnlyHint') }}</small>
                 </span>
               </label>
             </div>
 
             <div class="form-section">
               <div class="section-heading">
-                <span>修改原因</span>
-                <small>每次房间配置变更都会生成审计记录，请写明本次调整目的。</small>
+                <span>{{ t('accountShare.join.passwordLabel') }}</span>
+                <small>{{ t('accountShare.roomEdit.passwordHint') }}</small>
               </div>
               <label class="field">
-                <span>本次修改原因</span>
+                <span>{{ editingConfigListing?.has_password ? t('accountShare.roomEdit.changePassword') : t('accountShare.roomEdit.setPassword') }}</span>
+                <input
+                  v-model="editForm.join_password"
+                  class="input"
+                  type="password"
+                  maxlength="64"
+                  autocomplete="new-password"
+                  :disabled="editJoinPasswordClear"
+                  :placeholder="editingConfigListing?.has_password ? t('accountShare.roomEdit.passwordKeepPlaceholder') : t('accountShare.create.passwordPlaceholder')"
+                  data-testid="edit-room-join-password"
+                />
+                <small>{{ editingConfigListing?.has_password ? t('accountShare.roomEdit.passwordSet') : t('accountShare.roomEdit.passwordUnset') }}</small>
+              </label>
+              <label v-if="editingConfigListing?.has_password" class="toggle-row mt-3">
+                <input v-model="editJoinPasswordClear" type="checkbox" data-testid="edit-room-join-password-clear" />
+                <span>
+                  <strong>{{ t('accountShare.roomEdit.removePassword') }}</strong>
+                  <small>{{ t('accountShare.roomEdit.removePasswordHint') }}</small>
+                </span>
+              </label>
+            </div>
+
+            <div class="form-section">
+              <div class="section-heading">
+                <span>{{ t('accountShare.quotaAdmin.reasonLabel') }}</span>
+                <small>{{ t('accountShare.roomEdit.reasonHint') }}</small>
+              </div>
+              <label class="field">
+                <span>{{ t('accountShare.roomEdit.reasonLabel') }}</span>
                 <textarea
                   v-model="editReason"
                   class="input min-h-24"
                   maxlength="1000"
-                  placeholder="例如：根据近期使用情况调整单用户并发和小时费"
+                  :placeholder="t('accountShare.roomEdit.reasonPlaceholder')"
                   data-testid="room-config-update-reason"
                 ></textarea>
                 <small :class="!editReason.trim() ? 'text-amber-700 dark:text-amber-300' : ''">
-                  {{ editReason.trim().length }}/1000 · 必填，保存后不可从审计记录中移除。
+                  {{ t('accountShare.roomEdit.reasonCount', { length: editReason.trim().length }) }}
                 </small>
               </label>
             </div>
           </div>
 
           <aside class="edit-summary-panel">
-            <span class="text-xs font-semibold text-gray-500 dark:text-dark-300">保存摘要</span>
+            <span class="text-xs font-semibold text-gray-500 dark:text-dark-300">{{ t('accountShare.roomEdit.saveSummary') }}</span>
             <div class="mt-3 grid gap-2">
               <div class="compact-metric">
-                <span>模型</span>
+                <span>{{ t('keyUsage.model') }}</span>
                 <strong>{{ editAllowedModels.length }}</strong>
               </div>
               <div class="compact-metric">
-                <span>可调度账号</span>
+                <span>{{ t('admin.accounts.quotaDashboard.schedulableAccounts') }}</span>
                 <strong>{{ editingConfigListing ? roomEligibleAccountCount(editingConfigListing) : 0 }}/{{ editingConfigListing ? roomAttachedAccountCount(editingConfigListing) : 0 }}</strong>
               </div>
               <div class="compact-metric">
-                <span>成员上限（1～30）</span>
+                <span>{{ t('accountShare.create.seatLimit') }}</span>
                 <strong>{{ editForm.seat_limit }}</strong>
               </div>
               <div class="compact-metric">
-                <span>单用户并发</span>
+                <span>{{ t('accountShare.join.perUserConcurrency') }}</span>
                 <strong>{{ editForm.per_user_concurrency }}</strong>
               </div>
               <div class="compact-metric">
-                <span>每人上限</span>
+                <span>{{ t('accountShare.roomEdit.perUserCap') }}</span>
                 <strong>{{ editMaxPerUserConcurrency }}</strong>
               </div>
               <div class="compact-metric">
-                <span>小时费</span>
+                <span>{{ t('accountShare.membership.fieldHourlyRate') }}</span>
                 <strong>{{ formatNumber(editForm.hourly_rate) }}</strong>
               </div>
               <div class="compact-metric">
-                <span>免小时费低消</span>
+                <span>{{ t('accountShare.membership.fieldFeeWaiver') }}</span>
                 <strong>{{ hourlyFeeWaiverLabel(editForm.hourly_fee_waiver_minimum) }}</strong>
               </div>
             </div>
@@ -1838,7 +1941,7 @@
           class="mr-auto text-sm text-amber-700 dark:text-amber-300"
           data-testid="config-edit-blocked-reason"
         >{{ configEditBlockedReason }}</span>
-        <button type="button" class="btn-secondary" :disabled="savingConfigEdit" @click="() => closeConfigEditDialog()">取消</button>
+        <button type="button" class="btn-secondary" :disabled="savingConfigEdit" @click="() => closeConfigEditDialog()">{{ t('common.cancel') }}</button>
         <button
           type="button"
           class="btn-primary"
@@ -1850,14 +1953,14 @@
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
-          保存配置
+          {{ t('admin.dataManagement.actions.saveConfig') }}
         </button>
       </template>
     </BaseDialog>
 
 <RoomDetailsDrawer
       :listing="detailListing"
-      :title="detailListing ? (isUnknownHistorySnapshot(detailListing) ? '房间 #' + detailListing.id : listingDisplayName(detailListing)) : '房间详情'"
+      :title="detailListing ? (isUnknownHistorySnapshot(detailListing) ? t('accountShare.common.roomIdHash', { id: detailListing.id }) : listingDisplayName(detailListing)) : t('accountShare.detail.title')"
       :loading="detailLoading"
       :error="detailError"
       @close="closeRoomDetails"
@@ -1867,14 +1970,15 @@
         <div class="room-detail-scope room-detail-identity">
           <div class="room-detail-identity-main">
             <span class="listing-platform-icon"><PlatformIcon :platform="listingPlatform(listing)" size="lg" /></span>
-            <p v-if="isUnknownHistorySnapshot(listing)" class="room-detail-muted">房间 #{{ listing.id }} · 历史详情未完整保留</p>
+            <p v-if="isUnknownHistorySnapshot(listing)" class="room-detail-muted">{{ t('accountShare.detail.idIncomplete', { id: listing.id }) }}</p>
             <div v-else>
-              <div class="listing-badge-row"><span class="feature-badge">{{ platformLabel(listingPlatform(listing)) }}</span><span v-if="isOpenAIListing(listing)" :class="accountLevelBadgeClass(listing)">{{ accountLevelBadgeLabel(listing) }}</span><span :class="listingStatusBadgeClass(listing)">{{ detailIsArchive ? '已删除' : listingStatusLabel(listing) }}</span></div>
-              <p class="room-detail-owner" :title="'房间 #' + listing.id + ' · 号主 ' + ownerDisplayName(listing)">房间 #{{ listing.id }} · 号主 {{ ownerDisplayName(listing) }}</p>
+              <div class="listing-badge-row"><span class="feature-badge">{{ platformLabel(listingPlatform(listing)) }}</span><span v-if="isAPIAggregationListing(listing)" class="apikey-badge">APIKEY</span><span v-if="isOpenAIListing(listing)" :class="accountLevelBadgeClass(listing)">{{ accountLevelBadgeLabel(listing) }}</span><span :class="listingStatusBadgeClass(listing)">{{ detailIsArchive ? t('ideas.status.deleted') : listingStatusLabel(listing) }}</span></div>
+              <p v-if="isAPIAggregationListing(listing)" class="room-detail-unverified-note">{{ t('accountShare.detail.unverifiedNote') }}</p>
+              <p class="room-detail-owner" :title="t('accountShare.detail.idOwner', { id: listing.id, owner: ownerDisplayName(listing) })">{{ t('accountShare.detail.idOwner', { id: listing.id, owner: ownerDisplayName(listing) }) }}</p>
             </div>
           </div>
           <button v-if="!detailIsArchive" type="button" class="room-detail-text-button" @click="isOwnListing(listing) ? openRoomAccountsDialog(listing) : openOwnerDialog(listing)">
-            {{ isOwnListing(listing) ? '管理房间账号' : '查看号主' }}<Icon name="arrowRight" size="sm" />
+            {{ isOwnListing(listing) ? t('accountShare.detail.manageAccounts') : t('accountShare.detail.viewOwner') }}<Icon name="arrowRight" size="sm" />
           </button>
         </div>
       </template>
@@ -1892,15 +1996,15 @@
                 data-testid="unknown-history-card"
               >
                 <div class="flex flex-wrap items-center justify-between gap-3">
-                  <h2 class="text-lg font-semibold text-gray-950 dark:text-white">房间 ID：#{{ listing.id }}</h2>
+                  <h2 class="text-lg font-semibold text-gray-950 dark:text-white">{{ t('accountShare.detail.roomIdLabel', { id: listing.id }) }}</h2>
                   <span class="rounded-full bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-dark-200">
-                    已删除
+                    {{ t('ideas.status.deleted') }}
                   </span>
                 </div>
                 <div class="space-y-2 text-sm text-gray-600 dark:text-dark-200">
-                  <p>最后使用：{{ listing.last_used_at ? formatDate(listing.last_used_at) : '时间不可恢复' }}</p>
+                  <p>{{ t('accountShare.detail.lastUsed', { time: listing.last_used_at ? formatDate(listing.last_used_at) : t('accountShare.detail.timeLost')  }) }}</p>
                   <p class="leading-6 text-amber-800 dark:text-amber-200">
-                    该记录生成于历史快照功能上线前，迁移前的房间详情与使用条款不可恢复。
+                    {{ t('accountShare.detail.preMigration') }}
                   </p>
                 </div>
               </div>
@@ -1910,22 +2014,23 @@
                   <div class="min-w-0">
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="feature-badge">{{ platformLabel(listingPlatform(listing)) }}</span>
+                      <span v-if="isAPIAggregationListing(listing)" class="apikey-badge">APIKEY</span>
                       <span v-if="isOpenAIListing(listing)" :class="accountLevelBadgeClass(listing)">
                         {{ accountLevelBadgeLabel(listing) }}
                       </span>
                       <span class="inline-flex min-h-7 items-center rounded-full bg-slate-200 px-3 text-xs font-semibold text-slate-700 dark:bg-dark-700 dark:text-dark-200">
-                        已删除
+                        {{ t('ideas.status.deleted') }}
                       </span>
                     </div>
                     <h2 class="mt-3 break-words text-lg font-semibold text-slate-950 dark:text-white">
-                      {{ listing.room_name || `房间 #${listing.id}` }}
+                      {{ listing.room_name || t('accountShare.common.roomIdHash', { id: listing.id }) }}
                     </h2>
                     <p class="mt-1 break-words text-sm leading-6 text-slate-600 dark:text-dark-300">
-                      号主：{{ listing.owner_username || `用户 ${listing.owner_user_id}` }} · 房间 #{{ listing.id }}
+                      {{ t('accountShare.detail.ownerRoom', { ownerUserId: listing.owner_username || t('accountShare.common.userId', { id: listing.owner_user_id }), id: listing.id }) }}
                     </p>
                   </div>
                   <span class="inline-flex min-h-11 flex-none items-center justify-center rounded-xl bg-slate-100 px-4 text-sm font-semibold text-slate-700 dark:bg-dark-800 dark:text-dark-200">
-                    只读历史快照
+                    {{ t('accountShare.detail.readonlySnapshot') }}
                   </span>
                 </header>
 
@@ -1934,7 +2039,7 @@
                   class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-800 dark:border-amber-800 dark:bg-amber-950/20 dark:text-amber-200"
                   data-testid="backfilled-history-notice"
                 >
-                  这条记录由当前或最终房间信息回填，不是删除当时保存的精确快照。
+                  {{ t('accountShare.detail.backfilledNote') }}
                 </div>
 
                 <div
@@ -1942,33 +2047,33 @@
                   data-testid="archive-terms-snapshot"
                 >
                   <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
-                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史成员上限</span>
-                    <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ listing.seat_limit }} 人</strong>
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">{{ t('accountShare.detail.histSeatLimit') }}</span>
+                    <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ t('accountShare.membership.seatLimitValue', { seatLimit: listing.seat_limit }) }}</strong>
                   </div>
                   <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
-                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史单用户并发</span>
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">{{ t('accountShare.detail.histPerUser') }}</span>
                     <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ listing.per_user_concurrency }}</strong>
                   </div>
                   <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
-                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史费率倍率</span>
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">{{ t('accountShare.detail.histRate') }}</span>
                     <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ formatNumber(listing.rate_multiplier) }}x</strong>
                   </div>
                   <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
-                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史小时费</span>
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">{{ t('accountShare.detail.histHourly') }}</span>
                     <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ formatNumber(listing.hourly_rate) }}</strong>
                   </div>
                   <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
-                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史免小时费低消</span>
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">{{ t('accountShare.detail.histWaiver') }}</span>
                     <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ hourlyFeeWaiverLabel(listing.hourly_fee_waiver_minimum) }}</strong>
                   </div>
                   <div class="rounded-xl bg-slate-50 p-3 dark:bg-dark-800">
-                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史最低余额</span>
+                    <span class="text-xs font-medium text-slate-500 dark:text-dark-400">{{ t('accountShare.detail.histMinBalance') }}</span>
                     <strong class="mt-1 block text-sm text-slate-950 dark:text-white">{{ formatNumber(listing.min_balance_required) }}</strong>
                   </div>
                 </div>
 
                 <div class="rounded-xl border border-slate-200 bg-slate-50/70 p-3 dark:border-dark-700 dark:bg-dark-800/70">
-                  <span class="text-xs font-medium text-slate-500 dark:text-dark-400">历史允许模型</span>
+                  <span class="text-xs font-medium text-slate-500 dark:text-dark-400">{{ t('accountShare.detail.histModels') }}</span>
                   <div class="mt-2 flex flex-wrap gap-2">
                     <span
                       v-for="model in listing.allowed_models"
@@ -1978,7 +2083,7 @@
                       {{ model }}
                     </span>
                     <span v-if="listing.allowed_models.length === 0" class="text-sm text-slate-500 dark:text-dark-400">
-                      未记录
+                      {{ t('accountShare.membership.notRecorded') }}
                     </span>
                   </div>
                 </div>
@@ -1995,49 +2100,50 @@
               data-testid="unknown-history-card"
             >
               <div class="flex flex-wrap items-center justify-between gap-3">
-                <h2 class="text-lg font-semibold text-gray-950 dark:text-white">房间 ID：#{{ listing.id }}</h2>
+                <h2 class="text-lg font-semibold text-gray-950 dark:text-white">{{ t('accountShare.detail.roomIdLabel', { id: listing.id }) }}</h2>
                 <span class="rounded-full bg-gray-200 px-3 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-dark-200">
-                  {{ listing.deleted ? '已删除' : '历史记录' }}
+                  {{ listing.deleted ? t('ideas.status.deleted') : t('accountShare.membership.statusHistory') }}
                 </span>
               </div>
               <div class="space-y-2 text-sm text-gray-600 dark:text-dark-200">
-                <p>最后使用：{{ listing.last_used_at ? formatDate(listing.last_used_at) : '时间不可恢复' }}</p>
+                <p>{{ t('accountShare.detail.lastUsed', { time: listing.last_used_at ? formatDate(listing.last_used_at) : t('accountShare.detail.timeLost')  }) }}</p>
                 <p class="leading-6 text-amber-800 dark:text-amber-200">
-                  该记录生成于历史快照功能上线前，迁移前的房间详情与使用条款不可恢复。
+                  {{ t('accountShare.detail.preMigration') }}
                 </p>
               </div>
             </div>
           </template>
           <template v-else>
             <section class="room-detail-section">
-              <div class="room-detail-section-heading"><h3>费用一目了然</h3><span>公开加入价格</span></div>
+              <div class="room-detail-section-heading"><h3>{{ t('accountShare.detail.pricingTitle') }}</h3><span>{{ t('accountShare.detail.publicPricing') }}</span></div>
               <div class="listing-price-grid">
                 <div class="listing-price-primary">
-                  <span>请求倍率</span>
+                  <span>{{ t('accountShare.card.requestRate') }}</span>
                   <strong>{{ formatNumber(listing.rate_multiplier) }}<small>×</small></strong>
-                  <small>按模型价格计费</small>
+                  <small>{{ t('accountShare.detail.modelPricing') }}</small>
                 </div>
                 <div>
-                  <span>占位费 / 小时</span>
+                  <span>{{ t('accountShare.detail.holdingPerHour') }}</span>
                   <strong>{{ formatNumber(listing.hourly_rate) }}</strong>
-                  <small>按激活分钟结算</small>
+                  <small>{{ t('accountShare.detail.perActiveMinute') }}</small>
                 </div>
                 <div>
-                  <span title="每小时减免低消">减免低消</span>
+                  <span :title="t('accountShare.detail.hourlyWaiver')">{{ t('accountShare.detail.waiverShort') }}</span>
                   <strong>{{ hourlyFeeWaiverLabel(listing.hourly_fee_waiver_minimum) }}</strong>
-                  <small>达标退回窗口占位费</small>
+                  <small>{{ t('accountShare.detail.waiverRefund') }}</small>
                 </div>
               </div>
-              <p v-if="isOwnListing(listing)" class="room-detail-callout">这是你的房间：自用免占位费，请求按 {{ ownerSelfUseRateMultiplierLabel }} 结算。下方公开价格适用于其他用户。</p>
+              <p v-if="isOwnListing(listing)" class="room-detail-callout">{{ t('accountShare.detail.yourRoom', { rate: ownerSelfUseRateMultiplierLabel }) }}</p>
               <div class="room-detail-facts">
-                <div><span>最低余额准入</span><strong>{{ formatNumber(listing.min_balance_required) }}</strong></div>
-                <div><span>单用户最高并发</span><strong>{{ listing.per_user_concurrency }}</strong></div>
-                <div><span>成员席位</span><strong>{{ listing.active_seats }} / {{ listing.seat_limit }}</strong></div>
-                <div><span>房间评分</span><strong>{{ listingRatingLabel(listing) }}</strong></div>
+                <div><span>{{ t('accountShare.create.minBalance') }}</span><strong>{{ formatNumber(listing.min_balance_required) }}</strong></div>
+                <div><span>{{ t('accountShare.create.perUserConcurrency') }}</span><strong>{{ listing.per_user_concurrency }}</strong></div>
+                <div><span>{{ t('accountShare.detail.memberSeats') }}</span><strong>{{ listing.active_seats }} / {{ listing.seat_limit }}</strong></div>
+                <div><span>{{ t('accountShare.detail.joinMode') }}</span><strong>{{ listing.has_password ? t('accountShare.detail.passwordNeeded') : t('accountShare.detail.openJoin') }}</strong></div>
+                <div><span>{{ t('accountShare.detail.roomRating') }}</span><strong>{{ listingRatingLabel(listing) }}</strong></div>
               </div>
             </section>
             <section class="room-detail-section">
-              <div class="room-detail-section-heading"><h3>房间运行情况</h3><span>房间账号聚合信息</span></div>
+              <div class="room-detail-section-heading"><h3>{{ t('accountShare.detail.runtimeTitle') }}</h3><span>{{ t('accountShare.detail.aggregateInfo') }}</span></div>
               <div class="listing-health-panel">
                 <div class="listing-health-grid">
                   <div class="listing-status-stack">
@@ -2053,7 +2159,7 @@
                     <div class="listing-runtime-tile listing-runtime-summary">
                       <Icon name="chart" size="sm" />
                       <div class="listing-runtime-summary-content">
-                        <span>{{ listing.deleted || listing.status !== 'active' ? '并发状态' : '可用并发' }}</span>
+                        <span>{{ listing.deleted || listing.status !== 'active' ? t('accountShare.detail.concurrencyStatus') : t('accountShare.detail.availableConcurrency') }}</span>
                         <strong>{{ listing.deleted || listing.status !== 'active' ? `当前${roomAvailableConcurrencyLabel(listing)}` : roomAvailableConcurrencyLabel(listing) }}</strong>
                       </div>
                     </div>
@@ -2066,14 +2172,14 @@
                   >
                     <div class="availability-progress-row">
                       <div class="combined-availability-head">
-                        <span>5H 综合已用</span>
+                        <span>{{ t('accountShare.detail.used5h') }}</span>
                         <strong>{{ roomWindowUtilizationLabel(listing.quota_summary.window_5h) }}</strong>
                       </div>
                       <div
                         v-if="roomWindowUtilization(listing.quota_summary.window_5h) !== null"
                         class="combined-availability-track"
                         role="progressbar"
-                        aria-label="房间 5H 综合已用量"
+                        :aria-label="t('accountShare.detail.room5h')"
                         aria-valuemin="0"
                         aria-valuemax="100"
                         :aria-valuenow="roomWindowUtilization(listing.quota_summary.window_5h) ?? undefined"
@@ -2087,14 +2193,14 @@
 
                     <div class="availability-progress-row">
                       <div class="combined-availability-head">
-                        <span>7D 综合已用</span>
+                        <span>{{ t('accountShare.detail.used7d') }}</span>
                         <strong>{{ roomWindowUtilizationLabel(listing.quota_summary.window_7d) }}</strong>
                       </div>
                       <div
                         v-if="roomWindowUtilization(listing.quota_summary.window_7d) !== null"
                         class="combined-availability-track"
                         role="progressbar"
-                        aria-label="房间 7D 综合已用量"
+                        :aria-label="t('accountShare.detail.room7d')"
                         aria-valuemin="0"
                         aria-valuemax="100"
                         :aria-valuenow="roomWindowUtilization(listing.quota_summary.window_7d) ?? undefined"
@@ -2116,50 +2222,50 @@
                   <strong>{{ validityInfo(listing)?.expiresAtLabel }}</strong>
                 </div>
               </div>
-              <p class="room-detail-muted">席位数量与请求并发是不同的限制；房间状态和额度会随实际使用变化。</p>
+              <p class="room-detail-muted">{{ t('accountShare.detail.seatsVsConcurrency') }}</p>
             </section>
             <section class="room-detail-section">
-              <div class="room-detail-section-heading"><h3>计费与退出规则</h3></div>
+              <div class="room-detail-section-heading"><h3>{{ t('accountShare.detail.billingExitTitle') }}</h3></div>
               <ol class="room-detail-rules">
-                <li><strong>请求费用</strong><p>按实际模型用量与加入时确认的倍率结算。房间详情为当前公开配置，加入前会再次展示确认条款。</p></li>
-                <li><strong>占位与减免</strong><p>占位费按实际激活分钟预扣。每个低消窗口最长 1 小时，消费达标后退回该窗口占位费，不跨窗口累计抵扣。</p></li>
-                <li><strong>Key 与退出</strong><p>一个账号模式 Key 同时使用一个房间。连续空闲达到设定时间后自动退出；存在请求或结算时，完成退出后才能重新绑定。</p></li>
+                <li><strong>{{ t('accountShare.mySpend.requestCost') }}</strong><p>{{ t('accountShare.detail.billingRule') }}</p></li>
+                <li><strong>{{ t('accountShare.detail.holdWaiverTitle') }}</strong><p>{{ t('accountShare.detail.holdWaiverRule') }}</p></li>
+                <li><strong>{{ t('accountShare.detail.keyExitTitle') }}</strong><p>{{ t('accountShare.detail.keyExitRule') }}</p></li>
               </ol>
-              <div class="room-detail-facts room-detail-dates"><div><span>创建时间</span><strong>{{ formatDate(listing.created_at) }}</strong></div><div><span>最后更新</span><strong>{{ formatDate(listing.updated_at) }}</strong></div></div>
+              <div class="room-detail-facts room-detail-dates"><div><span>{{ t('userAccounts.created') }}</span><strong>{{ formatDate(listing.created_at) }}</strong></div><div><span>{{ t('accountShare.detail.lastUpdated') }}</span><strong>{{ formatDate(listing.updated_at) }}</strong></div></div>
             </section>
           </template>
         </div>
       </template>
       <template #models="{ listing }">
         <div class="room-detail-scope room-detail-sections">
-          <p v-if="isUnknownHistorySnapshot(listing)" class="room-detail-callout">这条记录的历史模型与使用限制不可恢复。</p>
+          <p v-if="isUnknownHistorySnapshot(listing)" class="room-detail-callout">{{ t('accountShare.detail.histLimitsLost') }}</p>
           <section v-else class="room-detail-section">
-            <div class="room-detail-section-heading"><h3>{{ detailIsArchive ? '历史允许模型' : '可使用的模型' }}</h3><span>{{ listing.allowed_models.length }} 个 · 点击复制</span></div>
+            <div class="room-detail-section-heading"><h3>{{ detailIsArchive ? t('accountShare.detail.histModels') : t('accountShare.detail.usableModels') }}</h3><span>{{ t('accountShare.detail.modelsCount', { length: listing.allowed_models.length }) }}</span></div>
             <div class="room-detail-model-list"><button v-for="model in listing.allowed_models" :key="model" type="button" @click="copyModelName(model)"><span>{{ model }}</span><Icon name="copy" size="sm" /></button></div>
-            <p v-if="listing.allowed_models.length === 0" class="room-detail-muted">{{ detailIsArchive ? '历史记录未保留模型信息。' : '当前房间没有可用模型。' }}</p>
+            <p v-if="listing.allowed_models.length === 0" class="room-detail-muted">{{ detailIsArchive ? t('accountShare.detail.modelsLost') : t('accountShare.detail.noUsableModels') }}</p>
           </section>
           <section v-if="!isUnknownHistorySnapshot(listing)" class="room-detail-section">
-            <div class="room-detail-section-heading"><h3>使用限制与额度保护</h3></div>
+            <div class="room-detail-section-heading"><h3>{{ t('accountShare.detail.limitsTitle') }}</h3></div>
             <div class="room-detail-facts">
-              <div><span>成员上限</span><strong>{{ listing.seat_limit }} 人</strong></div>
-              <div><span>单用户并发</span><strong>{{ listing.per_user_concurrency }}</strong></div>
-              <div v-if="!detailIsArchive"><span>可调度总并发</span><strong>{{ listing.account_concurrency }}</strong></div>
-              <div v-if="isOpenAIListing(listing)"><span>客户端要求</span><strong>{{ listing.codex_cli_only ? '仅 Codex 官方客户端' : '未限制为 Codex 官方客户端' }}</strong></div>
-              <template v-if="isOpenAIListing(listing)"><div><span>Codex 5H 保护阈值</span><strong>{{ listing.codex_5h_limit_percent }}%</strong></div><div><span>Codex 7D 保护阈值</span><strong>{{ listing.codex_7d_limit_percent }}%</strong></div></template>
-              <template v-else-if="listingPlatform(listing) === 'anthropic'"><div><span>Claude 5H 保护阈值</span><strong>{{ anthropic5hLimitPercent(listing) }}%</strong></div><div><span>Claude 7D 保护阈值</span><strong>{{ anthropic7dLimitPercent(listing) }}%</strong></div></template>
-              <div v-else-if="!detailIsArchive && listing.account_count === 1"><span>Opencode 用量</span><strong>{{ opencodeUsageLabel(listing) }}</strong></div>
+              <div><span>{{ t('accountShare.membership.fieldSeatLimit') }}</span><strong>{{ t('accountShare.membership.seatLimitValue', { seatLimit: listing.seat_limit }) }}</strong></div>
+              <div><span>{{ t('accountShare.join.perUserConcurrency') }}</span><strong>{{ listing.per_user_concurrency }}</strong></div>
+              <div v-if="!detailIsArchive"><span>{{ t('accountShare.detail.totalConcurrency') }}</span><strong>{{ listing.account_concurrency }}</strong></div>
+              <div v-if="isOpenAIListing(listing)"><span>{{ t('accountShare.detail.clientReq') }}</span><strong>{{ listing.codex_cli_only ? t('accountShare.detail.codexOnly') : t('accountShare.detail.notCodexOnly') }}</strong></div>
+              <template v-if="isOpenAIListing(listing)"><div><span>{{ t('accountShare.detail.codex5hThreshold') }}</span><strong>{{ listing.codex_5h_limit_percent }}%</strong></div><div><span>{{ t('accountShare.detail.codex7dThreshold') }}</span><strong>{{ listing.codex_7d_limit_percent }}%</strong></div></template>
+              <template v-else-if="listingPlatform(listing) === 'anthropic'"><div><span>{{ t('accountShare.detail.claude5hThreshold') }}</span><strong>{{ anthropic5hLimitPercent(listing) }}%</strong></div><div><span>{{ t('accountShare.detail.claude7dThreshold') }}</span><strong>{{ anthropic7dLimitPercent(listing) }}%</strong></div></template>
+              <div v-else-if="!detailIsArchive && listing.account_count === 1"><span>{{ t('accountShare.detail.opencodeUsage') }}</span><strong>{{ opencodeUsageLabel(listing) }}</strong></div>
             </div>
-            <p class="room-detail-muted">模型列表是房间允许使用的范围；额度保护阈值与当前已用比例不同。</p>
+            <p class="room-detail-muted">{{ t('accountShare.detail.limitsHint') }}</p>
           </section>
         </div>
       </template>
       <template #reviews="{ listing }">
-        <p v-if="detailIsArchive" class="room-detail-scope room-detail-muted">历史快照未保存当时的评论，当前评价不会作为历史记录展示。</p>
+        <p v-if="detailIsArchive" class="room-detail-scope room-detail-muted">{{ t('accountShare.detail.snapshotNoReviews') }}</p>
         <RoomReviewsPanel v-else :listing-id="listing.id" :rating-average="listing.rating_avg" :rating-count="listing.rating_count" />
       </template>
       <template #usage="{ listing }">
         <div class="room-detail-scope room-detail-sections">
-          <p v-if="detailIsArchive" class="room-detail-callout">这是已删除房间的只读记录。每次使用的消费与条款，可在“我的使用 → 历史记录”查看。</p>
+          <p v-if="detailIsArchive" class="room-detail-callout">{{ t('accountShare.detail.deletedReadonly') }}</p>
           <template v-else>
             <div
               v-if="listing.current_membership_id || (isListingMembershipEnding(listing) ? listing.queue_membership_id : undefined)"
@@ -2169,36 +2275,36 @@
               <div class="membership-status-head">
                 <div>
                   <div class="membership-title">
-                    {{ membershipPanelTitle(listing) }}，绑定 {{ boundApiKeyDisplayName(listing) }}
+                    {{ t('accountShare.join.termsIntro', { room: membershipPanelTitle(listing), key: boundApiKeyDisplayName(listing) }) }}
                   </div>
                   <div v-if="!isListingMembershipEnding(listing)" class="membership-subtitle">
                     {{ membershipPanelSubtitle(listing) }}
                     <span v-if="boundApiKeyID(listing)"> · ID #{{ boundApiKeyID(listing) }}</span>
                   </div>
                 </div>
-                <span v-if="!isListingMembershipEnding(listing)" class="membership-status-pill">当前使用</span>
+                <span v-if="!isListingMembershipEnding(listing)" class="membership-status-pill">{{ t('accountShare.mySpend.tabUsing') }}</span>
               </div>
               <div class="membership-compact-body">
                 <div class="membership-main">
                   <div class="membership-detail-grid">
                     <div v-if="listing.current_joined_at">
-                      <span>激活时间</span>
+                      <span>{{ t('accountShare.progress.activeTime') }}</span>
                       <strong>{{ formatDate(listing.current_joined_at) }}</strong>
                     </div>
                     <div v-if="!isListingMembershipEnding(listing) && waiverProgressVisible(listing)">
-                      <span>窗口剩余</span>
+                      <span>{{ t('accountShare.progress.windowRemaining') }}</span>
                       <strong>{{ waiverProgressRemainingLabel(listing) }}</strong>
                     </div>
                     <div v-else-if="!isListingMembershipEnding(listing) && listing.current_paid_until">
-                      <span>下次预付</span>
+                      <span>{{ t('accountShare.progress.nextPrepay') }}</span>
                       <strong>{{ formatCountdownUntil(listing.current_paid_until) }}</strong>
                     </div>
                     <div v-if="listing.current_last_request_at || listing.current_waiver_progress?.last_request_at">
-                      <span>最近请求</span>
+                      <span>{{ t('accountShare.progress.lastRequest') }}</span>
                       <strong>{{ formatDate(listing.current_waiver_progress?.last_request_at || listing.current_last_request_at) }}</strong>
                     </div>
                     <div v-if="listing.current_billed_until && (isListingMembershipEnding(listing) || !waiverProgressVisible(listing))">
-                      <span>已结算到</span>
+                      <span>{{ t('accountShare.progress.settledTo') }}</span>
                       <strong>{{ formatDate(listing.current_billed_until) }}</strong>
                     </div>
                   </div>
@@ -2210,7 +2316,7 @@
                   >
                     <div class="waiver-progress-top">
                       <div>
-                        <span>低消进度</span>
+                        <span>{{ t('accountShare.progress.waiverProgress') }}</span>
                         <strong>{{ waiverProgressTitle(listing) }}</strong>
                       </div>
                       <span class="waiver-progress-badge">{{ waiverProgressStatusLabel(listing) }}</span>
@@ -2244,16 +2350,16 @@
                         {{ membershipEndObservation(listing) }}
                       </small>
                       <span v-if="pendingMembershipEndForListing(listing)?.operationQueryError" class="mt-1 text-red-600 dark:text-red-300" role="status">
-                        进度查询失败：{{ pendingMembershipEndForListing(listing)?.operationQueryError }}；系统会继续重试。
+                        {{ t('accountShare.progress.queryFailed', { error: pendingMembershipEndForListing(listing)?.operationQueryError  }) }}
                       </span>
                       <span v-if="pendingMembershipEndForListing(listing)?.bindingCheckError" class="mt-1 text-red-600 dark:text-red-300" role="status">
-                        Key 绑定核对失败：{{ pendingMembershipEndForListing(listing)?.bindingCheckError }}；当前退出状态保留，稍后继续核对。
+                        {{ t('accountShare.progress.bindingCheckFailed', { error: pendingMembershipEndForListing(listing)?.bindingCheckError  }) }}
                       </span>
                     </div>
                   </div>
                   <template v-else>
                     <div class="idle-timeout-control">
-                      <label :for="`idle-timeout-current-${listing.id}`">空闲退出</label>
+                      <label :for="`idle-timeout-current-${listing.id}`">{{ t('accountShare.membership.fieldIdleTimeout') }}</label>
                       <div class="idle-timeout-row">
                         <input
                           :id="`idle-timeout-current-${listing.id}`"
@@ -2264,14 +2370,14 @@
                           :max="ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES"
                           step="1"
                         />
-                        <span>分钟</span>
+                        <span>{{ t('common.minutes') }}</span>
                         <button
                           class="btn-secondary min-h-11"
                           type="button"
                           :disabled="savingIdleTimeoutId === Number(listing.current_membership_id || (isListingMembershipEnding(listing) ? listing.queue_membership_id : undefined) || 0)"
                           @click="saveIdleTimeout(listing)"
                         >
-                          保存
+                          {{ t('common.save') }}
                         </button>
                       </div>
                     </div>
@@ -2282,26 +2388,26 @@
                         :disabled="endingId !== null || isListingMembershipEnding(listing)"
                         @click="handleEndUseClick(listing)"
                       >
-                        结束使用
+                        {{ t('accountShare.endUse.title') }}
                       </button>
                     </div>
                     <div
                       class="idle-timeout-hint"
-                      :title="'连续空闲达到设定分钟数后会自动退出并停止占位，不能填 0。'"
+                      :title="t('accountShare.idle.hint')"
                     >
-                      空闲到时自动退出并停止占位
+                      {{ t('accountShare.idle.autoExitDesc') }}
                     </div>
                   </template>
                 </div>
               </div>
             </div>
-            <section v-if="!listing.current_membership_id && !isListingMembershipEnding(listing)" class="room-detail-section"><h3>开始使用这个房间</h3><p class="room-detail-muted">在底部选择账号模式 Key，并设置连续空闲多久后自动退出。点击加入后会展示本次使用的确认条款。</p></section>
+            <section v-if="!listing.current_membership_id && !isListingMembershipEnding(listing)" class="room-detail-section"><h3>{{ t('accountShare.join.startUsing') }}</h3><p class="room-detail-muted">{{ t('accountShare.join.startUsingDesc') }}</p></section>
             <template v-if="isManagementView || isOwnListing(listing) || authStore.isAdmin">
               <div class="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 text-sm dark:border-dark-700 dark:bg-dark-800/60">
                 <div class="flex flex-col gap-1 text-gray-600 dark:text-dark-200">
-                  <span>房间 ID：#{{ listing.id }}</span>
-                  <span>房间账号：{{ roomAggregateAccountCountLabel(listing) }}</span>
-                  <span>更新：{{ formatDate(listing.updated_at) }}</span>
+                  <span>{{ t('accountShare.detail.roomIdLabel', { id: listing.id }) }}</span>
+                  <span>{{ t('accountShare.join.roomAccountsLabel', { count: roomAggregateAccountCountLabel(listing)  }) }}</span>
+                  <span>{{ t('accountShare.join.updatedAt', { time: formatDate(listing.updated_at)  }) }}</span>
                 </div>
                 <div v-if="!listing.deleted" class="listing-management-actions">
                   <button
@@ -2310,7 +2416,7 @@
                     @click="openRoomAccountsDialog(listing)"
                   >
                     <Icon name="database" size="xs" />
-                    查看房间账号
+                    {{ t('accountShare.detail.viewAccounts') }}
                   </button>
                   <button
                     type="button"
@@ -2320,7 +2426,7 @@
                     @click="requestOpenConfigEdit(listing)"
                   >
                     <Icon name="edit" size="xs" />
-                    编辑配置
+                    {{ t('accountShare.detail.editConfig') }}
                   </button>
                   <button
                     v-if="(isOwnListing(listing) || authStore.isAdmin) && capabilities?.lifecycle_enabled !== false"
@@ -2330,7 +2436,7 @@
                     @click="openRoomLifecycleDialog(listing)"
                   >
                     <Icon name="cog" size="xs" />
-                    {{ listing.status === 'active' ? '下架' : listing.status === 'paused' ? '上架 / 更多操作' : '查看处理进度' }}
+                    {{ listing.status === 'active' ? t('ideas.admin.takedown') : listing.status === 'paused' ? t('accountShare.detail.moreActions') : t('accountShare.detail.viewProgress') }}
                   </button>
                 </div>
                 <div
@@ -2341,13 +2447,13 @@
                 </div>
               </div>
             </template>
-            <div class="room-detail-secondary-actions"><button type="button" class="btn-secondary min-h-11" @click="openMySpendDialog(listing)"><Icon name="dollar" size="sm" />我的消费</button><button type="button" class="btn-secondary min-h-11" @click="openUsageGuideDialog"><Icon name="book" size="sm" />使用说明</button></div>
+            <div class="room-detail-secondary-actions"><button type="button" class="btn-secondary min-h-11" @click="openMySpendDialog(listing)"><Icon name="dollar" size="sm" />{{ t('accountShare.page.mySpend') }}</button><button type="button" class="btn-secondary min-h-11" @click="openUsageGuideDialog"><Icon name="book" size="sm" />{{ t('affiliate.tips.title') }}</button></div>
           </template>
         </div>
       </template>
       <template #actions="{ listing, showUsage }">
         <div class="room-detail-scope">
-          <div v-if="detailIsArchive || isUnknownHistorySnapshot(listing)" class="room-detail-footer-summary"><span>只读历史记录</span><button type="button" class="btn-secondary min-h-11" @click="closeRoomDetails">关闭详情</button></div>
+          <div v-if="detailIsArchive || isUnknownHistorySnapshot(listing)" class="room-detail-footer-summary"><span>{{ t('accountShare.detail.readonlyHistory') }}</span><button type="button" class="btn-secondary min-h-11" @click="closeRoomDetails">{{ t('accountShare.detail.close') }}</button></div>
           <template v-else>
             <div v-if="canShowListingJoinSection(listing)" class="listing-join-section">
               <div v-if="listingJoinUnavailableReason(listing)" class="listing-unavailable-note">
@@ -2356,7 +2462,7 @@
               </div>
               <div v-if="isListingMembershipEnding(listing)" class="listing-unavailable-note">
                 <Icon name="refresh" size="sm" class="animate-spin" />
-                <span>退出结算处理中，结算完成后才能重新加入。</span>
+                <span>{{ t('accountShare.join.membershipEndingSuffix') }}</span>
               </div>
               <div v-if="isOwnListing(listing) && selfUseSettingsError" class="listing-unavailable-note">
                 <Icon name="exclamationCircle" size="sm" />
@@ -2389,14 +2495,14 @@
                     </span>
                     <span class="mode-key-option-copy">
                       <strong>{{ option.label }}</strong>
-                      <small>账号模式 Key</small>
+                      <small>{{ t('accountShare.estimate.modeKey') }}</small>
                     </span>
                     <Icon v-if="selected" name="check" size="sm" class="text-primary-500" />
                   </template>
                 </Select>
                 <div class="listing-timeout-row">
                   <label class="idle-timeout-join idle-timeout-join-inline">
-                    <span>空闲退出</span>
+                    <span>{{ t('accountShare.membership.fieldIdleTimeout') }}</span>
                     <div class="idle-timeout-input-row">
                       <input
                         v-model.number="idleTimeoutByListing[listing.id]"
@@ -2406,26 +2512,26 @@
                         :max="ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES"
                         step="1"
                       />
-                      <span class="idle-timeout-join-unit">分钟</span>
+                      <span class="idle-timeout-join-unit">{{ t('common.minutes') }}</span>
                     </div>
                   </label>
-                  <div class="idle-timeout-inline-note" :title="isOwnListing(listing) ? '默认 10 分钟。连续空闲到设定时间后会自动解除绑定，不能填 0。' : '默认 10 分钟。连续空闲到设定时间后会自动退出并停止占位，不能填 0。'">
+                  <div class="idle-timeout-inline-note" :title="isOwnListing(listing) ? t('accountShare.idle.hintUnbind') : t('accountShare.idle.hintExit')">
                     <Icon name="infoCircle" size="xs" />
-                    <span>{{ isOwnListing(listing) ? '连续空闲后自动解绑' : '连续空闲后自动退出' }}</span>
+                    <span>{{ isOwnListing(listing) ? t('accountShare.idle.autoUnbind') : t('accountShare.idle.autoExit') }}</span>
                   </div>
                 </div>
                 <button
                   class="btn-primary h-9"
                   type="button"
                   :disabled="Boolean(listingJoinUnavailableReason(listing)) || isListingMembershipEnding(listing) || modeKeysLoading || preparingJoinId !== null || joiningId !== null || selfUseJoinUnavailable(listing)"
-                  :title="isListingMembershipEnding(listing) ? '退出结算处理中' : (listingJoinUnavailableReason(listing) || (selfUseJoinUnavailable(listing) ? selfUseSettingsError : undefined))"
+                  :title="isListingMembershipEnding(listing) ? t('accountShare.join.settling') : (listingJoinUnavailableReason(listing) || (selfUseJoinUnavailable(listing) ? selfUseSettingsError : undefined))"
                   @click="joinUse(listing)"
                 >
-                  {{ isListingMembershipEnding(listing) ? '退出结算处理中' : (listingJoinUnavailableReason(listing) ? listingJoinUnavailableReason(listing) : (preparingJoinId === listing.id ? '准备确认中' : (joiningId === listing.id ? (isOwnListing(listing) ? '绑定中' : '加入中') : (modeKeysLoading ? '加载 Key 中' : (isOwnListing(listing) ? (selfUseSettingsLoading ? '加载自用配置' : (selfUseSettingsError ? '自用配置不可用' : '使用自己的账号')) : '加入使用'))))) }}
+                  {{ isListingMembershipEnding(listing) ? t('accountShare.join.settling') : (listingJoinUnavailableReason(listing) ? listingJoinUnavailableReason(listing) : (preparingJoinId === listing.id ? t('accountShare.join.preparing') : (joiningId === listing.id ? (isOwnListing(listing) ? t('accountShare.join.binding') : t('accountShare.join.joining')) : (modeKeysLoading ? t('accountShare.join.loadingKeys') : (isOwnListing(listing) ? (selfUseSettingsLoading ? t('accountShare.join.loadingSelfUse') : (selfUseSettingsError ? t('accountShare.errors.selfUseUnavailable') : t('accountShare.join.useOwnAccount'))) : t('accountShare.join.joinUse')))))) }}
                 </button>
               </div>
             </div>
-            <div v-else class="room-detail-footer-summary"><span>{{ listing.current_membership_id || isListingMembershipEnding(listing) ? membershipPanelTitle(listing) : listingStatusLabel(listing) }}</span><button type="button" class="btn-primary min-h-11" @click="showUsage">查看使用与管理<Icon name="arrowRight" size="sm" /></button></div>
+            <div v-else class="room-detail-footer-summary"><span>{{ listing.current_membership_id || isListingMembershipEnding(listing) ? membershipPanelTitle(listing) : listingStatusLabel(listing) }}</span><button type="button" class="btn-primary min-h-11" @click="showUsage">{{ t('accountShare.join.viewUsage') }}<Icon name="arrowRight" size="sm" /></button></div>
           </template>
         </div>
       </template>
@@ -2433,7 +2539,7 @@
 
     <BaseDialog
       :show="pendingEndUse !== null"
-      title="确认结束使用"
+      :title="t('accountShare.endUse.confirmTitle')"
       width="narrow"
       :close-on-escape="endingId === null"
       @close="cancelEndUse"
@@ -2443,14 +2549,14 @@
       <template #footer>
         <div class="flex justify-end space-x-3">
           <button type="button" class="btn btn-secondary" :disabled="endingId !== null" @click="cancelEndUse">
-            取消
+            {{ t('common.cancel') }}
           </button>
           <button type="button" class="btn btn-danger" :disabled="endingId !== null" @click="confirmEndUse">
             <svg v-if="endingId !== null" class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
               <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
               <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
             </svg>
-            {{ endingId !== null ? '处理中...' : '结束使用' }}
+            {{ endingId !== null ? t('common.processing') : t('accountShare.endUse.title') }}
           </button>
         </div>
       </template>
@@ -2458,7 +2564,7 @@
 
     <BaseDialog
       :show="pendingReview !== null"
-      title="为本次使用评分"
+      :title="t('accountShare.review.title')"
       width="wide"
       :z-index="70"
       @close="closeReviewDialog"
@@ -2468,12 +2574,12 @@
           <div class="flex flex-col gap-1">
             <span class="text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-dark-300">{{ pendingReview.platformLabel }}</span>
             <strong class="text-base text-gray-900 dark:text-dark-50">{{ pendingReview.roomName }}</strong>
-            <span class="text-sm text-gray-500 dark:text-dark-300">号主：{{ pendingReview.ownerName }}</span>
+            <span class="text-sm text-gray-500 dark:text-dark-300">{{ t('accountShare.review.owner', { name: pendingReview.ownerName  }) }}</span>
           </div>
         </div>
 
         <div>
-          <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-dark-100">评分</label>
+          <label class="mb-2 block text-sm font-medium text-gray-700 dark:text-dark-100">{{ t('accountShare.sortField.rating') }}</label>
           <div class="grid grid-cols-6 gap-2 sm:grid-cols-11">
             <button
               v-for="score in reviewScoreOptions"
@@ -2489,14 +2595,16 @@
         </div>
 
         <label class="field">
-          <span>留言</span>
+          <span>{{ t('accountShare.review.comment') }}</span>
           <textarea
             v-model="pendingReview.comment"
             class="input min-h-[120px] resize-y"
             maxlength="1000"
-            placeholder="可以留空；填写后会先进入平台审核"
+            :disabled="commentReviewDisabled"
+            :placeholder="commentReviewDisabled ? t('accountShare.review.moderationOff') : t('accountShare.review.moderationOn')"
           ></textarea>
-          <small>{{ pendingReview.comment.length }}/1000</small>
+          <small v-if="commentReviewDisabled" class="text-amber-600 dark:text-amber-400">{{ t('accountShare.review.commentDisabled') }}</small>
+          <small v-else>{{ pendingReview.comment.length }}/1000</small>
         </label>
 
         <div v-if="pendingReview.error" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
@@ -2505,21 +2613,21 @@
       </div>
 
       <template #footer>
-        <button type="button" class="btn-secondary" :disabled="pendingReview?.submitting" @click="closeReviewDialog">暂不评分</button>
+        <button type="button" class="btn-secondary" :disabled="pendingReview?.submitting" @click="closeReviewDialog">{{ t('accountShare.review.skip') }}</button>
         <button type="button" class="btn-primary" :disabled="pendingReview?.submitting || pendingReview?.score === null" @click="submitReview">
           <Icon v-if="!pendingReview?.submitting" name="checkCircle" size="sm" class="mr-2" />
           <svg v-else class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
             <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
             <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
           </svg>
-          提交评分
+          {{ t('accountShare.review.submit') }}
         </button>
       </template>
     </BaseDialog>
 
     <BaseDialog
       :show="ownerDialog.show"
-      :title="ownerDialog.ownerUsername ? `${ownerDialog.ownerUsername} 的账号` : '号主账号'"
+      :title="ownerDialog.ownerUsername ? t('accountShare.ownerDialog.title', { name: ownerDialog.ownerUsername }) : t('accountShare.ownerDialog.titleFallback')"
       width="extra-wide"
       :z-index="70"
       @close="closeOwnerDialog"
@@ -2533,7 +2641,7 @@
             @click="ownerDialog.tab = 'listings'"
           >
             <Icon name="grid" size="xs" class="mr-2" />
-            账号
+            {{ t('dashboard.account') }}
           </button>
           <button
             type="button"
@@ -2542,7 +2650,7 @@
             @click="ownerDialog.tab = 'reviews'"
           >
             <Icon name="chat" size="xs" class="mr-2" />
-            评论
+            {{ t('accountShare.ownerDialog.reviews') }}
           </button>
         </div>
 
@@ -2553,14 +2661,14 @@
           >
             <span>{{ ownerDialog.listingsError }}</span>
             <button type="button" class="btn-secondary h-9" :disabled="ownerDialog.loadingListings" @click="loadOwnerListings()">
-              重试账号
+              {{ t('accountShare.ownerDialog.retryAccounts') }}
             </button>
           </div>
           <div v-if="ownerDialog.loadingListings" class="rounded-lg border border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-dark-300">
-            正在加载账号...
+            {{ t('accountShare.ownerDialog.loadingAccounts') }}
           </div>
           <div v-else-if="ownerDialog.listings.length === 0" class="rounded-lg border border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-dark-300">
-            暂无可展示账号
+            {{ t('accountShare.ownerDialog.noAccounts') }}
           </div>
           <div v-else class="grid gap-3 md:grid-cols-2">
             <button
@@ -2578,13 +2686,13 @@
                 <span :class="listingStatusBadgeClass(item)">{{ listingStatusLabel(item) }}</span>
               </div>
               <div class="mt-3 grid grid-cols-3 gap-2 text-xs text-gray-600 dark:text-dark-300">
-                <span>消费者名额 {{ item.active_seats }}/{{ item.seat_limit }}</span>
-                <span>倍率 {{ formatNumber(item.rate_multiplier) }}x</span>
-                <span>小时费 {{ formatNumber(item.hourly_rate) }}</span>
+                <span>{{ t('accountShare.roomEdit.seats', { activeSeats: item.active_seats, seatLimit: item.seat_limit }) }}</span>
+                <span>{{ t('accountShare.ownerDialog.rate', { rate: formatNumber(item.rate_multiplier)  }) }}</span>
+                <span>{{ t('accountShare.ownerDialog.hourly', { rate: formatNumber(item.hourly_rate)  }) }}</span>
               </div>
             </button>
             <div class="col-span-full flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500 dark:text-dark-300">
-              <span>已显示 {{ ownerDialog.listings.length }} 条 · {{ countLabel(ownerDialog.listingsTotal, ownerDialog.listingsTotalExact) }} 条</span>
+              <span>{{ t('accountShare.ownerDialog.listingsShown', { length: ownerDialog.listings.length, listingsTotalExact: countLabel(ownerDialog.listingsTotal, ownerDialog.listingsTotalExact) }) }}</span>
               <button
                 v-if="ownerDialog.listingsHasMore"
                 type="button"
@@ -2592,7 +2700,7 @@
                 :disabled="ownerDialog.loadingListings"
                 @click="loadMoreOwnerListings"
               >
-                继续加载账号
+                {{ t('accountShare.ownerDialog.loadMore') }}
               </button>
             </div>
           </div>
@@ -2605,14 +2713,14 @@
           >
             <span>{{ ownerDialog.reviewsError }}</span>
             <button type="button" class="btn-secondary h-9" :disabled="ownerDialog.loadingReviews" @click="loadOwnerReviews()">
-              重试评论
+              {{ t('accountShare.ownerDialog.retryReviews') }}
             </button>
           </div>
           <div v-if="ownerDialog.loadingReviews" class="rounded-lg border border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-dark-300">
-            正在加载评论...
+            {{ t('accountShare.ownerDialog.loadingReviews') }}
           </div>
           <div v-else-if="ownerDialog.reviews.length === 0" class="rounded-lg border border-gray-200 p-6 text-center text-sm text-gray-500 dark:border-dark-700 dark:text-dark-300">
-            暂无已审核评论
+            {{ t('accountShare.ownerDialog.noReviews') }}
           </div>
           <div v-else class="space-y-3">
             <article
@@ -2626,12 +2734,12 @@
               </div>
               <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-700 dark:text-dark-100">{{ review.comment }}</p>
               <div class="mt-3 flex flex-wrap gap-2 text-xs text-gray-500 dark:text-dark-300">
-                <span>{{ review.platform ? platformLabel(review.platform) : '账号房间' }}</span>
-                <span>来自 匿名用户</span>
+                <span>{{ review.platform ? platformLabel(review.platform) : t('accountShare.ownerDialog.accountRoom') }}</span>
+                <span>{{ t('accountShare.ownerDialog.anonymous') }}</span>
               </div>
             </article>
             <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-gray-500 dark:text-dark-300">
-              <span>已显示 {{ ownerDialog.reviews.length }}/{{ ownerDialog.reviewsTotal }}</span>
+              <span>{{ t('accountShare.ownerDialog.reviewsShown', { length: ownerDialog.reviews.length, reviewsTotal: ownerDialog.reviewsTotal }) }}</span>
               <button
                 v-if="ownerDialog.reviewsPage < ownerDialog.reviewsPages"
                 type="button"
@@ -2639,7 +2747,7 @@
                 :disabled="ownerDialog.loadingReviews"
                 @click="loadMoreOwnerReviews"
               >
-                继续加载评论
+                {{ t('accountShare.reviews.loadMore') }}
               </button>
             </div>
           </div>
@@ -2649,9 +2757,9 @@
       <template #footer>
         <button type="button" class="btn-primary" @click="searchOwnerFromDialog">
           <Icon name="search" size="sm" class="mr-2" />
-          在广场搜索该号主
+          {{ t('accountShare.ownerDialog.searchOwner') }}
         </button>
-        <button type="button" class="btn-secondary" @click="closeOwnerDialog">关闭</button>
+        <button type="button" class="btn-secondary" @click="closeOwnerDialog">{{ t('common.close') }}</button>
       </template>
     </BaseDialog>
 
@@ -2668,7 +2776,7 @@
 
     <BaseDialog
       :show="pendingForceEditListing !== null"
-      title="管理员强制编辑房间"
+      :title="t('accountShare.forceEdit.title')"
       width="narrow"
       @close="cancelForceEdit"
     >
@@ -2678,27 +2786,27 @@
           <span>{{ forceEditConfirmMessage }}</span>
         </div>
         <label class="field">
-          <span>强制修改原因</span>
+          <span>{{ t('accountShare.forceEdit.reason') }}</span>
           <textarea
             v-model="forceEditReason"
             class="input min-h-24"
             maxlength="500"
-            placeholder="请说明为什么不能先下架并等待当前使用结束"
+            :placeholder="t('accountShare.forceEdit.reasonPlaceholder')"
             data-testid="force-edit-reason"
           ></textarea>
-          <small>原因会随新条款版本写入审计记录，不能为空。</small>
+          <small>{{ t('accountShare.forceEdit.reasonHint') }}</small>
         </label>
         <label class="toggle-row">
           <input v-model="forceEditConfirmed" type="checkbox" data-testid="force-edit-confirmed" />
           <span>
-            <strong>我确认需要强制修改使用中的房间条款</strong>
-            <small>正在使用或退出中的记录继续按原条款结算；修改后新加入的用户采用新条款。</small>
+            <strong>{{ t('accountShare.forceEdit.confirmCheck') }}</strong>
+            <small>{{ t('accountShare.forceEdit.confirmHint') }}</small>
           </span>
         </label>
       </div>
 
       <template #footer>
-        <button type="button" class="btn-secondary min-h-11" @click="cancelForceEdit">取消</button>
+        <button type="button" class="btn-secondary min-h-11" @click="cancelForceEdit">{{ t('common.cancel') }}</button>
         <button
           type="button"
           class="btn-danger min-h-11"
@@ -2706,14 +2814,14 @@
           data-testid="confirm-force-edit"
           @click="confirmForceEdit"
         >
-          继续强制编辑
+          {{ t('accountShare.forceEdit.proceed') }}
         </button>
       </template>
     </BaseDialog>
 
     <ConfirmDialog
       :show="pendingDraftDiscardTarget !== null"
-      title="放弃未保存的修改？"
+      :title="t('accountShare.common.discardTitle')"
       :message="draftDiscardMessage"
       confirm-text="放弃修改"
       cancel-text="继续编辑"
@@ -2732,6 +2840,7 @@
 
 <script setup lang="ts">
 import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useMediaQuery } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -2894,6 +3003,7 @@ interface CreateFormState {
   codex_7d_limit_percent: number
   anthropic_5h_limit_percent: number
   anthropic_7d_limit_percent: number
+  join_password: string
 }
 
 type DraftDiscardTarget = 'create' | 'config'
@@ -2953,6 +3063,14 @@ interface PendingJoinConfirmation {
   apiKeyLabel: string
   idleTimeoutMinutes: number
   intent: AccountShareJoinIntent
+}
+
+interface JoinPasswordPromptState {
+  listing: AccountShareListing
+  platform: AccountSharePlatform
+  apiKeyID: number
+  apiKeyLabel: string
+  idleTimeoutMinutes: number
 }
 
 interface PendingEndUseState {
@@ -3057,46 +3175,51 @@ const MAX_ACCOUNT_CONCURRENCY = 50
 const MAX_PER_USER_CONCURRENCY = 50
 const ACCOUNT_SHARE_MIN_SEATS = 1
 const ACCOUNT_SHARE_MAX_SEATS = 30
-const ACCOUNT_SHARE_MEMBER_LIMIT_HELP = '由房主设置，与账号数量/账号并发无推导关系；房主自用不占消费者名额'
 const ACCOUNT_SHARE_TRANSIENT_STATUS_REFRESH_INTERVAL_MS = 8_000
-const ACCOUNT_SHARE_PLATFORM_OPTIONS: Array<{ value: AccountSharePlatform; label: string }> = [
+const ACCOUNT_SHARE_PLATFORM_OPTIONS = computed<Array<{ value: AccountSharePlatform; label: string }>>(() => [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
   { value: 'opencode', label: 'Opencode' },
-  { value: 'kimi', label: 'Kimi（月之暗面）' },
-  { value: 'zhipu', label: '智谱 GLM' },
+  { value: 'kimi', label: t('accountShare.platforms.kimi') },
+  { value: 'zhipu', label: t('common.platforms.zhipu') },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'minimax', label: 'MiniMax' },
-  { value: 'qwen', label: '通义千问' }
-]
-const ACCOUNT_NAME_BASE_BY_PLATFORM: Record<AccountSharePlatform, string> = {
-  openai: 'OpenAI房间',
-  anthropic: 'Anthropic房间',
-  opencode: 'Opencode房间',
-  kimi: 'Kimi房间',
-  zhipu: '智谱房间',
-  deepseek: 'DeepSeek房间',
-  minimax: 'MiniMax房间',
-  qwen: '通义千问房间'
-}
-const ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM: Record<AccountSharePlatform, string> = {
-  openai: 'OpenAI账号模式',
-  anthropic: 'Anthropic账号模式',
-  opencode: 'Opencode账号模式',
-  kimi: 'Kimi账号模式',
-  zhipu: '智谱账号模式',
-  deepseek: 'DeepSeek账号模式',
-  minimax: 'MiniMax账号模式',
-  qwen: '通义千问账号模式'
-}
+  { value: 'qwen', label: t('common.platforms.qwen') },
+  { value: 'devin', label: 'Devin' },
+  { value: 'api_aggregation', label: t('accountShare.platforms.apiAggregation') }
+])
+const ACCOUNT_NAME_BASE_BY_PLATFORM = computed<Record<AccountSharePlatform, string>>(() => ({
+  openai: t('accountShare.roomNameBase.openai'),
+  anthropic: t('accountShare.roomNameBase.anthropic'),
+  opencode: t('accountShare.roomNameBase.opencode'),
+  kimi: t('accountShare.roomNameBase.kimi'),
+  zhipu: t('accountShare.roomNameBase.zhipu'),
+  deepseek: t('accountShare.roomNameBase.deepseek'),
+  minimax: t('accountShare.roomNameBase.minimax'),
+  qwen: t('accountShare.roomNameBase.qwen'),
+  devin: t('accountShare.roomNameBase.devin'),
+  api_aggregation: t('accountShare.roomNameBase.apiAggregation')
+}))
+const ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM = computed<Record<AccountSharePlatform, string>>(() => ({
+  openai: t('accountShare.modeGroupName.openai'),
+  anthropic: t('accountShare.modeGroupName.anthropic'),
+  opencode: t('accountShare.modeGroupName.opencode'),
+  kimi: t('accountShare.modeGroupName.kimi'),
+  zhipu: t('accountShare.modeGroupName.zhipu'),
+  deepseek: t('accountShare.modeGroupName.deepseek'),
+  minimax: t('accountShare.modeGroupName.minimax'),
+  qwen: t('accountShare.modeGroupName.qwen'),
+  devin: t('accountShare.modeGroupName.devin'),
+  api_aggregation: t('accountShare.modeGroupName.apiAggregation')
+}))
 const ACCOUNT_SHARE_RECOMMENDATION_LIMIT = 10
 const ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE = 5
 const OWNER_LISTINGS_PAGE_SIZE = 24
 const OWNER_REVIEWS_PAGE_SIZE = 20
-const recommendationPresets: RecommendationPreset[] = [
+const recommendationPresets = computed<RecommendationPreset[]>(() => [
   {
     key: 'light',
-    label: '轻量',
+    label: t('accountShare.presets.light'),
     request_count: 100,
     active_hours: 1,
     input_tokens_per_request: 1000,
@@ -3109,7 +3232,7 @@ const recommendationPresets: RecommendationPreset[] = [
   },
   {
     key: 'balanced',
-    label: '均衡',
+    label: t('accountShare.presets.balanced'),
     request_count: 500,
     active_hours: 2,
     input_tokens_per_request: 3000,
@@ -3122,7 +3245,7 @@ const recommendationPresets: RecommendationPreset[] = [
   },
   {
     key: 'heavy',
-    label: '重度',
+    label: t('accountShare.presets.heavy'),
     request_count: 3000,
     active_hours: 8,
     input_tokens_per_request: 8000,
@@ -3133,19 +3256,20 @@ const recommendationPresets: RecommendationPreset[] = [
     image_output_tokens_per_request: 0,
     image_cache_read_tokens_per_request: 0
   }
-]
+])
 const ACCOUNT_SHARE_PAGE_SIZE = 10
 const ACCOUNT_SHARE_MODE_KEY_PAGE_SIZE = 100
 const ACCOUNT_SHARE_LISTING_PREFERENCES_STORAGE_KEY = 'account-share-listing-preferences'
 const MODEL_PREVIEW_LIMIT = 5
 const ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES = 10080
 const ACCOUNT_SHARE_STATUS_REFRESH_THROTTLE_MS = 15_000
-const MY_SPEND_RANGE_OPTIONS: MySpendRangeOption[] = [
-  { value: 'current_membership', label: '本次使用' },
-  { value: 'today', label: '今天' },
-  { value: '7d', label: '近7天' }
-]
+const MY_SPEND_RANGE_OPTIONS = computed<MySpendRangeOption[]>(() => [
+  { value: 'current_membership', label: t('accountShare.mySpendRange.currentMembership') },
+  { value: 'today', label: t('common.today') },
+  { value: '7d', label: t('admin.ops.timeRange.7d') }
+])
 
+const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const isWideMarketplace = useMediaQuery('(min-width: 1024px)')
@@ -3162,32 +3286,32 @@ const ownerSelfUseRateMultiplier = computed<number | null>(() => {
 })
 const ownerSelfUseRateMultiplierLabel = computed(() => {
   const value = ownerSelfUseRateMultiplier.value
-  return value === null ? '配置不可用' : `${formatNumber(value)}x`
+  return value === null ? t('accountShare.configUnavailable') : `${formatNumber(value)}x`
 })
 const seatOptions = Array.from({ length: ACCOUNT_SHARE_MAX_SEATS - ACCOUNT_SHARE_MIN_SEATS + 1 }, (_, index) => index + ACCOUNT_SHARE_MIN_SEATS)
 const reviewScoreOptions = Array.from({ length: 11 }, (_, score) => score)
-const usingFilter: FilterOption = { key: 'using', label: '我的使用', tab: 'using' }
-const historyFilter: FilterOption = { key: 'history', label: '历史记录', tab: 'history' }
-const archiveFilter: FilterOption = { key: 'archive', label: '已删除', tab: 'archive' }
-const ownerFilter: FilterOption = { key: 'mine', label: '我的房间', tab: 'mine' }
-const filters: FilterOption[] = [
-  { key: 'all', label: '找房间', tab: 'all' },
-  usingFilter,
-  ownerFilter
-]
-const listingSortFieldOptions: ListingSortFieldOption[] = [
-  { sortBy: 'account_concurrency', label: '配置并发', ascLabel: '从小到大', descLabel: '从大到小' },
-  { sortBy: 'per_user_concurrency', label: '单人并发', ascLabel: '从小到大', descLabel: '从大到小' },
-  { sortBy: 'min_balance_required', label: '最低余额', ascLabel: '从小到大', descLabel: '从大到小' },
-  { sortBy: 'hourly_rate', label: '小时费', ascLabel: '从小到大', descLabel: '从大到小' },
-  { sortBy: 'hourly_fee_waiver', label: '免小时低消', ascLabel: '从小到大', descLabel: '从大到小' },
-  { sortBy: 'rate_multiplier', label: '倍率', ascLabel: '从小到大', descLabel: '从大到小' },
-  { sortBy: 'remaining_seats', label: '剩余席位', ascLabel: '从少到多', descLabel: '从多到少' },
-  { sortBy: 'rating', label: '评分', ascLabel: '从低到高', descLabel: '从高到低' },
-  { sortBy: 'updated_at', label: '更新时间', ascLabel: '最早优先', descLabel: '最近优先' }
-]
-const listingSortOptions: ListingSortOption[] = [
-  ...listingSortFieldOptions.flatMap(field => [
+const usingFilter = computed<FilterOption>(() => ({ key: 'using', label: t('accountShare.filters.using'), tab: 'using' }))
+const historyFilter = computed<FilterOption>(() => ({ key: 'history', label: t('accountShare.membership.statusHistory'), tab: 'history' }))
+const archiveFilter = computed<FilterOption>(() => ({ key: 'archive', label: t('ideas.status.deleted'), tab: 'archive' }))
+const ownerFilter = computed<FilterOption>(() => ({ key: 'mine', label: t('accountShare.filters.mine'), tab: 'mine' }))
+const filters = computed<FilterOption[]>(() => [
+  { key: 'all', label: t('accountShare.filters.all'), tab: 'all' },
+  usingFilter.value,
+  ownerFilter.value
+])
+const listingSortFieldOptions = computed<ListingSortFieldOption[]>(() => [
+  { sortBy: 'account_concurrency', label: t('accountShare.membership.configuredConcurrency'), ascLabel: t('accountShare.sortDir.ascNumeric'), descLabel: t('accountShare.sortDir.descNumeric') },
+  { sortBy: 'per_user_concurrency', label: t('accountShare.membership.fieldPerUserConcurrency'), ascLabel: t('accountShare.sortDir.ascNumeric'), descLabel: t('accountShare.sortDir.descNumeric') },
+  { sortBy: 'min_balance_required', label: t('accountShare.membership.fieldMinBalance'), ascLabel: t('accountShare.sortDir.ascNumeric'), descLabel: t('accountShare.sortDir.descNumeric') },
+  { sortBy: 'hourly_rate', label: t('accountShare.membership.fieldHourlyRate'), ascLabel: t('accountShare.sortDir.ascNumeric'), descLabel: t('accountShare.sortDir.descNumeric') },
+  { sortBy: 'hourly_fee_waiver', label: t('accountShare.sortField.hourlyFeeWaiver'), ascLabel: t('accountShare.sortDir.ascNumeric'), descLabel: t('accountShare.sortDir.descNumeric') },
+  { sortBy: 'rate_multiplier', label: t('groups.rateLabel'), ascLabel: t('accountShare.sortDir.ascNumeric'), descLabel: t('accountShare.sortDir.descNumeric') },
+  { sortBy: 'remaining_seats', label: t('accountShare.sortField.remainingSeats'), ascLabel: t('accountShare.sortDir.ascCount'), descLabel: t('accountShare.sortDir.descCount') },
+  { sortBy: 'rating', label: t('accountShare.sortField.rating'), ascLabel: t('accountShare.sortDir.ascRating'), descLabel: t('accountShare.sortDir.descRating') },
+  { sortBy: 'updated_at', label: t('admin.revenue.sharePolicy.updatedAt'), ascLabel: t('accountShare.sortDir.oldestFirst'), descLabel: t('accountShare.sortDir.newestFirst') }
+])
+const listingSortOptions = computed<ListingSortOption[]>(() => [
+  ...listingSortFieldOptions.value.flatMap(field => [
     {
       key: buildListingSortKey(field.sortBy, 'asc'),
       label: `${field.label}${field.ascLabel}`,
@@ -3203,29 +3327,29 @@ const listingSortOptions: ListingSortOption[] = [
       sortOrder: 'desc' as const
     }
   ])
-]
-const listingFeatureTagOptions: ListingFeatureTagOption[] = [
-  { value: 'hourly_fee_waiver', label: '满低消免小时费' },
-  { value: 'image_generation', label: '支持生图' },
-  { value: 'codex_cli_only', label: '仅客户端' },
-  { value: 'non_codex_cli_only', label: '非仅客户端' },
-  { value: 'no_hourly_fee', label: '无小时费' }
-]
-const listingStatusFilterOptions: Array<{ value: ListingStatusFilterValue; label: string }> = [
-  { value: '', label: '默认状态' },
-  { value: 'available', label: '可用账号' },
-  { value: 'active', label: '已上架' },
-  { value: 'paused', label: '已下架' },
-  { value: 'suspended', label: '管理员暂停' },
-  { value: 'all', label: '全部状态' }
-]
+])
+const listingFeatureTagOptions = computed<ListingFeatureTagOption[]>(() => [
+  { value: 'hourly_fee_waiver', label: t('accountShare.featureTags.hourlyFeeWaiver') },
+  { value: 'image_generation', label: t('accountShare.featureTags.imageGeneration') },
+  { value: 'codex_cli_only', label: t('accountShare.featureTags.codexCliOnly') },
+  { value: 'non_codex_cli_only', label: t('accountShare.featureTags.nonCodexCliOnly') },
+  { value: 'no_hourly_fee', label: t('accountShare.featureTags.noHourlyFee') }
+])
+const listingStatusFilterOptions = computed<Array<{ value: ListingStatusFilterValue; label: string }>>(() => [
+  { value: '', label: t('accountShare.statusFilter.default') },
+  { value: 'available', label: t('accountShare.statusFilter.available') },
+  { value: 'active', label: t('accountShare.statusFilter.active') },
+  { value: 'paused', label: t('accountShare.lifecycle.statusDelisted') },
+  { value: 'suspended', label: t('accountShare.lifecycle.statusAdminPaused') },
+  { value: 'all', label: t('userAccounts.allStatus') }
+])
 const openAIAccountLevelConfigs = computed(() =>
   normalizeOpenAIAccountLevelConfigs(appStore.cachedPublicSettings?.openai_account_levels)
 )
 const accountLevelFilterOptions = computed<Array<{ value: AccountLevelFilterValue; label: string }>>(() =>
   openAIAccountLevelOptions(openAIAccountLevelConfigs.value, {
     includeEmpty: true,
-    emptyLabel: '全部等级',
+    emptyLabel: t('accountShare.levelFilter.all'),
     includeUnknown: true,
     unknownLabel: 'UNKNOWN'
   }).map(option => ({
@@ -3233,66 +3357,80 @@ const accountLevelFilterOptions = computed<Array<{ value: AccountLevelFilterValu
     label: option.label
   }))
 )
-const accountShareJoinErrorMessages: Record<string, string> = {
-  ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE: '该账号房间当前不可加入，请换一个房间或稍后再试',
-  ACCOUNT_SHARE_ALREADY_USING: '你当前已有正在使用的账号房间，请先结束后再加入新的房间',
-  ACCOUNT_SHARE_API_KEY_ALREADY_BOUND: '当前 Key 已有使用中的房间，请到“我的使用”结束当前使用，结算完成后再选择新房间',
-  ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP: '请选择绑定对应平台账号模式分组的 API Key',
-  ACCOUNT_SHARE_LISTING_NOT_FOUND: '该账号房间不存在或已下架，请刷新账号广场后再试',
-  ACCOUNT_SHARE_LISTING_NOT_ACTIVE: '该账号房间当前未上架，暂时不能加入',
-  ACCOUNT_SHARE_ROOM_FULL: '房间成员已满，请选择其他房间或稍后再试',
-  ACCOUNT_SHARE_BALANCE_BELOW_MINIMUM: '余额低于该账号最低要求，暂时不能加入',
-  ACCOUNT_SHARE_MODE_GROUP_UNAVAILABLE: '账号模式分组尚未配置，请联系管理员处理',
-  ACCOUNT_SHARE_MODE_GROUP_UNBOUND: '当前账号模式分组未绑定账号房间，请先在账号广场加入一个房间',
-  ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT: '空闲自动退出时间必须在 1-10080 分钟之间',
-  ACCOUNT_SHARE_MODE_PREPAY_INSUFFICIENT: '余额不足以预付本次使用，请充值后再试',
-  ACCOUNT_SHARE_PER_USER_CONCURRENCY_EXCEEDED: '该账号房间当前单用户并发已达到上限，请稍后再试',
-  ACCOUNT_SHARE_OWNER_CANNOT_JOIN: '不能以消费者身份加入自己管理的账号房间',
-  ACCOUNT_SHARE_JOIN_INTENT_REQUIRED: '请先获取并确认最新加入条款',
-  ACCOUNT_SHARE_JOIN_INTENT_INVALID: '加入确认已失效，请重新确认最新条款',
-  ACCOUNT_SHARE_JOIN_INTENT_CONSUMED: '这份加入确认已经使用过，请重新确认',
-  ACCOUNT_SHARE_JOIN_TERMS_CHANGED: '房间条款已变化，请重新确认最新条款',
-  ACCOUNT_SHARE_MEMBERSHIP_ENDING: '退出结算处理中，结算完成后才能重新加入',
-  API_KEY_NOT_FOUND: '该 API Key 不存在或已被删除，请重新选择',
-  INSUFFICIENT_PERMISSIONS: '你没有权限使用这个 API Key，请重新选择自己的账号模式 Key',
-  SERVICE_UNAVAILABLE: '账号广场服务暂时不可用，请稍后再试',
-  USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
+function accountShareJoinErrorMessages(): Record<string, string> {
+  return {
+  ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE: t('accountShare.errors.join.accountUnavailable'),
+  ACCOUNT_SHARE_ALREADY_USING: t('accountShare.errors.join.alreadyUsing'),
+  ACCOUNT_SHARE_API_KEY_ALREADY_BOUND: t('accountShare.errors.join.apiKeyAlreadyBound'),
+  ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP: t('accountShare.errors.join.apiKeyMustUseModeGroup'),
+  ACCOUNT_SHARE_LISTING_NOT_FOUND: t('accountShare.errors.join.listingNotFound'),
+  ACCOUNT_SHARE_LISTING_NOT_ACTIVE: t('accountShare.errors.join.listingNotActive'),
+  ACCOUNT_SHARE_ROOM_FULL: t('accountShare.errors.join.roomFull'),
+  ACCOUNT_SHARE_BALANCE_BELOW_MINIMUM: t('accountShare.errors.join.balanceBelowMinimum'),
+  ACCOUNT_SHARE_MODE_GROUP_UNAVAILABLE: t('accountShare.errors.join.modeGroupUnavailable'),
+  ACCOUNT_SHARE_MODE_GROUP_UNBOUND: t('accountShare.errors.join.modeGroupUnbound'),
+  ACCOUNT_SHARE_MODE_INVALID_IDLE_TIMEOUT: t('accountShare.errors.join.invalidIdleTimeout'),
+  ACCOUNT_SHARE_MODE_PREPAY_INSUFFICIENT: t('accountShare.errors.join.prepayInsufficient'),
+  ACCOUNT_SHARE_PER_USER_CONCURRENCY_EXCEEDED: t('accountShare.errors.join.perUserConcurrencyExceeded'),
+  ACCOUNT_SHARE_OWNER_CANNOT_JOIN: t('accountShare.errors.join.ownerCannotJoin'),
+  ACCOUNT_SHARE_JOIN_INTENT_REQUIRED: t('accountShare.errors.join.intentRequired'),
+  ACCOUNT_SHARE_JOIN_INTENT_INVALID: t('accountShare.errors.join.intentInvalid'),
+  ACCOUNT_SHARE_JOIN_INTENT_CONSUMED: t('accountShare.errors.join.intentConsumed'),
+  ACCOUNT_SHARE_JOIN_TERMS_CHANGED: t('accountShare.errors.join.termsChanged'),
+  ACCOUNT_SHARE_ROOM_PASSWORD_REQUIRED: t('accountShare.errors.join.passwordRequired'),
+  ACCOUNT_SHARE_ROOM_PASSWORD_INVALID: t('accountShare.errors.join.passwordInvalid'),
+  ACCOUNT_SHARE_MEMBERSHIP_ENDING: t('accountShare.errors.join.membershipEnding'),
+  API_KEY_NOT_FOUND: t('accountShare.errors.join.apiKeyNotFound'),
+  INSUFFICIENT_PERMISSIONS: t('accountShare.errors.join.insufficientPermissions'),
+  SERVICE_UNAVAILABLE: t('accountShare.errors.join.serviceUnavailable'),
+  USER_NOT_FOUND: t('accountShare.errors.join.userNotFound'),
+  ACCOUNT_SHARE_UNVERIFIED_ACK_REQUIRED: t('accountShare.errors.join.unverifiedAckRequired')
+  }
 }
-const accountShareRoomCreateErrorMessages: Record<string, string> = {
-  ACCOUNT_SHARE_ROOM_LIMIT_EXCEEDED: '未删除房间数量已达到当前配额上限，请删除不再使用的空房间或联系管理员调整配额',
-  ACCOUNT_SHARE_ROOM_CREATE_RATE_EXCEEDED: '最近 24 小时创建房间次数已达到上限，请在配额窗口恢复后再试',
-  ACCOUNT_SHARE_ROOM_ACCOUNT_LIMIT_EXCEEDED: '该房间的账号数量已达到上限，请先移出不再使用的账号',
-  ACCOUNT_SHARE_OWNER_ROOM_ACCOUNT_LIMIT_EXCEEDED: '你管理的房间账号总数已达到上限，请先整理现有房间账号',
-  ACCOUNT_SHARE_ROOM_OWNER_MISMATCH: '所选账号不属于当前房主，请刷新账号列表后重新选择',
-  ACCOUNT_SHARE_ROOM_PLATFORM_MISMATCH: '所选账号与房间平台不一致，请选择同平台账号',
-  ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH: '所选账号等级与房间要求不一致，请选择相同等级账号',
-  ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL: '所选账号等级尚未识别，请先完成账号检测后再创建房间',
-  ACCOUNT_SHARE_ROOM_MODE_REQUIRED: '所选账号尚未处于可创建房间的账号模式，请先完成账号配置',
-  ACCOUNT_SHARE_ROOM_ACCOUNT_CONFLICT: '所选账号已加入其他房间或正在切换归属，请刷新后重新选择',
-  ACCOUNT_SHARE_QUOTA_HISTORICAL_GROWTH_BLOCKED: '当前用量超过新配额，历史保留状态下只能收缩，不能继续创建或增加房间账号',
-  ACCOUNT_SHARE_QUOTA_GRANDFATHER_GROWTH_BLOCKED: '当前处于历史保留配额，只能减少现有用量；请先整理房间或联系管理员调整配额'
+function accountShareRoomCreateErrorMessages(): Record<string, string> {
+  return {
+  ACCOUNT_SHARE_ROOM_LIMIT_EXCEEDED: t('accountShare.errors.roomCreate.roomLimitExceeded'),
+  ACCOUNT_SHARE_ROOM_CREATE_RATE_EXCEEDED: t('accountShare.errors.roomCreate.rateExceeded'),
+  ACCOUNT_SHARE_ROOM_ACCOUNT_LIMIT_EXCEEDED: t('accountShare.roomAccounts.errors.roomAccountLimit'),
+  ACCOUNT_SHARE_OWNER_ROOM_ACCOUNT_LIMIT_EXCEEDED: t('accountShare.errors.roomCreate.ownerAccountLimit'),
+  ACCOUNT_SHARE_ROOM_OWNER_MISMATCH: t('accountShare.errors.roomCreate.ownerMismatch'),
+  ACCOUNT_SHARE_ROOM_PLATFORM_MISMATCH: t('accountShare.errors.roomCreate.platformMismatch'),
+  ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH: t('accountShare.errors.roomCreate.levelMismatch'),
+  ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL: t('accountShare.errors.roomCreate.unknownLevel'),
+  ACCOUNT_SHARE_ROOM_MODE_REQUIRED: t('accountShare.errors.roomCreate.modeRequired'),
+  ACCOUNT_SHARE_ROOM_ACCOUNT_CONFLICT: t('accountShare.errors.roomCreate.accountConflict'),
+  ACCOUNT_SHARE_QUOTA_HISTORICAL_GROWTH_BLOCKED: t('accountShare.errors.roomCreate.historicalGrowthBlocked'),
+  ACCOUNT_SHARE_QUOTA_GRANDFATHER_GROWTH_BLOCKED: t('accountShare.errors.roomCreate.grandfatherGrowthBlocked'),
+  ACCOUNT_SHARE_ROOM_PASSWORD_INVALID_LENGTH: t('accountShare.errors.roomCreate.passwordInvalidLength')
+  }
 }
-const accountShareCapabilityBlockerMessages: Record<string, string> = {
-  ACCOUNT_SHARE_ROOM_LIMIT_EXCEEDED: '未删除房间数量已达到配额上限',
-  ACCOUNT_SHARE_ROOM_CREATE_RATE_EXCEEDED: '最近 24 小时创建房间次数已达到配额上限',
-  ACCOUNT_SHARE_ROOM_ACCOUNT_LIMIT_EXCEEDED: '单个房间账号数量已达到配额上限',
-  ACCOUNT_SHARE_OWNER_ROOM_ACCOUNT_LIMIT_EXCEEDED: '房主管理的房间账号总数已达到配额上限',
-  ACCOUNT_SHARE_QUOTA_HISTORICAL_GROWTH_BLOCKED: '当前用量超过新配额，历史保留状态下只能收缩',
-  ACCOUNT_SHARE_QUOTA_GRANDFATHER_GROWTH_BLOCKED: '当前处于历史保留配额，只能减少现有用量'
+function accountShareCapabilityBlockerMessages(): Record<string, string> {
+  return {
+  ACCOUNT_SHARE_ROOM_LIMIT_EXCEEDED: t('accountShare.roomAccounts.errors.roomLimit'),
+  ACCOUNT_SHARE_ROOM_CREATE_RATE_EXCEEDED: t('accountShare.roomAccounts.errors.createRate'),
+  ACCOUNT_SHARE_ROOM_ACCOUNT_LIMIT_EXCEEDED: t('accountShare.errors.capability.roomAccountLimit'),
+  ACCOUNT_SHARE_OWNER_ROOM_ACCOUNT_LIMIT_EXCEEDED: t('accountShare.errors.capability.ownerAccountLimit'),
+  ACCOUNT_SHARE_QUOTA_HISTORICAL_GROWTH_BLOCKED: t('accountShare.errors.capability.historicalGrowthBlocked'),
+  ACCOUNT_SHARE_QUOTA_GRANDFATHER_GROWTH_BLOCKED: t('accountShare.errors.capability.grandfatherGrowthBlocked')
+  }
 }
-const accountShareRecommendationErrorMessages: Record<string, string> = {
-  ACCOUNT_SHARE_RECOMMENDATION_INVALID: '测算参数无效，请检查模型、请求次数、使用时长和 token 输入',
-  ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP: '请选择绑定对应平台账号模式分组的 API Key',
-  API_KEY_NOT_FOUND: '该 API Key 不存在或已被删除，请重新选择',
-  SERVICE_UNAVAILABLE: '费用估算服务暂时不可用，请稍后再试',
-  USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
+function accountShareRecommendationErrorMessages(): Record<string, string> {
+  return {
+  ACCOUNT_SHARE_RECOMMENDATION_INVALID: t('accountShare.errors.recommendation.invalid'),
+  ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP: t('accountShare.errors.join.apiKeyMustUseModeGroup'),
+  API_KEY_NOT_FOUND: t('accountShare.errors.join.apiKeyNotFound'),
+  SERVICE_UNAVAILABLE: t('accountShare.errors.recommendation.serviceUnavailable'),
+  USER_NOT_FOUND: t('accountShare.errors.join.userNotFound')
+  }
 }
-const accountShareEndErrorMessages: Record<string, string> = {
-  ...accountShareJoinErrorMessages,
-  ACCOUNT_SHARE_LISTING_NOT_FOUND: '这次使用状态已变化，请刷新账号广场后确认',
-  ACCOUNT_SHARE_END_STATE_CONFLICT: '这次使用状态已变化，请刷新后重试',
-  ACCOUNT_SHARE_MEMBERSHIP_NOT_FOUND: '这次使用已结束，请刷新账号广场后确认',
-  ACCOUNT_SHARE_MEMBERSHIP_ENDING: '上一次退出仍在结算中，请稍候片刻'
+function accountShareEndErrorMessages(): Record<string, string> {
+  return {
+  ...accountShareJoinErrorMessages(),
+  ACCOUNT_SHARE_LISTING_NOT_FOUND: t('accountShare.errors.endUse.listingNotFound'),
+  ACCOUNT_SHARE_END_STATE_CONFLICT: t('accountShare.errors.endUse.stateConflict'),
+  ACCOUNT_SHARE_MEMBERSHIP_NOT_FOUND: t('accountShare.errors.endUse.membershipNotFound'),
+  ACCOUNT_SHARE_MEMBERSHIP_ENDING: t('accountShare.errors.endUse.membershipEnding')
+  }
 }
 
 function getListingPreferencesStorageKey(): string {
@@ -3324,15 +3462,15 @@ function defaultListingPreferences(): ListingPreferenceState {
 }
 
 function filterForListingTab(tab: AccountShareListingTab): FilterOption {
-  if (tab === 'history') return historyFilter
-  if (tab === 'archive') return archiveFilter
-  return [ownerFilter, ...filters].find(option => option.tab === tab)
-    || filters.find(option => option.tab === 'all')
-    || filters[0]
+  if (tab === 'history') return historyFilter.value
+  if (tab === 'archive') return archiveFilter.value
+  return [ownerFilter.value, ...filters.value].find(option => option.tab === tab)
+    || filters.value.find(option => option.tab === 'all')
+    || filters.value[0]
 }
 
 function normalizeListingPlatform(value: unknown): AccountSharePlatform {
-  if (ACCOUNT_SHARE_PLATFORM_OPTIONS.some(option => option.value === value)) {
+  if (ACCOUNT_SHARE_PLATFORM_OPTIONS.value.some(option => option.value === value)) {
     return value as AccountSharePlatform
   }
   return 'openai'
@@ -3344,7 +3482,7 @@ function normalizeListingTab(value: unknown): AccountShareListingTab {
 }
 
 function normalizeListingStatus(value: unknown): ListingStatusFilterValue {
-  return listingStatusFilterOptions.some(option => option.value === value)
+  return listingStatusFilterOptions.value.some(option => option.value === value)
     ? value as ListingStatusFilterValue
     : ''
 }
@@ -3362,7 +3500,7 @@ function normalizeListingSortKeys(value: unknown): ListingSortKey[] {
   const seenSortFields = new Set<AccountShareListingSortBy>()
   for (const item of value) {
     if (typeof item !== 'string') continue
-    const option = listingSortOptions.find(candidate => candidate.key === item)
+    const option = listingSortOptions.value.find(candidate => candidate.key === item)
     if (!option?.sortBy || seenSortFields.has(option.sortBy)) continue
     seenSortFields.add(option.sortBy)
     normalized.push(option.key)
@@ -3384,7 +3522,7 @@ function normalizeListingSeatLimits(value: unknown): number[] {
 
 function normalizeListingFeatureTags(value: unknown, platform: AccountSharePlatform): AccountShareListingFeatureTag[] {
   if (!Array.isArray(value)) return []
-  const validTags = new Set(listingFeatureTagOptions.map(option => option.value))
+  const validTags = new Set(listingFeatureTagOptions.value.map(option => option.value))
   const tags: AccountShareListingFeatureTag[] = []
   const seen = new Set<AccountShareListingFeatureTag>()
   for (const item of value) {
@@ -3489,7 +3627,7 @@ function persistListingPreferences(): void {
 }
 
 function buildDefaultRecommendationForm(): RecommendationFormState {
-  const preset = recommendationPresets[1]
+  const preset = recommendationPresets.value[1]
   return {
     api_key_id: 0,
     model: '',
@@ -3570,7 +3708,7 @@ const actionErrorDialog = reactive<{
   action: AccountShareActionErrorAction
 }>({
   show: false,
-  title: '操作失败',
+  title: t('ideas.admin.actionFailed'),
   message: '',
   action: null
 })
@@ -3596,6 +3734,9 @@ const preparingJoinId = ref<number | null>(null)
 const joiningId = ref<number | null>(null)
 const joinIntentError = ref('')
 const pendingJoinConfirmation = ref<PendingJoinConfirmation | null>(null)
+const joinPasswordPrompt = ref<JoinPasswordPromptState | null>(null)
+const joinPasswordInput = ref('')
+const joinPasswordError = ref('')
 const endingId = ref<number | null>(null)
 const pendingEndUse = ref<PendingEndUseState | null>(null)
 const pendingMembershipEnds = ref<Record<number, PendingMembershipEnd>>({})
@@ -3663,6 +3804,7 @@ const editingConfigListing = ref<AccountShareListing | null>(null)
 const editAllowedModels = ref<string[]>([])
 const editForceActive = ref(false)
 const editConsumerProtected = ref(false)
+const editJoinPasswordClear = ref(false)
 const editReason = ref('')
 const editErrorMessage = ref('')
 const editVersionConflict = ref(false)
@@ -3678,7 +3820,9 @@ const modeGroupIDsByPlatform = reactive<Record<AccountSharePlatform, number>>({
   zhipu: 0,
   deepseek: 0,
   minimax: 0,
-  qwen: 0
+  qwen: 0,
+  devin: 0,
+  api_aggregation: 0
 })
 const modeApiKeysByPlatform = reactive<Record<AccountSharePlatform, ApiKey[]>>({
   openai: [],
@@ -3688,7 +3832,9 @@ const modeApiKeysByPlatform = reactive<Record<AccountSharePlatform, ApiKey[]>>({
   zhipu: [],
   deepseek: [],
   minimax: [],
-  qwen: []
+  qwen: [],
+  devin: [],
+  api_aggregation: []
 })
 const modeKeysLoadingByPlatform = reactive<Record<AccountSharePlatform, boolean>>({
   openai: false,
@@ -3698,7 +3844,9 @@ const modeKeysLoadingByPlatform = reactive<Record<AccountSharePlatform, boolean>
   zhipu: false,
   deepseek: false,
   minimax: false,
-  qwen: false
+  qwen: false,
+  devin: false,
+  api_aggregation: false
 })
 const modeKeysLoadedByPlatform = reactive<Record<AccountSharePlatform, boolean>>({
   openai: false,
@@ -3708,7 +3856,9 @@ const modeKeysLoadedByPlatform = reactive<Record<AccountSharePlatform, boolean>>
   zhipu: false,
   deepseek: false,
   minimax: false,
-  qwen: false
+  qwen: false,
+  devin: false,
+  api_aggregation: false
 })
 const modeKeysErrorByPlatform = reactive<Record<AccountSharePlatform, string>>({
   openai: '',
@@ -3718,7 +3868,9 @@ const modeKeysErrorByPlatform = reactive<Record<AccountSharePlatform, string>>({
   zhipu: '',
   deepseek: '',
   minimax: '',
-  qwen: ''
+  qwen: '',
+  devin: '',
+  api_aggregation: ''
 })
 const knownListings = ref<AccountShareListing[]>([])
 const searchQuery = ref(initialListingPreferences.search)
@@ -3759,6 +3911,11 @@ const membershipEndBindingControllers = new Map<number, AbortController>()
 const membershipEndBindingLastAttempt = new Map<number, number>()
 const MEMBERSHIP_END_BINDING_RECHECK_MS = 30_000
 const MEMBERSHIP_END_QUERY_FAILURE_RECHECK_THRESHOLD = 2
+// 房间满员时后端事务回滚、join intent 未被消费，可在 token 有效期内
+// 自动重试等待空位；指数间隔（1.5s/3s/4.5s）避免对满员房间造成冲击。
+const JOIN_ROOM_FULL_RETRY_COUNT = 3
+const JOIN_ROOM_FULL_RETRY_BASE_MS = 1_500
+const JOIN_ROOM_FULL_MIN_REMAINING_MS = 2_000
 let lastMembershipStatusRefreshAt = 0
 let membershipStatusRefreshTimer: number | null = null
 
@@ -3787,7 +3944,8 @@ function buildDefaultCreateForm(): CreateFormState {
     codex_5h_limit_percent: 100,
     codex_7d_limit_percent: 100,
     anthropic_5h_limit_percent: 100,
-    anthropic_7d_limit_percent: 100
+    anthropic_7d_limit_percent: 100,
+    join_password: ''
   }
 }
 
@@ -3838,13 +3996,13 @@ function createDraftHasChanges(): boolean {
 function configDraftHasChanges(): boolean {
   return Boolean(
     configDraftBaseline.value
-    && !snapshotsMatch(configDraftBaseline.value, configDraftSnapshot())
+    && (!snapshotsMatch(configDraftBaseline.value, configDraftSnapshot()) || editJoinPasswordClear.value)
   )
 }
 
 const isOpenAIListingPlatform = computed(() => activeListingPlatform.value === 'openai')
 const visibleListingFeatureTagOptions = computed(() =>
-  listingFeatureTagOptions.filter(option =>
+  listingFeatureTagOptions.value.filter(option =>
     isOpenAIListingPlatform.value || (
       option.value !== 'image_generation' &&
       option.value !== 'codex_cli_only' &&
@@ -3868,7 +4026,7 @@ async function loadRoomCatalog(platform: AccountSharePlatform): Promise<void> {
     if (requestVersion !== roomCatalogRequestVersion) return
     roomCatalogModels.value = []
     allowedModels.value = []
-    roomCatalogError.value = extractApiErrorMessage(error, '加载模型目录失败，请重试')
+    roomCatalogError.value = extractApiErrorMessage(error, t('accountShare.errors.loadModelCatalog'))
   } finally {
     if (requestVersion === roomCatalogRequestVersion) {
       roomCatalogLoading.value = false
@@ -3884,6 +4042,10 @@ function isOpenAIListing(listing: AccountShareListing | null | undefined): boole
   return listingPlatform(listing) === 'openai'
 }
 
+function isAPIAggregationListing(listing: AccountShareListing | null | undefined): boolean {
+  return listingPlatform(listing) === 'api_aggregation'
+}
+
 
 
 
@@ -3896,7 +4058,7 @@ function opencodeUsageLabel(listing: AccountShareListing | null | undefined): st
   if (listing?.opencode_30d_usage) parts.push(`30d ${Math.round(listing.opencode_30d_usage.utilization)}%`)
   const label = parts.join(' / ') || '—'
   return listing?.opencode_quota_protection_reason
-    ? `${label}（保护:${listing.opencode_quota_protection_reason}）`
+    ? t('accountShare.card.protectedLabel', { label: label, reason: listing.opencode_quota_protection_reason  })
     : label
 }
 
@@ -3931,7 +4093,7 @@ function roomEligibleAccountCount(listing: AccountShareListing): number {
 }
 
 function roomAggregateAccountCountLabel(listing: AccountShareListing): string {
-  const prefix = listing.deleted || listing.status !== 'active' ? '健康账号' : '可调度账号'
+  const prefix = listing.deleted || listing.status !== 'active' ? t('accountShare.roomAccounts.health') : t('admin.accounts.quotaDashboard.schedulableAccounts')
   return `${prefix} ${roomEligibleAccountCount(listing)}/${roomAttachedAccountCount(listing)}`
 }
 
@@ -3945,7 +4107,7 @@ function roomAggregateInsight(listing: AccountShareListing): {
   const lifecycle = listingStatusLabel(listing)
   if (listing.deleted || listing.status !== 'active') {
     return {
-      detail: `房间生命周期为“${lifecycle}”，当前不可新加入；挂载账号健康度仅反映账号状态，不代表房间已开放。`,
+      detail: t('accountShare.card.lifecycleNotJoinable', { lifecycle }),
       badge: lifecycle,
       tone: listing.deleted
         ? 'muted'
@@ -3956,38 +4118,38 @@ function roomAggregateInsight(listing: AccountShareListing): {
   }
   if (attached === 0) {
     return {
-      detail: `房间生命周期为“${lifecycle}”，但当前没有挂载账号。`,
-      badge: '无账号',
+      detail: t('accountShare.card.lifecycleNoAccounts', { lifecycle }),
+      badge: t('accountShare.card.badgeNoAccounts'),
       tone: 'danger'
     }
   }
   if (eligible === 0) {
     return {
-      detail: `房间生命周期为“${lifecycle}”，但当前没有可路由账号。`,
-      badge: '不可用',
+      detail: t('accountShare.card.lifecycleNoRoutable', { lifecycle }),
+      badge: t('accountShare.lifecycle.healthDown'),
       tone: 'danger'
     }
   }
   if (eligible < attached) {
     return {
-      detail: `房间生命周期为“${lifecycle}”；部分挂载账号当前不具备路由资格。`,
-      badge: '部分可用',
+      detail: t('accountShare.card.lifecyclePartial', { lifecycle }),
+      badge: t('accountShare.lifecycle.healthPartial'),
       tone: 'warning'
     }
   }
   return {
-    detail: `房间生命周期为“${lifecycle}”；全部挂载账号当前具备路由资格。`,
-    badge: '可用',
+    detail: t('accountShare.card.lifecycleRoutable', { lifecycle }),
+    badge: t('common.available'),
     tone: 'normal'
   }
 }
 
 function roomAvailableConcurrencyLabel(listing: AccountShareListing): string {
-  if (listing.deleted || listing.status !== 'active') return '不可新加入'
-  if (listing.runtime_load_known !== true) return '运行时未知'
+  if (listing.deleted || listing.status !== 'active') return t('accountShare.card.notJoinable')
+  if (listing.runtime_load_known !== true) return t('accountShare.card.runtimeUnknown')
   const total = Number(listing.account_concurrency)
   const used = Number(listing.current_concurrency)
-  if (!Number.isFinite(total) || !Number.isFinite(used)) return '运行时未知'
+  if (!Number.isFinite(total) || !Number.isFinite(used)) return t('accountShare.card.runtimeUnknown')
   return `${Math.max(total - used, 0)} / ${Math.max(total, 0)}`
 }
 
@@ -4007,7 +4169,7 @@ function roomWindowUtilization(window?: AccountShareRoomQuotaWindow): number | n
 
 function roomWindowUtilizationLabel(window?: AccountShareRoomQuotaWindow): string {
   const utilization = roomWindowUtilization(window)
-  return utilization === null ? '暂无数据' : `${formatNumber(utilization)}%`
+  return utilization === null ? t('common.noData') : `${formatNumber(utilization)}%`
 }
 
 function roomWindowUtilizationBarClass(window?: AccountShareRoomQuotaWindow): string {
@@ -4018,11 +4180,11 @@ function roomWindowUtilizationBarClass(window?: AccountShareRoomQuotaWindow): st
 }
 
 function platformLabel(platform: string): string {
-  return ACCOUNT_SHARE_PLATFORM_OPTIONS.find(item => item.value === platform)?.label || platform
+  return ACCOUNT_SHARE_PLATFORM_OPTIONS.value.find(item => item.value === platform)?.label || platform
 }
 
 function accountModeGroupName(platform: AccountSharePlatform): string {
-  return ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM[platform]
+  return ACCOUNT_MODE_GROUP_NAME_BY_PLATFORM.value[platform]
 }
 
 function isUsableModeApiKey(key: ApiKey, accountModeGroupID: number): boolean {
@@ -4087,19 +4249,26 @@ const modeApiKeys = computed(() => modeApiKeysForPlatform(activeListingPlatform.
 const modeKeysLoading = computed(() => modeKeysLoadingForPlatform(activeListingPlatform.value))
 const modeKeysLoaded = computed(() => modeKeysLoadedForPlatform(activeListingPlatform.value))
 const isAnyModeKeysLoading = computed(() =>
-  ACCOUNT_SHARE_PLATFORM_OPTIONS.some(option => modeKeysLoadingForPlatform(option.value))
+  ACCOUNT_SHARE_PLATFORM_OPTIONS.value.some(option => modeKeysLoadingForPlatform(option.value))
 )
 
 function modeApiKeyPlaceholderForListing(listing: AccountShareListing): string {
   const platform = listingPlatform(listing)
-  if (modeKeysLoadingForPlatform(platform)) return '正在加载账号模式 API Key'
-  if (!modeKeysLoadedForPlatform(platform)) return '账号模式 API Key 未加载'
-  return `选择${accountModeGroupName(listingPlatform(listing))} Key`
+  if (modeKeysLoadingForPlatform(platform)) return t('accountShare.card.loadingModeKeys')
+  if (!modeKeysLoadedForPlatform(platform)) return t('accountShare.card.modeKeysNotLoaded')
+  return t('accountShare.card.selectModeKey', { group: accountModeGroupName(listingPlatform(listing))  })
 }
 const pendingJoinIntent = computed(() => pendingJoinConfirmation.value?.intent ?? null)
 const pendingJoinTerms = computed(() => pendingJoinIntent.value?.terms ?? null)
 const pendingJoinIsOwnerSelfUse = computed(() => pendingJoinConfirmation.value?.ownerSelfUse === true)
 const pendingJoinPlatform = computed(() => pendingJoinConfirmation.value?.platform ?? 'openai')
+// API 聚合（APIKEY）房间的「未验证渠道」风险确认：以服务端下发的
+// requires_unverified_ack 为准，平台字段兜底，防止旧版本响应漏字段时放行。
+const pendingJoinRequiresUnverifiedAck = computed(() =>
+  pendingJoinIntent.value?.requires_unverified_ack === true
+  || pendingJoinPlatform.value === 'api_aggregation'
+)
+const joinUnverifiedAcknowledged = ref(false)
 const pendingJoinApiKeyLabel = computed(() => pendingJoinConfirmation.value?.apiKeyLabel || '-')
 const pendingJoinIdleTimeoutLabel = computed(() => formatIdleTimeoutSetting(pendingJoinConfirmation.value?.idleTimeoutMinutes ?? 0))
 const joinDialogBusy = computed(() => joiningId.value !== null)
@@ -4112,6 +4281,7 @@ const pendingJoinExpired = computed(() => {
 const pendingJoinCanSubmit = computed(() => {
   const intent = pendingJoinIntent.value
   if (!intent || joinDialogBusy.value) return false
+  if (pendingJoinRequiresUnverifiedAck.value && !joinUnverifiedAcknowledged.value) return false
   return true
 })
 const pendingJoinVisibleModels = computed(() =>
@@ -4141,16 +4311,16 @@ const pendingJoinPriceWarnings = computed(() => {
   if (pendingJoinIsOwnerSelfUse.value) return []
   const warnings: string[] = []
   if (Number(terms.rate_multiplier || 0) > 1) {
-    warnings.push(`本次确认条款中的倍率为 ${formatNumber(terms.rate_multiplier)}x，后续请求消耗会按此倍率计算。`)
+    warnings.push(t('accountShare.card.rateMultiplierWarning', { rate: formatNumber(terms.rate_multiplier)  }))
   }
   if (Number(terms.hourly_rate || 0) > EXPENSIVE_HOURLY_RATE) {
-    warnings.push(`本次确认条款中的小时费为 ${formatNumber(terms.hourly_rate)}，空闲或长时间使用时请留意费用。`)
+    warnings.push(t('accountShare.card.hourlyRateWarning', { hourlyRate: formatNumber(terms.hourly_rate) }))
   }
   return warnings
 })
 const endUseConfirmMessage = computed(() => {
-  const apiKeyLabel = pendingEndUse.value ? formatApiKeyDisplayName(pendingEndUse.value.apiKeyName, pendingEndUse.value.apiKeyID, '当前 Key') : '当前 Key'
-  return `确认结束${apiKeyLabel}的当前使用？完成进行中请求和结算后即可绑定其他房间。`
+  const apiKeyLabel = pendingEndUse.value ? formatApiKeyDisplayName(pendingEndUse.value.apiKeyName, pendingEndUse.value.apiKeyID, t('accountShare.card.currentKey')) : t('accountShare.card.currentKey')
+  return t('accountShare.endUse.confirmEnd', { apiKeyLabel })
 })
 
 const eligibleOwnedAccounts = computed(() => (
@@ -4184,18 +4354,18 @@ const selectedOwnedAccount = computed(() => (
 ))
 
 const ownedAccountSelectionHint = computed(() => {
-  if (ownedAccountsLoading.value) return '正在读取我的账号...'
+  if (ownedAccountsLoading.value) return t('accountShare.roomCreate.loadingAccounts')
   if (ownedAccountsError.value) return ownedAccountsError.value
   if (selectedOwnedAccount.value) {
     return selectedOwnedAccount.value.external_placement?.target === 'public_pool'
       || (!selectedOwnedAccount.value.external_placement && selectedOwnedAccount.value.share_mode === 'public')
-      ? `账号 #${selectedOwnedAccount.value.id} 当前在公共号池；创建时会原子切换到新房间，并保留凭证、代理和私有自用能力。`
-      : `将保留账号 #${selectedOwnedAccount.value.id} 的凭证、代理和私有自用能力。`
+      ? t('accountShare.roomCreate.publicPoolNote', { id: selectedOwnedAccount.value.id })
+      : t('accountShare.roomCreate.keepCredentials', { id: selectedOwnedAccount.value.id })
   }
   if (eligibleOwnedAccounts.value.length === 0) {
-    return '没有可创建房间的账号；账号需健康、等级已确认且尚未加入其他房间。'
+    return t('accountShare.roomCreate.noEligibleAccounts')
   }
-  return `可选 ${eligibleOwnedAccounts.value.length} 个账号。`
+  return t('accountShare.roomCreate.eligibleCount', { count: eligibleOwnedAccounts.value.length  })
 })
 
 const availableSeatCount = computed(() => listings.value.reduce((total, listing) => {
@@ -4204,11 +4374,11 @@ const availableSeatCount = computed(() => listings.value.reduce((total, listing)
 }, 0))
 const activeSeatCount = computed(() => listings.value.reduce((total, listing) => total + Math.max(0, Number(listing.active_seats || 0)), 0))
 const createRoomCapabilityHint = computed(() => {
-  if (capabilitiesLoading.value) return '正在读取房间配额'
+  if (capabilitiesLoading.value) return t('accountShare.roomCreate.loadingCapabilities')
   const blocker = capabilities.value?.capability_blockers[0]
   if (blocker) return capabilityBlockerMessage(blocker)
   if (capabilitiesError.value) return capabilitiesError.value
-  return '创建一个由你管理的账号共享房间'
+  return t('accountShare.roomCreate.createManagedRoom')
 })
 const mainViewTab = computed(() => isMembershipHistoryView.value ? 'using' : isArchiveView.value ? 'mine' : activeFilter.value.tab)
 const isManagementView = computed(() => activeFilter.value.tab === 'mine' || activeFilter.value.tab === 'archive')
@@ -4253,16 +4423,16 @@ const editAccountNameValidationMessage = computed(() =>
 )
 const concurrencyValidationMessage = computed(() => {
   const concurrency = Number(createForm.concurrency)
-  if (!Number.isFinite(concurrency) || concurrency < 1) return '配置并发必须大于 0'
-  if (!Number.isInteger(concurrency)) return '配置并发必须是整数'
-  if (concurrency > MAX_ACCOUNT_CONCURRENCY) return `配置并发不能超过 ${MAX_ACCOUNT_CONCURRENCY}`
+  if (!Number.isFinite(concurrency) || concurrency < 1) return t('accountShare.roomEdit.concurrencyPositive')
+  if (!Number.isInteger(concurrency)) return t('accountShare.roomEdit.concurrencyInteger')
+  if (concurrency > MAX_ACCOUNT_CONCURRENCY) return t('accountShare.roomEdit.concurrencyMax', { max: MAX_ACCOUNT_CONCURRENCY })
   return ''
 })
 const editConcurrencyValidationMessage = computed(() => {
   const concurrency = Number(editForm.concurrency)
-  if (!Number.isFinite(concurrency) || concurrency < 1) return '配置并发必须大于 0'
-  if (!Number.isInteger(concurrency)) return '配置并发必须是整数'
-  if (concurrency > MAX_ACCOUNT_CONCURRENCY) return `配置并发不能超过 ${MAX_ACCOUNT_CONCURRENCY}`
+  if (!Number.isFinite(concurrency) || concurrency < 1) return t('accountShare.roomEdit.concurrencyPositive')
+  if (!Number.isInteger(concurrency)) return t('accountShare.roomEdit.concurrencyInteger')
+  if (concurrency > MAX_ACCOUNT_CONCURRENCY) return t('accountShare.roomEdit.concurrencyMax', { max: MAX_ACCOUNT_CONCURRENCY })
   return ''
 })
 const perUserConcurrencyValidationMessage = computed(() =>
@@ -4276,8 +4446,8 @@ const editPerUserConcurrencyValidationMessage = computed(() =>
 const configEditBlockedReason = computed(() => {
   if (savingConfigEdit.value) return ''
   if (editVersionConflict.value) return ''
-  if (!editReason.value.trim()) return '请先填写下方“本次修改原因”后再保存'
-  if (editAllowedModels.value.length === 0) return '请至少保留一个模型白名单'
+  if (!editReason.value.trim()) return t('accountShare.roomEdit.reasonRequired')
+  if (editAllowedModels.value.length === 0) return t('accountShare.roomEdit.keepOneModel')
   if (editPerUserConcurrencyValidationMessage.value) return editPerUserConcurrencyValidationMessage.value
   return ''
 })
@@ -4305,19 +4475,19 @@ const canCreateRoomFromOwnedAccount = computed(() =>
 
 const draftDiscardMessage = computed(() => (
   pendingDraftDiscardTarget.value === 'config'
-    ? '当前房间配置尚未保存。确认放弃后，本次修改不会提交。'
-    : '当前房间创建信息尚未提交。确认放弃后会恢复为打开窗口时的状态。'
+    ? t('accountShare.roomEdit.discardConfig')
+    : t('accountShare.roomEdit.discardCreate')
 ))
 
 function roomEditBlockerLabels(state: AccountShareRoomManagementState): string[] {
   const blockers = state.blockers
   const labels: string[] = []
-  if (blockers.active_membership_count > 0) labels.push(`使用中 ${blockers.active_membership_count}`)
-  if (blockers.ending_membership_count > 0) labels.push(`结束中 ${blockers.ending_membership_count}`)
-  if (blockers.in_flight_request_count > 0) labels.push(`进行中请求 ${blockers.in_flight_request_count}`)
-  if (blockers.pending_billing_intent_count > 0) labels.push(`待处理计费 ${blockers.pending_billing_intent_count}`)
-  if (blockers.synchronous_billing_pending_count > 0) labels.push(`同步结算中 ${blockers.synchronous_billing_pending_count}`)
-  if (blockers.conflicting_operation || state.pending_operation_id) labels.push('存在生命周期操作')
+  if (blockers.active_membership_count > 0) labels.push(t('accountShare.blockers.activeMembership', { count: blockers.active_membership_count  }))
+  if (blockers.ending_membership_count > 0) labels.push(t('accountShare.blockers.endingMembership', { count: blockers.ending_membership_count  }))
+  if (blockers.in_flight_request_count > 0) labels.push(t('accountShare.blockers.inFlight', { count: blockers.in_flight_request_count  }))
+  if (blockers.pending_billing_intent_count > 0) labels.push(t('accountShare.blockers.pendingBilling', { count: blockers.pending_billing_intent_count  }))
+  if (blockers.synchronous_billing_pending_count > 0) labels.push(t('accountShare.blockers.syncBilling', { count: blockers.synchronous_billing_pending_count  }))
+  if (blockers.conflicting_operation || state.pending_operation_id) labels.push(t('accountShare.blockers.lifecycleOp'))
   return labels
 }
 
@@ -4348,8 +4518,8 @@ const forceEditConfirmMessage = computed(() => {
   const activeSeats = state?.active_seats ?? listing.active_seats
   const seatLimit = state?.seat_limit ?? listing.seat_limit
   const blockers = state ? roomEditBlockerLabels(state) : []
-  const blockerText = blockers.length > 0 ? ` 当前阻塞项：${blockers.join('、')}。` : ''
-  return `房间当前状态为“${statusLabel(status)}”，消费者席位 ${activeSeats}/${seatLimit}。${blockerText}强制编辑会生成新的条款 revision；已有 membership 继续按其历史快照结算。`
+  const blockerText = blockers.length > 0 ? t('accountShare.blockers.suffix', { blockers: blockers.join('、') }) : ''
+  return t('accountShare.roomEdit.forceEditNotice', { status: statusLabel(status), activeSeats, seatLimit, blockerText })
 })
 
 const isKeyResolutionMode = computed(() => routeQueryString(route.query.mode) === 'resolve-key-binding')
@@ -4358,7 +4528,7 @@ const keyResolutionApiKeyID = computed(() => {
   return Number.isSafeInteger(value) && value > 0 ? value : 0
 })
 const keyResolutionApiKeyName = computed(() => routeQueryString(route.query.api_key_name).trim())
-const keyResolutionKeyLabel = computed(() => keyResolutionApiKeyName.value || (keyResolutionApiKeyID.value > 0 ? `API Key #${keyResolutionApiKeyID.value}` : '指定 API Key'))
+const keyResolutionKeyLabel = computed(() => keyResolutionApiKeyName.value || (keyResolutionApiKeyID.value > 0 ? `API Key #${keyResolutionApiKeyID.value}` : t('accountShare.keyResolution.specifiedKey')))
 const keyResolutionActiveCount = computed(() => keyResolutionBindingStatus.value?.active_count ?? 0)
 const keyResolutionEndingCount = computed(() => keyResolutionBindingStatus.value?.ending_count ?? 0)
 const keyResolutionAllClear = computed(() =>
@@ -4375,10 +4545,10 @@ const keyResolutionPanelToneClass = computed(() => ({
   'key-resolution-panel-clear': keyResolutionAllClear.value
 }))
 const keyResolutionStatusMessage = computed(() => {
-  if (keyResolutionLoading.value) return `正在核对 ${keyResolutionKeyLabel.value} 的使用记录，请稍候。`
+  if (keyResolutionLoading.value) return t('accountShare.keyResolution.checking', { label: keyResolutionKeyLabel.value  })
   if (keyResolutionError.value) return keyResolutionError.value
-  if (keyResolutionAllClear.value) return '可以返回 API Key 管理重新执行删除或更换分组；系统不会自动继续原操作。'
-  return '请在下方关联账号中结束使用，并等待退出结算完成。全部处理完成后，状态会自动重新核对。'
+  if (keyResolutionAllClear.value) return t('accountShare.keyResolution.allClear')
+  return t('accountShare.keyResolution.endUsageFirst')
 })
 const displayedListings = computed(() => isKeyResolutionMode.value ? keyResolutionListings.value : listings.value)
 const mySpendAccountOptions = computed(() =>
@@ -4392,10 +4562,10 @@ const mySpendActivePickerPagination = computed(() =>
 const mySpendHistorySelection = computed(() => mySpendSelectedOption.value?.source === 'history')
 const mySpendAccountPickerTitle = computed(() => {
   if (mySpendAccountsLoading.value && mySpendUsingPagination.total === 0 && mySpendHistoryPagination.total === 0) {
-    return '加载中'
+    return t('accountShare.mySpend.loading')
   }
-  if (mySpendUsingPagination.total === 0 && mySpendHistoryPagination.total === 0) return '暂无记录'
-  return `当前使用 ${countLabel(mySpendUsingPagination.total, mySpendUsingPagination.totalExact)} 条 · 历史 ${mySpendHistoryPagination.total} 条`
+  if (mySpendUsingPagination.total === 0 && mySpendHistoryPagination.total === 0) return t('accountShare.mySpend.noRecords')
+  return t('accountShare.mySpend.counts', { usingCount: countLabel(mySpendUsingPagination.total, mySpendUsingPagination.totalExact), historyCount: mySpendHistoryPagination.total  })
 })
 const mySpendMetrics = computed<MySpendMetric[]>(() => {
   const summary = mySpendSummary.value
@@ -4403,7 +4573,7 @@ const mySpendMetrics = computed<MySpendMetric[]>(() => {
   return [
     {
       key: 'total',
-      label: '合计扣费',
+      label: t('accountShare.mySpend.totalCost'),
       value: formatSpendCost(summary.total_cost),
       note: mySpendRangeLabel(summary.range),
       icon: 'dollar',
@@ -4411,25 +4581,25 @@ const mySpendMetrics = computed<MySpendMetric[]>(() => {
     },
     {
       key: 'request',
-      label: '请求费用',
+      label: t('accountShare.mySpend.requestCost'),
       value: formatSpendCost(summary.request_cost),
-      note: `${formatWholeNumber(summary.request_count)} 次请求`,
+      note: t('accountShare.mySpend.requestCount', { count: formatWholeNumber(summary.request_count)  }),
       icon: 'creditCard',
       tone: 'request'
     },
     {
       key: 'hourly',
-      label: '小时费实际扣费',
+      label: t('accountShare.mySpend.hourlyNetCost'),
       value: formatSpendCost(summary.hourly_net_cost),
-      note: `已预扣 ${formatSpendCost(summary.hourly_charge)} · 已退回 ${formatSpendCost(summary.hourly_refund + summary.hourly_waiver_refund)}`,
+      note: t('accountShare.mySpend.hourlyNote', { charged: formatSpendCost(summary.hourly_charge), refunded: formatSpendCost(summary.hourly_refund + summary.hourly_waiver_refund)  }),
       icon: 'clock',
       tone: 'hourly'
     },
     {
       key: 'tokens',
-      label: 'Token 总量',
+      label: t('accountShare.mySpend.tokenTotal'),
       value: formatWholeNumber(summary.total_tokens),
-      note: `输入 ${formatWholeNumber(summary.input_tokens)} · 输出 ${formatWholeNumber(summary.output_tokens)}`,
+      note: t('accountShare.mySpend.tokenNote', { input: formatWholeNumber(summary.input_tokens), output: formatWholeNumber(summary.output_tokens)  }),
       icon: 'chart',
       tone: 'usage'
     }
@@ -4475,45 +4645,45 @@ const recommendationPagedCandidates = computed<AccountShareRecommendationCandida
 })
 const recommendationPageRangeText = computed(() => {
   const total = recommendationCandidates.value.length
-  if (total === 0) return '暂无可展示结果'
+  if (total === 0) return t('accountShare.mySpend.noDisplayable')
   const safePage = Math.min(Math.max(recommendationPage.value, 1), recommendationPageCount.value)
   const start = (safePage - 1) * ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE + 1
   const end = Math.min(start + ACCOUNT_SHARE_RECOMMENDATION_PAGE_SIZE - 1, total)
-  return `第 ${start}-${end} 条，共 ${total} 条`
+  return t('accountShare.mySpend.pageRange', { start, end, total })
 })
 const recommendationInputSummary = computed(() => {
   const input = recommendationResult.value?.input
   if (!input) return ''
   const activeHours = normalizeRecommendationActiveHours(input.active_hours)
   const requestsPerHour = activeHours > 0 ? input.request_count / activeHours : input.request_count
-  return `${input.request_count} 次请求 / ${formatNumber(activeHours)} 小时 / ${input.model} · ${formatNumber(requestsPerHour)} 次/小时`
+  return t('accountShare.estimate.requestSummary', { count: input.request_count, hours: formatNumber(activeHours), model: input.model, perHour: formatNumber(requestsPerHour)  })
 })
 const modelFilterSummary = computed(() => {
-  if (listingFilters.models.length === 0) return '全部模型'
+  if (listingFilters.models.length === 0) return t('admin.usage.allModels')
   if (listingFilters.models.length === 1) return listingFilters.models[0]
-  return `已选 ${listingFilters.models.length} 个模型`
+  return t('accountShare.filterChips.modelsSelected', { count: listingFilters.models.length  })
 })
 const seatFilterSummary = computed(() => {
-  if (listingFilters.seatLimits.length === 0) return '全部席位'
-  if (listingFilters.seatLimits.length === 1) return `${listingFilters.seatLimits[0]}人`
-  return `已选 ${listingFilters.seatLimits.length} 个席位`
+  if (listingFilters.seatLimits.length === 0) return t('accountShare.filterChips.allSeats')
+  if (listingFilters.seatLimits.length === 1) return t('accountShare.filterChips.seatCount', { count: listingFilters.seatLimits[0]  })
+  return t('accountShare.filterChips.seatsSelected', { count: listingFilters.seatLimits.length  })
 })
 const featureTagFilterSummary = computed(() => {
-  if (listingFilters.featureTags.length === 0) return '全部标签'
+  if (listingFilters.featureTags.length === 0) return t('accountShare.filterChips.allTags')
   if (listingFilters.featureTags.length === 1) {
-    return visibleListingFeatureTagOptions.value.find(option => option.value === listingFilters.featureTags[0])?.label || '已选标签'
+    return visibleListingFeatureTagOptions.value.find(option => option.value === listingFilters.featureTags[0])?.label || t('accountShare.filterChips.tagsSelected')
   }
-  return `已选 ${listingFilters.featureTags.length} 个标签`
+  return t('accountShare.filterChips.tagsCount', { count: listingFilters.featureTags.length  })
 })
 const statusFilterSummary = computed(() => (
-  listingStatusFilterOptions.find(option => option.value === listingFilters.status)?.label || '默认状态'
+  listingStatusFilterOptions.value.find(option => option.value === listingFilters.status)?.label || t('accountShare.statusFilter.default')
 ))
 const accountLevelFilterSummary = computed(() => (
-  accountLevelFilterOptions.value.find(option => option.value === listingFilters.accountLevel)?.label || '全部等级'
+  accountLevelFilterOptions.value.find(option => option.value === listingFilters.accountLevel)?.label || t('accountShare.levelFilter.all')
 ))
 const selectedSortOptions = computed(() =>
   listingFilters.sortKeys
-    .map(key => listingSortOptions.find(option => option.key === key))
+    .map(key => listingSortOptions.value.find(option => option.key === key))
     .filter((option): option is ListingSortOption => Boolean(option))
 )
 const activeFilterChips = computed<ActiveFilterChip[]>(() => {
@@ -4521,18 +4691,18 @@ const activeFilterChips = computed<ActiveFilterChip[]>(() => {
   if (selectedOwnerID.value > 0) {
     chips.push({
       key: `owner:${selectedOwnerID.value}`,
-      label: `号主：${selectedOwnerDisplayName.value || `用户 #${selectedOwnerID.value}`}`,
+      label: t('accountShare.filterChips.owner', { name: selectedOwnerDisplayName.value || t('accountShare.common.userId', { id: selectedOwnerID.value }) }),
       remove: () => {
         selectedOwnerID.value = 0
         selectedOwnerDisplayName.value = ''
       }
     })
   }
-  const statusOption = listingStatusFilterOptions.find(option => option.value === listingFilters.status)
+  const statusOption = listingStatusFilterOptions.value.find(option => option.value === listingFilters.status)
   if (listingFilters.status !== '' && statusOption) {
     chips.push({
       key: `status:${listingFilters.status}`,
-      label: `状态：${statusOption.label}`,
+      label: t('accountShare.filterChips.status', { label: statusOption.label }),
       // 清除状态筛选语义：回到「默认状态」(空)。tab=all 下后端对空 status 兜底
       // available_only=true（仍只显示可用），mine/using 管理视图下空 status 即全量。
       remove: () => { listingFilters.status = '' }
@@ -4543,7 +4713,7 @@ const activeFilterChips = computed<ActiveFilterChip[]>(() => {
   if (isOpenAIListingPlatform.value && listingFilters.accountLevel !== 'all' && levelOption) {
     chips.push({
       key: `level:${listingFilters.accountLevel}`,
-      label: `等级：${levelOption.label}`,
+      label: t('accountShare.filterChips.level', { label: levelOption.label }),
       remove: () => { listingFilters.accountLevel = 'all' }
     })
   }
@@ -4551,7 +4721,7 @@ const activeFilterChips = computed<ActiveFilterChip[]>(() => {
   for (const [index, option] of selectedSortOptions.value.entries()) {
     chips.push({
       key: `sort:${option.key}`,
-      label: `排序${index + 1}：${option.label}`,
+      label: t('accountShare.filterChips.sort', { index: index + 1, label: option.label }),
       remove: () => removeListingSort(option.key)
     })
   }
@@ -4559,7 +4729,7 @@ const activeFilterChips = computed<ActiveFilterChip[]>(() => {
   for (const seat of listingFilters.seatLimits) {
     chips.push({
       key: `seat:${seat}`,
-      label: `${seat}人席位`,
+      label: t('accountShare.filterChips.seatChip', { seat }),
       remove: () => removeSeatFilter(seat)
     })
   }
@@ -4599,7 +4769,7 @@ function hasKnownAccountName(name: string, ownerUserID: number, excludeAccountID
 }
 
 function suggestedAccountName(platform: AccountSharePlatform = createPlatform.value): string {
-  const baseName = ACCOUNT_NAME_BASE_BY_PLATFORM[platform]
+  const baseName = ACCOUNT_NAME_BASE_BY_PLATFORM.value[platform]
   const ownerUserID = Number(authStore.user?.id || 0)
   for (let index = 1; index <= 999; index += 1) {
     const candidate = index === 1 ? baseName : `${baseName}${index}`
@@ -4610,25 +4780,25 @@ function suggestedAccountName(platform: AccountSharePlatform = createPlatform.va
 
 function validateAccountName(name: string, excludeAccountID?: number, ownerUserID = 0): string {
   const value = name.trim()
-  if (!value) return '请填写房间名称'
+  if (!value) return t('accountShare.roomForm.nameRequired')
   // 只校验 trim 之后的内容：首尾空格由 trim 消化，提交给后端的也是 trim 后的值。
   // 校验原串会让一个尾随空格把整次保存打回，而用户可能压根没在改房间名。
-  if (/\s/.test(value)) return '房间名称不能包含空格、换行或制表符'
-  if (Array.from(value).length > 100) return '房间名称不能超过 100 个字符'
-  if (hasKnownAccountName(value, ownerUserID, excludeAccountID)) return '房间名称已存在，请换一个名称'
+  if (/\s/.test(value)) return t('accountShare.roomForm.nameNoSpaces')
+  if (Array.from(value).length > 100) return t('accountShare.roomForm.nameTooLong')
+  if (hasKnownAccountName(value, ownerUserID, excludeAccountID)) return t('accountShare.roomForm.nameExists')
   return ''
 }
 
 function buildPerUserConcurrencyLimitTip(maxPerUser: number): string {
-  return `每个用户最多可设置 ${maxPerUser} 个并发请求；账号忙时仍受运行时请求能力限制，不影响成员上限。`
+  return t('accountShare.roomForm.perUserConcurrencyHelp', { maxPerUser })
 }
 
 function validatePerUserConcurrencyValue(value: unknown): string {
   const perUserConcurrency = Number(value)
-  if (!Number.isFinite(perUserConcurrency) || perUserConcurrency < 1) return '单用户最高并发必须大于 0'
-  if (!Number.isInteger(perUserConcurrency)) return '单用户最高并发必须是整数'
+  if (!Number.isFinite(perUserConcurrency) || perUserConcurrency < 1) return t('accountShare.roomForm.perUserPositive')
+  if (!Number.isInteger(perUserConcurrency)) return t('accountShare.roomForm.perUserInteger')
   if (perUserConcurrency > MAX_PER_USER_CONCURRENCY) {
-    return `单用户最高并发不能超过 ${MAX_PER_USER_CONCURRENCY}`
+    return t('accountShare.roomForm.perUserMax', { max: MAX_PER_USER_CONCURRENCY })
   }
   return ''
 }
@@ -4683,7 +4853,7 @@ function clearListingSorts(): void {
 }
 
 function findSortOption(key: ListingSortKey): ListingSortOption | undefined {
-  return listingSortOptions.find(option => option.key === key)
+  return listingSortOptions.value.find(option => option.key === key)
 }
 
 function sortFieldIndex(sortBy: AccountShareListingSortBy): number {
@@ -4738,10 +4908,10 @@ function removeListingSort(key: ListingSortKey): void {
 function sortFieldButtonTitle(option: ListingSortFieldOption): string {
   const sortOrder = activeSortOrder(option.sortBy)
   const priority = sortPriorityLabel(option.sortBy)
-  if (!sortOrder) return `添加${option.label}${option.ascLabel}为第 ${listingFilters.sortKeys.length + 1} 排序`
+  if (!sortOrder) return t('accountShare.sortPicker.add', { label: option.label, asc: option.ascLabel, index: listingFilters.sortKeys.length + 1  })
   const currentLabel = sortOrder === 'asc' ? option.ascLabel : option.descLabel
   const nextLabel = sortOrder === 'asc' ? option.descLabel : option.ascLabel
-  return `${priority} 当前${option.label}${currentLabel}，再次点击切换为${nextLabel}`
+  return t('accountShare.sortPicker.toggle', { priority: priority, label: option.label, current: currentLabel, next: nextLabel })
 }
 
 function toggleFilterPopover(popover: ListingFilterPopover): void {
@@ -4899,10 +5069,10 @@ function abortMembershipHistoryRequest(): void {
 function formatAccountShareLoadError(error: unknown, fallback: string): string {
   const message = extractApiErrorMessage(error, fallback)
   if (/Request failed with status code 500/i.test(message)) {
-    return '账号广场接口返回 500，请确认后端服务已启动，或查看后端日志定位原因。'
+    return t('accountShare.errors.api500')
   }
   if (/Network Error/i.test(message)) {
-    return '账号广场接口暂时无法连接，请确认后端服务已启动。'
+    return t('accountShare.errors.apiUnreachable')
   }
   return message
 }
@@ -4960,7 +5130,7 @@ function handleRoomGridCapacityChange(pageSize: number): void {
 }
 
 function countLabel(total: number, exact: boolean): string {
-  return exact ? String(total) : `至少 ${total}`
+  return exact ? String(total) : t('accountShare.estimate.atLeast', { total })
 }
 
 function formatNumber(value: number): string {
@@ -5019,29 +5189,29 @@ function setRecommendationPage(page: number): void {
 }
 
 function recommendationRequestCostLabel(candidate: AccountShareRecommendationCandidate): string {
-  const prefix = candidate.estimate.owner_self_use ? '自用' : ''
-  return `${prefix}${recommendationBillingModeLabel(candidate.estimate.billing_mode)}总费用`
+  const prefix = candidate.estimate.owner_self_use ? t('accountShare.estimate.selfUse') : ''
+  return t('accountShare.estimate.billingTotal', { prefix, billingMode: recommendationBillingModeLabel(candidate.estimate.billing_mode) })
 }
 
 function recommendationHourlyCostText(candidate: AccountShareRecommendationCandidate): string {
-  return candidate.estimate.owner_self_use ? '不收取' : formatRecommendationCost(candidate.estimate.hourly_net_cost)
+  return candidate.estimate.owner_self_use ? t('accountShare.estimate.notCharged') : formatRecommendationCost(candidate.estimate.hourly_net_cost)
 }
 
 function recommendationUpfrontCostText(candidate: AccountShareRecommendationCandidate): string {
-  return candidate.estimate.owner_self_use ? '不校验' : formatRecommendationCost(candidate.estimate.upfront_required)
+  return candidate.estimate.owner_self_use ? t('accountShare.estimate.notChecked') : formatRecommendationCost(candidate.estimate.upfront_required)
 }
 
 function recommendationOwnerSelfUseSummary(candidate: AccountShareRecommendationCandidate): string {
   const listing = candidate.listing
-  return `这是你自己上架的账号，费用估算按自用规则执行：${formatNumber(candidate.estimate.effective_rate_multiplier)}x、不收小时费、不校验最低余额；公开参数 ${formatNumber(listing.rate_multiplier)}x / 小时费 ${formatNumber(listing.hourly_rate)} / 低消 ${hourlyFeeWaiverLabel(listing.hourly_fee_waiver_minimum)} 仍用于其他用户。`
+  return t('accountShare.estimate.selfUseNote', { effectiveRateMultiplier: formatNumber(candidate.estimate.effective_rate_multiplier), rateMultiplier: formatNumber(listing.rate_multiplier), hourlyRate: formatNumber(listing.hourly_rate), hourlyFeeWaiverMinimum: hourlyFeeWaiverLabel(listing.hourly_fee_waiver_minimum) })
 }
 
 function recommendationBillingModeLabel(mode: string): string {
   switch (mode) {
     case 'per_request':
-      return '按次'
+      return t('availableChannels.pricing.billingModePerRequest')
     case 'image':
-      return '图片'
+      return t('keys.openImagePlayground')
     case 'token':
       return 'Token'
     default:
@@ -5055,34 +5225,34 @@ function formatRating(value: number): string {
 
 function listingRatingLabel(listing: AccountShareListing): string {
   const count = Number(listing.rating_count || 0)
-  if (count <= 0) return '未评分'
-  return `${formatRating(Number(listing.rating_avg || 0))}/10 · ${count}人`
+  if (count <= 0) return t('accountShare.card.notRated')
+  return t('accountShare.card.rating', { rating: formatRating(Number(listing.rating_avg || 0)), count: count })
 }
 
 function ownerDisplayName(listing: AccountShareListing | null | undefined): string {
   if (!listing) return ''
-  return listing.owner_username || `用户 ${listing.owner_user_id}`
+  return listing.owner_username || t('accountShare.card.ownerUser', { id: listing.owner_user_id  })
 }
 
 
 function hourlyFeeWaiverLabel(value?: number | null): string {
   const amount = Number(value || 0)
-  if (!Number.isFinite(amount) || amount <= 0) return '未开启'
-  return `${formatNumber(amount)}/小时`
+  if (!Number.isFinite(amount) || amount <= 0) return t('accountShare.card.notEnabled')
+  return t('accountShare.card.perHour', { amount: formatNumber(amount) })
 }
 
 function formatIdleTimeoutSetting(minutes: number): string {
   const normalized = normalizeIdleTimeoutMinutes(minutes)
-  if (normalized <= 0) return '未设置'
-  if (normalized < 60) return `${normalized} 分钟`
+  if (normalized <= 0) return t('admin.accounts.privacyUnset')
+  if (normalized < 60) return t('accountShare.card.minutes', { minutes: normalized })
   const hours = Math.floor(normalized / 60)
   const restMinutes = normalized % 60
-  if (hours < 24) return restMinutes > 0 ? `${hours} 小时 ${restMinutes} 分钟` : `${hours} 小时`
+  if (hours < 24) return restMinutes > 0 ? t('accountShare.format.hoursMinutes', { hours: hours, minutes: restMinutes }) : t('accountShare.format.hours', { hours })
   const days = Math.floor(hours / 24)
   const restHours = hours % 24
-  const hourPart = restHours > 0 ? ` ${restHours} 小时` : ''
-  const minutePart = restMinutes > 0 ? ` ${restMinutes} 分钟` : ''
-  return `${days} 天${hourPart}${minutePart}`
+  const hourPart = restHours > 0 ? t('accountShare.format.restHours', { hours: restHours }) : ''
+  const minutePart = restMinutes > 0 ? t('accountShare.format.restMinutes', { minutes: restMinutes }) : ''
+  return t('accountShare.format.daysHoursMinutes', { days, hourPart, minutePart })
 }
 
 
@@ -5095,32 +5265,32 @@ function formatRelativeUntil(value?: string | null): string {
   const date = normalizeDateInput(value)
   if (!date) return '-'
   const diffMs = date.getTime() - nowMs.value
-  if (diffMs <= 0) return '现在'
+  if (diffMs <= 0) return t('common.now')
   const totalMinutes = Math.ceil(diffMs / 60_000)
   const days = Math.floor(totalMinutes / 1440)
   const hours = Math.floor((totalMinutes % 1440) / 60)
   const minutes = totalMinutes % 60
-  if (days > 0) return `${days}天${hours > 0 ? ` ${hours}小时` : ''}`
-  if (hours > 0) return `${hours}小时${minutes > 0 ? ` ${minutes}分钟` : ''}`
-  return `${minutes}分钟`
+  if (days > 0) return t('accountShare.format.daysPart', { days }) + (hours > 0 ? t('accountShare.format.hoursPart', { hours }) : '')
+  if (hours > 0) return t('accountShare.format.hoursPart', { hours }) + (minutes > 0 ? t('accountShare.format.minutesPart', { minutes }) : '')
+  return t('accountShare.format.minutes', { minutes })
 }
 
 function formatCountdownUntil(value?: string | null): string {
   const date = normalizeDateInput(value)
   if (!date) return '-'
-  return date.getTime() <= nowMs.value ? '现在' : `${formatRelativeUntil(value)}后`
+  return date.getTime() <= nowMs.value ? t('common.now') : t('accountShare.format.afterRelative', { time: formatRelativeUntil(value)  })
 }
 
 function formatDurationCompact(seconds?: number | null): string {
   const totalSeconds = Math.max(0, Math.floor(Number(seconds || 0)))
-  if (totalSeconds <= 0) return '现在'
+  if (totalSeconds <= 0) return t('common.now')
   const days = Math.floor(totalSeconds / 86_400)
   const hours = Math.floor((totalSeconds % 86_400) / 3_600)
   const minutes = Math.floor((totalSeconds % 3_600) / 60)
-  if (days > 0) return `${days}天${hours > 0 ? `${hours}小时` : ''}`
-  if (hours > 0) return `${hours}小时${minutes > 0 ? `${minutes}分钟` : ''}`
-  if (minutes > 0) return `${minutes}分钟`
-  return `${totalSeconds}秒`
+  if (days > 0) return t('accountShare.format.daysPart', { days }) + (hours > 0 ? t('accountShare.format.hoursPart', { hours }) : '')
+  if (hours > 0) return t('accountShare.format.hoursPart', { hours }) + (minutes > 0 ? t('accountShare.format.minutesPart', { minutes }) : '')
+  if (minutes > 0) return t('accountShare.format.minutes', { minutes })
+  return t('accountShare.format.seconds', { seconds: totalSeconds })
 }
 
 function waiverProgressVisible(listing: AccountShareListing): boolean {
@@ -5196,8 +5366,8 @@ function waiverProgressToneClass(listing: AccountShareListing): string {
 
 function waiverProgressStatusLabel(listing: AccountShareListing): string {
   const progress = currentWaiverProgressSnapshot(listing)
-  if (!progress) return '未开启'
-  return progress.status === 'met' ? '已达标' : `还差 ${formatSpendCost(progress.remainingAmount)}`
+  if (!progress) return t('accountShare.card.notEnabled')
+  return progress.status === 'met' ? t('activities.participation.qualified') : t('accountShare.progress.remaining', { amount: formatSpendCost(progress.remainingAmount)  })
 }
 
 function waiverProgressTitle(listing: AccountShareListing): string {
@@ -5210,20 +5380,20 @@ function waiverProgressAmountLabel(listing: AccountShareListing): string {
   const progress = currentWaiverProgressSnapshot(listing)
   if (!progress) return ''
   if (progress.status === 'met') {
-    return `预计退回小时费 ${formatSpendCost(progress.estimatedHourlyFeeRefund)}`
+    return t('accountShare.progress.hourlyRefund', { amount: formatSpendCost(progress.estimatedHourlyFeeRefund)  })
   }
-  return `已消费 ${formatSpendCost(progress.usageAmount)}，低消要求 ${formatSpendCost(progress.requiredAmount)}`
+  return t('accountShare.progress.usageVsRequired', { used: formatSpendCost(progress.usageAmount), required: formatSpendCost(progress.requiredAmount)  })
 }
 
 function waiverProgressMetaLabel(listing: AccountShareListing): string {
   const progress = currentWaiverProgressSnapshot(listing)
   if (!progress) return ''
-  return `剩余 ${formatDurationCompact(progress.remainingSeconds)} · 请求 ${formatWholeNumber(progress.requestCount)} 次`
+  return t('accountShare.progress.remainingTime', { time: formatDurationCompact(progress.remainingSeconds), count: formatWholeNumber(progress.requestCount)  })
 }
 
 function waiverProgressRemainingLabel(listing: AccountShareListing): string {
   const remainingSeconds = waiverProgressRemainingSeconds(listing)
-  return remainingSeconds <= 0 ? '等待结算' : formatDurationCompact(remainingSeconds)
+  return remainingSeconds <= 0 ? t('accountShare.progress.waitingSettlement') : formatDurationCompact(remainingSeconds)
 }
 
 function waiverProgressRemainingSeconds(listing: AccountShareListing): number {
@@ -5311,7 +5481,7 @@ function listingDisplayName(listing: AccountShareListing): string {
   if ((isOwnListing(listing) || authStore.isAdmin) && listing.account_name) {
     return listing.account_name
   }
-  return `房间 #${listing.id}`
+  return t('accountShare.common.roomId', { id: listing.id })
 }
 
 
@@ -5330,7 +5500,7 @@ function validityInfo(listing: AccountShareListing): { label: string; expiresAtL
   const diffMs = expiresAt.getTime() - nowMs.value
   const days = Math.ceil(diffMs / 86_400_000)
   return {
-    label: diffMs <= 0 ? '已过期' : `有效期 ${Math.max(1, days)}天`,
+    label: diffMs <= 0 ? t('keys.status.expired') : t('accountShare.card.validDays', { days: Math.max(1, days) }),
     expiresAtLabel: formatDate(expiresAt.toISOString())
   }
 }
@@ -5351,21 +5521,21 @@ function historySnapshotDescription(listing: AccountShareListing, context: 'memb
   switch (listing.history_snapshot_quality) {
     case 'exact':
       return context === 'archive'
-        ? '当前展示的是删除时保存的精确房间条款快照'
-        : '当前展示的是本次历史使用时保存的精确条款快照'
+        ? t('accountShare.snapshot.deletedPrecise')
+        : t('accountShare.snapshot.historyPrecise')
     case 'backfilled_current':
       return context === 'archive'
-        ? '当前展示的是由删除前最终房间信息回填的历史内容，不是删除时保存的精确快照'
-        : '当前展示的是由当前或最终房间信息回填的历史内容，不是使用当时的精确快照'
+        ? t('accountShare.snapshot.deletedBackfilled')
+        : t('accountShare.snapshot.historyBackfilled')
     case 'unknown':
-      return '该记录生成于历史快照功能上线前，迁移前信息不可恢复'
+      return t('accountShare.snapshot.preMigration')
     default:
-      return '当前展示历史记录，但服务端未标注快照精度'
+      return t('accountShare.snapshot.unmarked')
   }
 }
 
 function deletedHistorySnapshotMessage(listing: AccountShareListing): string {
-  return `该房间已删除；${historySnapshotDescription(listing, 'archive')}。不能再加入、编辑或管理账号。`
+  return t('accountShare.detail.deletedPrefix', { snapshotDesc: historySnapshotDescription(listing, 'archive') })
 }
 
 function isOwnListing(listing: AccountShareListing): boolean {
@@ -5379,17 +5549,17 @@ function selfUseJoinUnavailable(listing: AccountShareListing): boolean {
 
 function listingJoinUnavailableReason(listing: AccountShareListing): string {
   if (listing.deleted || listing.status !== 'active') {
-    return `房间当前${statusLabel(listing.status)}，不可新加入。`
+    return t('accountShare.detail.notJoinableStatus', { status: statusLabel(listing.status) })
   }
   // 房主自用不占消费者席位，按服务端自用规则处理余额与可路由账号限制。
   if (!isOwnListing(listing)) {
-    if (listing.active_seats >= listing.seat_limit) return '房间已满，请选择其他房间或稍后再试。'
+    if (listing.active_seats >= listing.seat_limit) return t('accountShare.detail.roomFull')
     // 余额不足：后端加入前校验 user.Balance < MinBalanceRequired 会拒绝
     // （account_share_mode.go:3876，ErrAccountShareBalanceBelowMinimum）。
     const balance = Number(authStore.user?.balance ?? 0)
     const minBalance = Number(listing.min_balance_required ?? 0)
     if (Number.isFinite(balance) && Number.isFinite(minBalance) && balance < minBalance) {
-      return '你的余额低于该房间的最低余额要求，暂时无法加入。'
+      return t('accountShare.detail.balanceLow')
     }
     // 只有明确知道「挂载账号数为 0」或「可路由账号数为 0」才判不可用；
     // healthy_account_count 在部分快照/视图可能未填充（缺省 0），此时不拦截，
@@ -5399,10 +5569,10 @@ function listingJoinUnavailableReason(listing: AccountShareListing): string {
     const attachedKnown = listing.quota_summary?.attached_count != null || Number(listing.account_count) > 0
     const eligibleKnown = listing.quota_summary?.eligible_count != null || Number(listing.healthy_account_count) > 0
     if (attachedKnown && attached <= 0) {
-      return '房间当前没有挂载账号，暂时无法加入。'
+      return t('accountShare.detail.noAccounts')
     }
     if (eligibleKnown && eligible <= 0) {
-      return '房间当前没有可路由账号，暂时无法加入。'
+      return t('accountShare.detail.noRoutable')
     }
   }
   return ''
@@ -5432,24 +5602,24 @@ function runtimeInsightClass(tone: RuntimeTone): string {
 function statusLabel(status: AccountShareListingStatus): string {
   switch (status) {
     case 'active':
-      return '已上架'
+      return t('accountShare.statusFilter.active')
     case 'paused':
-      return '已下架'
+      return t('accountShare.lifecycle.statusDelisted')
     case 'validating':
-      return '恢复校验中'
+      return t('accountShare.detail.recovering')
     case 'draining':
-      return '下架处理中'
+      return t('accountShare.lifecycle.statusDelisting')
     case 'suspended':
-      return '管理员暂停'
+      return t('accountShare.lifecycle.statusAdminPaused')
     case 'disabled':
-      return '已下架'
+      return t('accountShare.lifecycle.statusDelisted')
     default:
       return status
   }
 }
 
 function listingStatusLabel(listing: AccountShareListing): string {
-  return listing.deleted ? '已删除' : statusLabel(listing.status)
+  return listing.deleted ? t('ideas.status.deleted') : statusLabel(listing.status)
 }
 
 function statusBadgeClass(status: AccountShareListingStatus): string {
@@ -5481,12 +5651,12 @@ function modeKeyLabel(key: ApiKey): string {
   return key.name || `Key #${key.id}`
 }
 
-function formatApiKeyIDLabel(apiKeyID?: number, emptyLabel = 'Key 未知'): string {
+function formatApiKeyIDLabel(apiKeyID?: number, emptyLabel = t('accountShare.detail.keyUnknown')): string {
   const normalizedID = Number(apiKeyID || 0)
   return normalizedID > 0 ? `Key #${normalizedID}` : emptyLabel
 }
 
-function formatApiKeyDisplayName(apiKeyName?: string, apiKeyID?: number, emptyLabel = 'Key 未知'): string {
+function formatApiKeyDisplayName(apiKeyName?: string, apiKeyID?: number, emptyLabel = t('accountShare.detail.keyUnknown')): string {
   const normalizedName = (apiKeyName || '').trim()
   if (normalizedName) return `Key「${normalizedName}」`
   return formatApiKeyIDLabel(apiKeyID, emptyLabel)
@@ -5522,7 +5692,7 @@ function selectedModeApiKeyID(listing: AccountShareListing): number {
   return modeApiKeysForListing(listing).some(key => key.id === selectedID) ? selectedID : 0
 }
 
-function showActionError(message: string, title = '操作失败', action: AccountShareActionErrorAction = null): void {
+function showActionError(message: string, title = t('ideas.admin.actionFailed'), action: AccountShareActionErrorAction = null): void {
   actionErrorDialog.title = title
   actionErrorDialog.message = message
   actionErrorDialog.action = action
@@ -5531,7 +5701,7 @@ function showActionError(message: string, title = '操作失败', action: Accoun
 
 function closeActionErrorDialog(): void {
   actionErrorDialog.show = false
-  actionErrorDialog.title = '操作失败'
+  actionErrorDialog.title = t('ideas.admin.actionFailed')
   actionErrorDialog.message = ''
   actionErrorDialog.action = null
 }
@@ -5540,30 +5710,30 @@ function showModeApiKeyRequiredDialog(listing?: AccountShareListing): void {
   const platform = listingPlatform(listing)
   const groupName = accountModeGroupName(platform)
   if (modeKeysLoadingForPlatform(platform)) {
-    showActionError('账号模式 API Key 正在加载，请稍候再加入使用。', '正在加载')
+    showActionError(t('accountShare.join.modeKeysLoading'), t('accountShare.join.loading'))
     return
   }
   if (!modeKeysLoadedForPlatform(platform)) {
     const detail = modeKeysErrorByPlatform[platform]
     showActionError(
-      detail ? `账号模式 API Key 加载失败：${detail}。请点击页面顶部“刷新”后重试。` : '账号模式 API Key 尚未加载成功，请点击页面顶部“刷新”后重试。',
-      '无法加入使用'
+      detail ? t('accountShare.join.modeKeysFailed', { detail }) : t('accountShare.join.modeKeysNotLoaded'),
+      t('accountShare.join.cannotJoin')
     )
     return
   }
   if (modeGroupIDsByPlatform[platform] <= 0) {
-    showActionError(`当前账号没有可用的「${groupName}」分组，请联系管理员开通后再加入。`, '无法加入使用')
+    showActionError(t('accountShare.join.noModeGroup', { groupName }), t('accountShare.join.cannotJoin'))
     return
   }
   if (modeApiKeysForPlatform(platform).length === 0) {
     showActionError(
-      `你还没有账号模式 API Key，请先到「API 密钥」页面创建一个绑定「${groupName}」分组的 Key。`,
-      '需要账号模式 API Key',
+      t('accountShare.join.noModeKey', { groupName }),
+      t('accountShare.join.needModeKey'),
       'create-mode-key'
     )
     return
   }
-  showActionError('请先选择一个账号模式 API Key，再加入使用。', '请选择 API Key')
+  showActionError(t('accountShare.join.selectKeyFirst'), t('accountShare.join.selectKey'))
 }
 
 function goCreateModeApiKey(): void {
@@ -5579,9 +5749,9 @@ function normalizeIdleTimeoutMinutes(value: unknown): number {
 
 function validateIdleTimeoutMinutes(value: unknown): string {
   const parsed = Number(value ?? 0)
-  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return '空闲自动退出时间必须是整数分钟'
-  if (parsed <= 0) return '空闲自动退出时间必须大于 0 分钟'
-  if (parsed > ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES) return '空闲自动退出时间不能超过 10080 分钟'
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return t('accountShare.join.idleInteger')
+  if (parsed <= 0) return t('accountShare.join.idlePositive')
+  if (parsed > ACCOUNT_SHARE_IDLE_TIMEOUT_MAX_MINUTES) return t('accountShare.join.idleMax')
   return ''
 }
 
@@ -5604,11 +5774,11 @@ function syncIdleTimeoutControls(items: AccountShareListing[]): void {
 
 function idleTimeoutSummary(listing: AccountShareListing): string {
   const minutes = normalizeIdleTimeoutMinutes(listing.current_idle_timeout_minutes ?? idleTimeoutByListing[listing.id] ?? 0)
-  if (minutes <= 0) return '未开启空闲自动退出'
-  if (!listing.current_idle_expires_at) return `${minutes} 分钟无请求后自动退出`
+  if (minutes <= 0) return t('accountShare.idle.notEnabled')
+  if (!listing.current_idle_expires_at) return t('accountShare.idle.minutes', { minutes })
   const countdown = formatCountdownUntil(listing.current_idle_expires_at)
-  if (countdown === '现在') return '已达到空闲退出时间，系统会自动清理'
-  return `${countdown}自动退出`
+  if (countdown === t('common.now')) return t('accountShare.idle.reached')
+  return t('accountShare.idle.countdown', { countdown })
 }
 
 function pendingMembershipEndForListing(
@@ -5623,8 +5793,8 @@ function isListingMembershipEnding(listing: AccountShareListing): boolean {
 }
 
 function membershipPanelTitle(listing: AccountShareListing): string {
-  if (isListingMembershipEnding(listing)) return '正在退出并结算'
-  return '正在使用'
+  if (isListingMembershipEnding(listing)) return t('accountShare.endUse.exiting')
+  return t('keys.accountShareConflict.activeLabel')
 }
 
 function membershipPanelSubtitle(listing: AccountShareListing): string {
@@ -5638,28 +5808,28 @@ function membershipPanelSubtitle(listing: AccountShareListing): string {
   })
   if (reason) return reason
   if (pending?.operationStatus === 'needs_attention') {
-    return '后台本轮处理遇到阻塞，正在继续重试；结算完成前不会开放评价。'
+    return t('accountShare.endUse.blockedRetry')
   }
   if (
     pending?.operationStatus === 'failed'
     || pending?.operationStatus === 'cancelled'
   ) {
-    return pending.operationError || '退出处理未完成，请联系管理员核对计费状态'
+    return pending.operationError || t('accountShare.endUse.incomplete')
   }
   if (!pending?.operationID) {
-    return '退出已受理，进度标识暂不可用；正在通过 Key 绑定状态核对。'
+    return t('accountShare.endUse.acceptedNoProgress')
   }
-  return '退出请求已受理，正在等待请求释放并完成最终结算'
+  return t('accountShare.endUse.accepted')
 }
 
 function membershipEndObservation(listing: AccountShareListing): string {
   const pending = pendingMembershipEndForListing(listing)
-  if (!pending) return '正在读取退出进度'
+  if (!pending) return t('accountShare.endUse.loadingProgress')
   const parts = [accountShareOperationWaitDuration(pending.operationCreatedAt || pending.membership.ending_requested_at, nowMs.value)]
-  if (pending.lastOperationSuccessAt) parts.push(`最近成功查询 ${formatDate(new Date(pending.lastOperationSuccessAt).toISOString())}`)
-  if (pending.operationQueryError && pending.lastOperationAttemptAt) parts.push(`最近查询失败 ${formatDate(new Date(pending.lastOperationAttemptAt).toISOString())}`)
-  if (pending.lastBindingCheckAt) parts.push(`最近 Key 核对 ${formatDate(new Date(pending.lastBindingCheckAt).toISOString())}`)
-  if (pending.operationUpdatedAt) parts.push(`后台更新 ${formatDate(pending.operationUpdatedAt)}`)
+  if (pending.lastOperationSuccessAt) parts.push(t('accountShare.endUse.lastSuccess', { time: formatDate(new Date(pending.lastOperationSuccessAt).toISOString())  }))
+  if (pending.operationQueryError && pending.lastOperationAttemptAt) parts.push(t('accountShare.endUse.lastAttempt', { time: formatDate(new Date(pending.lastOperationAttemptAt).toISOString())  }))
+  if (pending.lastBindingCheckAt) parts.push(t('accountShare.endUse.lastBindingCheck', { time: formatDate(new Date(pending.lastBindingCheckAt).toISOString())  }))
+  if (pending.operationUpdatedAt) parts.push(t('accountShare.endUse.operationUpdated', { time: formatDate(pending.operationUpdatedAt)  }))
   return parts.join(' · ')
 }
 
@@ -5674,37 +5844,37 @@ function canOpenMySpend(listing: AccountShareListing): boolean {
 function mySpendRangeLabel(range: string): string {
   switch (range) {
     case 'today':
-      return '今天'
+      return t('common.today')
     case '7d':
-      return '近7天'
+      return t('admin.ops.timeRange.7d')
     default:
-      return '本次使用'
+      return t('accountShare.mySpendRange.currentMembership')
   }
 }
 
 function mySpendStatusLabel(status?: string): string {
   switch (status) {
     case 'active':
-      return '正在使用'
+      return t('keys.accountShareConflict.activeLabel')
     case 'queued':
-      return '预约功能已取消'
+      return t('accountShare.membership.reasonQueueRemoved')
     case 'ended':
-      return '已结束'
+      return t('accountShare.membership.statusEnded')
     default:
       return status || '-'
   }
 }
 
 function mySpendWindowLabel(summary: AccountShareMySpendSummary): string {
-  return `${formatDate(summary.start_time)} 至 ${formatDate(summary.end_time)}`
+  return t('accountShare.mySpend.range', { start: formatDate(summary.start_time), end: formatDate(summary.end_time)  })
 }
 
 function mySpendAccountName(summary: AccountShareMySpendSummary): string {
-  return summary.listing.account_name || `账号房间 #${summary.listing.id}`
+  return summary.listing.account_name || t('accountShare.mySpend.roomId', { id: summary.listing.id })
 }
 
 function mySpendLastActivityLabel(summary: AccountShareMySpendSummary): string {
-  return summary.last_activity_at ? formatDate(summary.last_activity_at) : '暂无消费记录'
+  return summary.last_activity_at ? formatDate(summary.last_activity_at) : t('accountShare.mySpend.empty')
 }
 
 function mySpendAverageRequestCost(summary: AccountShareMySpendSummary): string {
@@ -5741,35 +5911,35 @@ function mySpendAccountOptionKey(listingID: number, source: MySpendAccountOption
 }
 
 function mySpendAccountSourceLabel(source: MySpendAccountOptionSource): string {
-  return source === 'using' ? '当前使用' : '消费历史'
+  return source === 'using' ? t('accountShare.mySpend.tabUsing') : t('accountShare.mySpend.tabHistory')
 }
 
 function mySpendAccountStatusLabel(option: MySpendAccountOption): string {
-  if (option.status === 'active') return '正在使用'
-  if (option.status === 'ending') return '结算中'
-  if (option.status === 'ended') return '已结束'
-  return option.status || '可统计'
+  if (option.status === 'active') return t('keys.accountShareConflict.activeLabel')
+  if (option.status === 'ending') return t('accountShare.membership.statusSettling')
+  if (option.status === 'ended') return t('accountShare.membership.statusEnded')
+  return option.status || t('accountShare.mySpend.countable')
 }
 
 function mySpendAccountDisplayName(option: MySpendAccountOption): string {
-  return option.roomName || option.accountName || `房间 #${option.listingID}`
+  return option.roomName || option.accountName || t('accountShare.mySpend.optionRoom', { id: option.listingID  })
 }
 
 function mySpendAccountUsagePeriod(option: MySpendAccountOption): string {
   if (option.source === 'history') {
-    const joinedAt = option.joinedAt ? formatDate(option.joinedAt) : '时间未记录'
-    const endedAt = option.endedAt ? formatDate(option.endedAt) : '尚未记录结束时间'
-    return `${joinedAt} 至 ${endedAt}`
+    const joinedAt = option.joinedAt ? formatDate(option.joinedAt) : t('accountShare.mySpend.noTime')
+    const endedAt = option.endedAt ? formatDate(option.endedAt) : t('accountShare.membership.noEndTime')
+    return t('accountShare.mySpend.joinedToEnded', { joinedAt, endedAt })
   }
   if (option.joinedAt) {
-    const lastRequest = option.lastRequestAt ? ` · 最近请求 ${formatDate(option.lastRequestAt)}` : ''
-    return `加入 ${formatDate(option.joinedAt)}${lastRequest}`
+    const lastRequest = option.lastRequestAt ? t('accountShare.mySpend.lastRequest', { time: formatDate(option.lastRequestAt)  }) : ''
+    return t('accountSpend.joinedAt', { time: formatDate(option.joinedAt), lastRequest: lastRequest })
   }
-  return `使用记录 #${option.membershipID}`
+  return t('accountShare.mySpend.membershipId', { id: option.membershipID  })
 }
 
 function mySpendAccountOptionTitle(option: MySpendAccountOption): string {
-  return `${mySpendAccountDisplayName(option)} · ${mySpendAccountSourceLabel(option.source)} · 记录 #${option.membershipID}`
+  return t('accountShare.mySpend.optionLabel', { name: mySpendAccountDisplayName(option), source: mySpendAccountSourceLabel(option.source), id: option.membershipID  })
 }
 
 function mySpendAccountOptionSourceForListing(listing: AccountShareListing): MySpendAccountOptionSource {
@@ -5942,8 +6112,8 @@ async function loadMySpendAccountOptions(preferredListing?: AccountShareListing)
     }
   } catch (error: unknown) {
     if (controller.signal.aborted || requestSeq !== mySpendAccountsRequestSeq || isCanceledRequest(error)) return
-    mySpendAccountsError.value = extractApiErrorMessage(error, '加载使用过的账号失败', {
-      USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
+    mySpendAccountsError.value = extractApiErrorMessage(error, t('accountShare.errors.loadUsedAccounts'), {
+      USER_NOT_FOUND: t('accountShare.errors.join.userNotFound')
     })
   } finally {
     if (requestSeq === mySpendAccountsRequestSeq) {
@@ -5980,8 +6150,8 @@ async function handleMySpendAccountPageChange(page: number): Promise<void> {
     applyMySpendAccountOptionPage(source, result)
   } catch (error: unknown) {
     if (controller.signal.aborted || requestSeq !== mySpendAccountsRequestSeq || isCanceledRequest(error)) return
-    mySpendAccountsError.value = extractApiErrorMessage(error, '加载账号记录分页失败', {
-      USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
+    mySpendAccountsError.value = extractApiErrorMessage(error, t('accountShare.errors.loadAccountPages'), {
+      USER_NOT_FOUND: t('accountShare.errors.join.userNotFound')
     })
   } finally {
     if (requestSeq === mySpendAccountsRequestSeq) {
@@ -6074,10 +6244,10 @@ async function loadMySpendSummary(): Promise<void> {
   } catch (error: unknown) {
     if (controller.signal.aborted || isCanceledRequest(error)) return
     if (requestSeq !== mySpendRequestSeq) return
-    mySpendError.value = extractApiErrorMessage(error, '加载消费统计失败', {
-      ACCOUNT_SHARE_LISTING_NOT_FOUND: '没有找到这次使用记录或账号已不可查看',
-      ACCOUNT_SHARE_SPEND_INVALID_RANGE: '统计范围无效，请切换范围后重试',
-      USER_NOT_FOUND: '当前用户状态异常，请重新登录后再试'
+    mySpendError.value = extractApiErrorMessage(error, t('accountShare.errors.loadSpendSummary'), {
+      ACCOUNT_SHARE_LISTING_NOT_FOUND: t('accountShare.errors.membershipGone'),
+      ACCOUNT_SHARE_SPEND_INVALID_RANGE: t('accountShare.errors.invalidSpendRange'),
+      USER_NOT_FOUND: t('accountShare.errors.join.userNotFound')
     })
   } finally {
     if (requestSeq === mySpendRequestSeq) {
@@ -6096,7 +6266,7 @@ function prepareKeyResolutionMode(): void {
   if (!isKeyResolutionMode.value) return
   clearSearchDebounceTimer()
   closeFilterPopover()
-  activeFilter.value = filters[0]
+  activeFilter.value = filters.value[0]
   pagination.page = 1
 }
 
@@ -6220,7 +6390,7 @@ async function loadKeyResolutionState(): Promise<boolean> {
     keyResolutionBindingStatus.value = null
     keyResolutionLoaded.value = true
     keyResolutionLoading.value = false
-    keyResolutionError.value = '处置链接缺少有效的 API Key ID，请返回 API Key 管理后重新进入。'
+    keyResolutionError.value = t('accountShare.keyResolution.missingKeyId')
     return false
   }
 
@@ -6228,7 +6398,7 @@ async function loadKeyResolutionState(): Promise<boolean> {
     const bindingStatus = await accountShareAPI.getAPIKeyBindingStatus(apiKeyID)
     if (requestSeq !== keyResolutionRequestSeq || apiKeyID !== keyResolutionApiKeyID.value) return false
     if (bindingStatus.api_key_id !== apiKeyID) {
-      throw new Error('关联状态返回了不匹配的 API Key ID，无法安全展示处置入口。')
+      throw new Error(t('accountShare.keyResolution.keyIdMismatch'))
     }
     const memberships = bindingStatus.memberships
 
@@ -6236,7 +6406,7 @@ async function loadKeyResolutionState(): Promise<boolean> {
     for (const membership of memberships) {
       const listingID = Number(membership.listing_id || 0)
       if (!Number.isSafeInteger(listingID) || listingID <= 0) {
-        throw new Error('关联记录缺少有效的账号 ID，无法安全展示处置入口。')
+        throw new Error(t('accountShare.keyResolution.missingAccountId'))
       }
       const current = membershipsByListing.get(listingID) || []
       current.push(membership)
@@ -6269,7 +6439,7 @@ async function loadKeyResolutionState(): Promise<boolean> {
     keyResolutionListings.value = []
     keyResolutionBindingStatus.value = null
     keyResolutionLoaded.value = true
-    keyResolutionError.value = extractApiErrorMessage(error, '加载 API Key 关联状态失败，请稍后重试。')
+    keyResolutionError.value = extractApiErrorMessage(error, t('accountShare.errors.loadBindingState'))
     return false
   } finally {
     if (requestSeq === keyResolutionRequestSeq) {
@@ -6316,7 +6486,7 @@ function setFilter(filter: FilterOption): void {
 
 function setOwnerRoomState(value: string): void {
   listingFilters.status = value === 'active' || value === 'paused' ? value : ''
-  setFilter(value === 'archive' ? archiveFilter : ownerFilter)
+  setFilter(value === 'archive' ? archiveFilter.value : ownerFilter.value)
 }
 
 function sanitizeListingFiltersForPlatform(platform: AccountSharePlatform): void {
@@ -6356,10 +6526,10 @@ async function loadSelfUseCommissionRate(force = false): Promise<void> {
   try {
     await appStore.fetchPublicSettings(force)
     if (ownerSelfUseRateMultiplier.value === null) {
-      selfUseSettingsError.value = '全局自用抽成配置加载失败，暂时不能使用自己的房间账号，请刷新后重试。'
+      selfUseSettingsError.value = t('accountShare.errors.selfUseConfigLoad')
     }
   } catch (error: unknown) {
-    selfUseSettingsError.value = extractApiErrorMessage(error, '全局自用抽成配置加载失败，暂时不能使用自己的房间账号，请刷新后重试。')
+    selfUseSettingsError.value = extractApiErrorMessage(error, t('accountShare.errors.selfUseConfigLoad'))
   } finally {
     selfUseSettingsLoading.value = false
   }
@@ -6372,7 +6542,7 @@ async function loadCapabilities(): Promise<void> {
   try {
     capabilities.value = await accountShareAPI.getCapabilities()
   } catch (error: unknown) {
-    capabilitiesError.value = extractApiErrorMessage(error, '房间配额暂时无法读取，请稍后刷新')
+    capabilitiesError.value = extractApiErrorMessage(error, t('accountShare.errors.capabilitiesUnavailable'))
   } finally {
     capabilitiesLoading.value = false
   }
@@ -6514,9 +6684,9 @@ function closeAdminQuotaDialog(): void {
 }
 
 function capabilityBlockerMessage(blocker: { code: string; message?: string }): string {
-  return accountShareCapabilityBlockerMessages[blocker.code]
+  return accountShareCapabilityBlockerMessages()[blocker.code]
     || blocker.message?.trim()
-    || '当前房间配额不足，请稍后重试或联系管理员'
+    || t('accountShare.errors.quotaInsufficient')
 }
 
 function openRecommendationFromUsageGuide(): void {
@@ -6541,7 +6711,7 @@ function openCreateDialog(): void {
   if (showCreate.value || pendingDraftDiscardTarget.value !== null) return
   const blocker = capabilities.value?.capability_blockers[0]
   if (blocker) {
-    actionErrorDialog.title = '暂时不能创建房间'
+    actionErrorDialog.title = t('accountShare.errors.cannotCreateRoom')
     actionErrorDialog.message = capabilityBlockerMessage(blocker)
     actionErrorDialog.action = null
     actionErrorDialog.show = true
@@ -6569,7 +6739,7 @@ async function loadCreateAccountProxies(scope: { platform?: string; account_leve
   } catch (error) {
     if (requestSeq !== createAccountProxyRequestSeq) return
     proxies.value = []
-    showActionError(extractApiErrorMessage(error, '代理列表加载失败，请稍后重试'), '无法加载账号配置')
+    showActionError(extractApiErrorMessage(error, t('accountShare.errors.loadProxies')), t('accountShare.errors.loadAccountConfig'))
   }
 }
 
@@ -6586,7 +6756,7 @@ async function handleStandaloneAccountCreated(accounts?: Account[]): Promise<voi
     selectedOwnedAccountID.value = created.id
     createErrorMessage.value = ''
   } else {
-    createErrorMessage.value = '账号已创建，请在已有自有账号列表中选择要共享的账号。'
+    createErrorMessage.value = t('accountShare.roomCreate.accountCreated')
   }
 }
 
@@ -6668,22 +6838,26 @@ function validateCreateConfig(): string {
     Number(authStore.user?.id || 0)
   )
   if (accountNameError) return accountNameError
-  if (!selectedOwnedAccount.value) return '请选择一个可创建房间的自有账号'
-  if (!seatOptions.includes(Number(createForm.seat_limit))) return `成员上限必须在 ${ACCOUNT_SHARE_MIN_SEATS}-${ACCOUNT_SHARE_MAX_SEATS} 人之间`
+  if (!selectedOwnedAccount.value) return t('accountShare.roomCreate.selectEligible')
+  if (!seatOptions.includes(Number(createForm.seat_limit))) return t('accountShare.roomForm.seatRange', { min: ACCOUNT_SHARE_MIN_SEATS, max: ACCOUNT_SHARE_MAX_SEATS })
   if (concurrencyValidationMessage.value) return concurrencyValidationMessage.value
   if (perUserConcurrencyValidationMessage.value) return perUserConcurrencyValidationMessage.value
-  if (!Number.isFinite(Number(createForm.rate_multiplier)) || Number(createForm.rate_multiplier) < 0) return '账号倍率不能小于 0'
-  if (!Number.isFinite(Number(createForm.hourly_rate)) || Number(createForm.hourly_rate) < 0) return '每小时扣费额度不能小于 0'
-  if (!Number.isFinite(Number(createForm.hourly_fee_waiver_minimum)) || Number(createForm.hourly_fee_waiver_minimum) < 0) return '免小时费低消不能小于 0'
-  if (!Number.isFinite(Number(createForm.min_balance_required)) || Number(createForm.min_balance_required) < 0) return '最低余额准入不能小于 0'
+  if (!Number.isFinite(Number(createForm.rate_multiplier)) || Number(createForm.rate_multiplier) < 0) return t('accountShare.roomForm.rateMin')
+  if (!Number.isFinite(Number(createForm.hourly_rate)) || Number(createForm.hourly_rate) < 0) return t('accountShare.roomForm.hourlyMin')
+  if (!Number.isFinite(Number(createForm.hourly_fee_waiver_minimum)) || Number(createForm.hourly_fee_waiver_minimum) < 0) return t('accountShare.roomForm.waiverMin')
+  if (!Number.isFinite(Number(createForm.min_balance_required)) || Number(createForm.min_balance_required) < 0) return t('accountShare.roomForm.minBalanceMin')
   if (createPlatform.value === 'openai') {
-    if (!Number.isFinite(Number(createForm.codex_5h_limit_percent)) || Number(createForm.codex_5h_limit_percent) < 1 || Number(createForm.codex_5h_limit_percent) > 100) return 'Codex 5h 保护必须在 1-100 之间'
-    if (!Number.isFinite(Number(createForm.codex_7d_limit_percent)) || Number(createForm.codex_7d_limit_percent) < 1 || Number(createForm.codex_7d_limit_percent) > 100) return 'Codex 7d 保护必须在 1-100 之间'
+    if (!Number.isFinite(Number(createForm.codex_5h_limit_percent)) || Number(createForm.codex_5h_limit_percent) < 1 || Number(createForm.codex_5h_limit_percent) > 100) return t('accountShare.roomForm.codex5hRange')
+    if (!Number.isFinite(Number(createForm.codex_7d_limit_percent)) || Number(createForm.codex_7d_limit_percent) < 1 || Number(createForm.codex_7d_limit_percent) > 100) return t('accountShare.roomForm.codex7dRange')
   } else if (createPlatform.value === 'anthropic') {
-    if (!Number.isFinite(Number(createForm.anthropic_5h_limit_percent)) || Number(createForm.anthropic_5h_limit_percent) < 1 || Number(createForm.anthropic_5h_limit_percent) > 100) return 'Claude 5h 保护必须在 1-100 之间'
-    if (!Number.isFinite(Number(createForm.anthropic_7d_limit_percent)) || Number(createForm.anthropic_7d_limit_percent) < 1 || Number(createForm.anthropic_7d_limit_percent) > 100) return 'Claude 7d 保护必须在 1-100 之间'
+    if (!Number.isFinite(Number(createForm.anthropic_5h_limit_percent)) || Number(createForm.anthropic_5h_limit_percent) < 1 || Number(createForm.anthropic_5h_limit_percent) > 100) return t('accountShare.roomForm.claude5hRange')
+    if (!Number.isFinite(Number(createForm.anthropic_7d_limit_percent)) || Number(createForm.anthropic_7d_limit_percent) < 1 || Number(createForm.anthropic_7d_limit_percent) > 100) return t('accountShare.roomForm.claude7dRange')
   }
-  if (parseAllowedModels().length === 0) return '至少填写一个模型白名单'
+  if (parseAllowedModels().length === 0) return t('accountShare.roomForm.needOneModel')
+  const joinPassword = createForm.join_password.trim()
+  if (joinPassword && (new TextEncoder().encode(joinPassword).length < 4 || new TextEncoder().encode(joinPassword).length > 64)) {
+    return t('accountShare.errors.roomCreate.passwordInvalidLength')
+  }
   return ''
 }
 
@@ -6698,29 +6872,35 @@ function validateEditConfig(): string {
     Number(editingConfigListing.value?.owner_user_id || 0)
   )
   if (accountNameError) return accountNameError
-  if (!seatOptions.includes(Number(editForm.seat_limit))) return `成员上限必须在 ${ACCOUNT_SHARE_MIN_SEATS}-${ACCOUNT_SHARE_MAX_SEATS} 人之间`
+  if (!seatOptions.includes(Number(editForm.seat_limit))) return t('accountShare.roomForm.seatRange', { min: ACCOUNT_SHARE_MIN_SEATS, max: ACCOUNT_SHARE_MAX_SEATS })
   if (editPerUserConcurrencyValidationMessage.value) return editPerUserConcurrencyValidationMessage.value
-  if (!Number.isFinite(Number(editForm.rate_multiplier)) || Number(editForm.rate_multiplier) < 0) return '账号倍率不能小于 0'
-  if (!Number.isFinite(Number(editForm.hourly_rate)) || Number(editForm.hourly_rate) < 0) return '每小时扣费额度不能小于 0'
-  if (!Number.isFinite(Number(editForm.hourly_fee_waiver_minimum)) || Number(editForm.hourly_fee_waiver_minimum) < 0) return '免小时费低消不能小于 0'
-  if (!Number.isFinite(Number(editForm.min_balance_required)) || Number(editForm.min_balance_required) < 0) return '最低余额准入不能小于 0'
+  if (!Number.isFinite(Number(editForm.rate_multiplier)) || Number(editForm.rate_multiplier) < 0) return t('accountShare.roomForm.rateMin')
+  if (!Number.isFinite(Number(editForm.hourly_rate)) || Number(editForm.hourly_rate) < 0) return t('accountShare.roomForm.hourlyMin')
+  if (!Number.isFinite(Number(editForm.hourly_fee_waiver_minimum)) || Number(editForm.hourly_fee_waiver_minimum) < 0) return t('accountShare.roomForm.waiverMin')
+  if (!Number.isFinite(Number(editForm.min_balance_required)) || Number(editForm.min_balance_required) < 0) return t('accountShare.roomForm.minBalanceMin')
   if (listingPlatform(editingConfigListing.value) === 'openai') {
-    if (!Number.isFinite(Number(editForm.codex_5h_limit_percent)) || Number(editForm.codex_5h_limit_percent) < 1 || Number(editForm.codex_5h_limit_percent) > 100) return 'Codex 5h 保护必须在 1-100 之间'
-    if (!Number.isFinite(Number(editForm.codex_7d_limit_percent)) || Number(editForm.codex_7d_limit_percent) < 1 || Number(editForm.codex_7d_limit_percent) > 100) return 'Codex 7d 保护必须在 1-100 之间'
+    if (!Number.isFinite(Number(editForm.codex_5h_limit_percent)) || Number(editForm.codex_5h_limit_percent) < 1 || Number(editForm.codex_5h_limit_percent) > 100) return t('accountShare.roomForm.codex5hRange')
+    if (!Number.isFinite(Number(editForm.codex_7d_limit_percent)) || Number(editForm.codex_7d_limit_percent) < 1 || Number(editForm.codex_7d_limit_percent) > 100) return t('accountShare.roomForm.codex7dRange')
   } else if (listingPlatform(editingConfigListing.value) === 'anthropic') {
-    if (!Number.isFinite(Number(editForm.anthropic_5h_limit_percent)) || Number(editForm.anthropic_5h_limit_percent) < 1 || Number(editForm.anthropic_5h_limit_percent) > 100) return 'Claude 5h 保护必须在 1-100 之间'
-    if (!Number.isFinite(Number(editForm.anthropic_7d_limit_percent)) || Number(editForm.anthropic_7d_limit_percent) < 1 || Number(editForm.anthropic_7d_limit_percent) > 100) return 'Claude 7d 保护必须在 1-100 之间'
+    if (!Number.isFinite(Number(editForm.anthropic_5h_limit_percent)) || Number(editForm.anthropic_5h_limit_percent) < 1 || Number(editForm.anthropic_5h_limit_percent) > 100) return t('accountShare.roomForm.claude5hRange')
+    if (!Number.isFinite(Number(editForm.anthropic_7d_limit_percent)) || Number(editForm.anthropic_7d_limit_percent) < 1 || Number(editForm.anthropic_7d_limit_percent) > 100) return t('accountShare.roomForm.claude7dRange')
   }
-  if (parseEditAllowedModels().length === 0) return '至少填写一个模型白名单'
+  if (parseEditAllowedModels().length === 0) return t('accountShare.roomForm.needOneModel')
   // 受保护编辑（房间正在被使用）走无锁定路径，openConsumerProtectedEditDialog 会
   if (
     !Number.isSafeInteger(Number(editingConfigListing.value?.row_version))
     || Number(editingConfigListing.value?.row_version) <= 0
   ) {
-    return '房间版本无效，请关闭后刷新房间再编辑'
+    return t('accountShare.roomEdit.staleVersion')
   }
-  if (!editReason.value.trim()) return '请填写本次房间配置修改原因'
-  if (editForceActive.value && !authStore.isAdmin) return '管理员身份已失效，请关闭窗口后重新进入'
+  if (!editReason.value.trim()) return t('accountShare.roomEdit.editReasonRequired')
+  if (editForceActive.value && !authStore.isAdmin) return t('accountShare.roomEdit.adminSessionLost')
+  const joinPassword = editForm.join_password.trim()
+  if (editJoinPasswordClear.value && joinPassword) return t('accountShare.roomEdit.passwordConflict')
+  if (joinPassword) {
+    const passwordBytes = new TextEncoder().encode(joinPassword).length
+    if (passwordBytes < 4 || passwordBytes > 64) return t('accountShare.errors.roomCreate.passwordInvalidLength')
+  }
   return ''
 }
 
@@ -6910,7 +7090,7 @@ async function loadMembershipHistory(): Promise<boolean> {
     membershipHistoryEntries.value = []
     membershipHistoryPagination.total = 0
     membershipHistoryPagination.pages = 1
-    membershipHistoryError.value = formatAccountShareLoadError(error, '加载完整消费记录失败')
+    membershipHistoryError.value = formatAccountShareLoadError(error, t('accountShare.errors.loadFullSpendRecords'))
     return false
   } finally {
     if (requestSeq === membershipHistoryRequestSeq) {
@@ -6966,7 +7146,7 @@ async function loadListings(background = false): Promise<boolean> {
     listings.value = []
     pagination.total = 0
     pagination.pages = 1
-    errorMessage.value = formatAccountShareLoadError(error, '加载账号广场失败')
+    errorMessage.value = formatAccountShareLoadError(error, t('accountShare.errors.loadMarketplace'))
     scheduleTransientStatusRefresh()
     return false
   } finally {
@@ -7091,7 +7271,7 @@ function searchOwnerFromDialog(): void {
   const ownerUserID = Number(ownerDialog.ownerUserID || 0)
   if (!Number.isSafeInteger(ownerUserID) || ownerUserID <= 0) return
   selectedOwnerID.value = ownerUserID
-  selectedOwnerDisplayName.value = ownerDialog.ownerUsername || `用户 #${ownerUserID}`
+  selectedOwnerDisplayName.value = ownerDialog.ownerUsername || t('accountShare.common.userId', { id: ownerUserID })
   if (searchQuery.value !== '') {
     suppressNextSearchRefresh = true
     searchQuery.value = ''
@@ -7143,7 +7323,7 @@ async function loadOwnerListings(append = false): Promise<void> {
     ownerDialog.listingsError = ''
   } catch (error: unknown) {
     if (controller.signal.aborted || requestSeq !== ownerDialogRequestSeq || isCanceledRequest(error)) return
-    ownerDialog.listingsError = extractApiErrorMessage(error, '加载号主账号失败')
+    ownerDialog.listingsError = extractApiErrorMessage(error, t('accountShare.errors.loadOwnerAccounts'))
   } finally {
     if (requestSeq === ownerDialogRequestSeq && ownerListingsRequestController === controller) {
       ownerListingsRequestController = null
@@ -7193,7 +7373,7 @@ async function loadOwnerReviews(append = false): Promise<void> {
     ownerDialog.reviewsError = ''
   } catch (error: unknown) {
     if (controller.signal.aborted || requestSeq !== ownerDialogRequestSeq || isCanceledRequest(error)) return
-    ownerDialog.reviewsError = extractApiErrorMessage(error, '加载号主评论失败')
+    ownerDialog.reviewsError = extractApiErrorMessage(error, t('accountShare.errors.loadOwnerReviews'))
   } finally {
     if (requestSeq === ownerDialogRequestSeq && ownerReviewsRequestController === controller) {
       ownerReviewsRequestController = null
@@ -7228,7 +7408,7 @@ async function listAllModeApiKeys(
 
     const reportedPages = Number(result.pages ?? 1)
     if (!Number.isSafeInteger(reportedPages) || reportedPages < 0) {
-      throw new Error('账号模式 API Key 分页信息无效')
+      throw new Error(t('accountShare.errors.modeKeyPaginationInvalid'))
     }
     totalPages = Math.max(totalPages, reportedPages, 1)
     page += 1
@@ -7239,7 +7419,7 @@ async function listAllModeApiKeys(
 
 async function loadModeKeys(): Promise<void> {
   const requestSeq = ++modeKeysRequestSeq
-  for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS) {
+  for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS.value) {
     modeKeysLoadingByPlatform[option.value] = true
     modeKeysLoadedByPlatform[option.value] = false
     modeKeysErrorByPlatform[option.value] = ''
@@ -7248,19 +7428,19 @@ async function loadModeKeys(): Promise<void> {
   try {
     const modeGroups = await accountShareAPI.listModeGroups()
     if (requestSeq !== modeKeysRequestSeq) return
-    for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS) {
+    for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS.value) {
       const groupID = Number(modeGroups.find(group => group.platform === option.value)?.group_id || 0)
       modeGroupIDsByPlatform[option.value] = Number.isSafeInteger(groupID) && groupID > 0 ? groupID : 0
       // A deployment may enable new providers incrementally. Keep existing
       // platforms usable when a provider's mode group is not configured yet;
       // that tab will explain the missing mapping and remain non-joinable.
       if (modeGroupIDsByPlatform[option.value] <= 0) {
-        modeKeysErrorByPlatform[option.value] = `${option.label}账号模式分组尚未配置`
+        modeKeysErrorByPlatform[option.value] = t('accountShare.errors.platformGroupMissing', { label: option.label })
         modeKeysLoadingByPlatform[option.value] = false
       }
     }
 
-    const configuredOptions = ACCOUNT_SHARE_PLATFORM_OPTIONS.filter(option => modeGroupIDsByPlatform[option.value] > 0)
+    const configuredOptions = ACCOUNT_SHARE_PLATFORM_OPTIONS.value.filter(option => modeGroupIDsByPlatform[option.value] > 0)
     const results = await Promise.allSettled(configuredOptions.map(async option => {
       const platform = option.value
       try {
@@ -7287,14 +7467,14 @@ async function loadModeKeys(): Promise<void> {
       modeApiKeysByPlatform[platform] = []
       clearInvalidSelectedModeApiKeys(platform, [])
       modeKeysLoadedByPlatform[platform] = false
-      modeKeysErrorByPlatform[platform] = extractApiErrorMessage(result.reason, '加载账号模式 API Key 失败')
+      modeKeysErrorByPlatform[platform] = extractApiErrorMessage(result.reason, t('accountShare.errors.loadModeKeys'))
       modeKeysLoadingByPlatform[platform] = false
     })
     syncRecommendationApiKey()
   } catch (error: unknown) {
     if (requestSeq !== modeKeysRequestSeq) return
-    const message = extractApiErrorMessage(error, '加载可用分组失败')
-    for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS) {
+    const message = extractApiErrorMessage(error, t('accountShare.errors.loadGroups'))
+    for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS.value) {
       modeGroupIDsByPlatform[option.value] = 0
       modeApiKeysByPlatform[option.value] = []
       clearInvalidSelectedModeApiKeys(option.value, [])
@@ -7303,28 +7483,28 @@ async function loadModeKeys(): Promise<void> {
     }
   } finally {
     if (requestSeq === modeKeysRequestSeq) {
-      for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS) {
+      for (const option of ACCOUNT_SHARE_PLATFORM_OPTIONS.value) {
         modeKeysLoadingByPlatform[option.value] = false
       }
     }
   }
 
   if (requestSeq === modeKeysRequestSeq) {
-    const failedPlatforms = ACCOUNT_SHARE_PLATFORM_OPTIONS
+    const failedPlatforms = ACCOUNT_SHARE_PLATFORM_OPTIONS.value
       .filter(option => !modeKeysLoadedByPlatform[option.value] && modeKeysErrorByPlatform[option.value])
       .map(option => option.label)
     if (failedPlatforms.length > 0) {
-      const suffix = failedPlatforms.length === ACCOUNT_SHARE_PLATFORM_OPTIONS.length
-        ? '请点击页面顶部“刷新”后重试。'
-        : '其他已成功加载的平台仍可正常使用。'
-      appStore.showWarning(`${failedPlatforms.join('、')} 账号模式 Key 加载失败；${suffix}`)
+      const suffix = failedPlatforms.length === ACCOUNT_SHARE_PLATFORM_OPTIONS.value.length
+        ? t('accountShare.errors.clickRefresh')
+        : t('accountShare.errors.otherPlatformsOk')
+      appStore.showWarning(t('accountShare.errors.modeKeysPartial', { platforms: failedPlatforms.join('、'), suffix: suffix }))
     }
   }
 }
 
 function refreshModeKeysInBackground(): void {
   void loadModeKeys().catch((error: unknown) => {
-    appStore.showWarning(extractApiErrorMessage(error, '账号模式 Key 刷新失败'))
+    appStore.showWarning(extractApiErrorMessage(error, t('accountShare.errors.modeKeysRefreshFailed')))
   })
 }
 
@@ -7380,7 +7560,7 @@ function syncRecommendationFormForPlatform(platform: AccountSharePlatform = acti
 }
 
 function applyRecommendationPreset(key: RecommendationPresetKey): void {
-  const preset = recommendationPresets.find(item => item.key === key)
+  const preset = recommendationPresets.value.find(item => item.key === key)
   if (!preset) return
   selectedRecommendationPreset.value = key
   recommendationForm.request_count = preset.request_count
@@ -7407,12 +7587,12 @@ function applyRecommendationUsageProfileToForm(profile: AccountShareRecommendati
 
 function buildRecommendationUsageProfileMessage(profile: AccountShareRecommendationUsageProfile): string {
   const prefix = profile.used_model_fallback
-    ? '当前模型近3天历史不足，已按全部模型均值填入'
-    : '已按近3天历史均值填入'
-  const capped = profile.capped ? '，部分数值已按测算上限处理' : ''
+    ? t('accountShare.estimate.filledByAllModels')
+    : t('accountShare.estimate.filledByHistory')
+  const capped = profile.capped ? t('accountShare.estimate.cappedSuffix') : ''
   const activeHours = normalizeRecommendationActiveHours(profile.active_hours)
   const requestsPerHour = profile.request_count / activeHours
-  return `${prefix}：单次文本输入 ${formatNumber(profile.input_tokens_per_request)}、文本输出 ${formatNumber(profile.output_tokens_per_request)}、Cache写入 ${formatNumber(profile.cache_creation_tokens_per_request)}、历史总Cache读取 ${formatNumber(profile.cache_read_tokens_per_request)}（未自动填入）、图片输入 ${formatNumber(profile.image_input_tokens_per_request)}、图片输出 ${formatNumber(profile.image_output_tokens_per_request)}；文本/图片Cache读取因无法可靠拆分，均保留手工值。按 ${profile.request_count} 次 / ${formatNumber(activeHours)} 小时（${formatNumber(requestsPerHour)} 次/小时）测算预计额度${capped}`
+  return t('accountShare.estimate.profileSummary', { prefix, inputTokensPerRequest: formatNumber(profile.input_tokens_per_request), outputTokensPerRequest: formatNumber(profile.output_tokens_per_request), cacheCreationTokensPerRequest: formatNumber(profile.cache_creation_tokens_per_request), cacheReadTokensPerRequest: formatNumber(profile.cache_read_tokens_per_request), imageInputTokensPerRequest: formatNumber(profile.image_input_tokens_per_request), imageOutputTokensPerRequest: formatNumber(profile.image_output_tokens_per_request), requestCount: profile.request_count, activeHours: formatNumber(activeHours), requestsPerHour: formatNumber(requestsPerHour), capped })
 }
 
 async function applyRecentUsageProfile(): Promise<void> {
@@ -7443,7 +7623,7 @@ async function applyRecentUsageProfile(): Promise<void> {
       || recommendationForm.model.trim() !== request.model
     ) return
     if (!profile.has_history) {
-      recommendationUsageProfileMessage.value = '近3天暂无历史请求，已保留当前预设'
+      recommendationUsageProfileMessage.value = t('accountShare.estimate.noHistory')
       return
     }
     recommendationUsageProfileController = null
@@ -7454,7 +7634,7 @@ async function applyRecentUsageProfile(): Promise<void> {
     recommendationUsageProfileMessage.value = buildRecommendationUsageProfileMessage(profile)
   } catch (error: unknown) {
     if (controller.signal.aborted || requestSeq !== recommendationUsageProfileRequestSeq || isCanceledRequest(error)) return
-    recommendationUsageProfileMessage.value = extractApiErrorMessage(error, '近3天均值读取失败')
+    recommendationUsageProfileMessage.value = extractApiErrorMessage(error, t('accountShare.estimate.historyLoadFailed'))
   } finally {
     if (
       requestSeq === recommendationUsageProfileRequestSeq
@@ -7467,16 +7647,16 @@ async function applyRecentUsageProfile(): Promise<void> {
 }
 
 function validateRecommendationForm(): string {
-  if (modeKeysLoading.value) return '账号模式 Key 正在加载，请稍候再测算'
-  if (!modeKeysLoaded.value) return '账号模式 Key 尚未加载成功，请刷新后再测算'
-  if (recommendationKeyOptions.value.length === 0) return `请先创建一个绑定「${accountModeGroupName(activeListingPlatform.value)}」分组的 API Key`
+  if (modeKeysLoading.value) return t('accountShare.estimate.keysLoading')
+  if (!modeKeysLoaded.value) return t('accountShare.estimate.keysNotLoaded')
+  if (recommendationKeyOptions.value.length === 0) return t('accountShare.estimate.createKeyFirst', { group: accountModeGroupName(activeListingPlatform.value)  })
   const apiKeyID = Number(recommendationForm.api_key_id || 0)
-  if (apiKeyID <= 0 || !recommendationKeyOptions.value.some(item => item.id === apiKeyID)) return '请选择账号模式 API Key'
-  if (!recommendationForm.model.trim()) return '请选择需要测算的模型'
+  if (apiKeyID <= 0 || !recommendationKeyOptions.value.some(item => item.id === apiKeyID)) return t('accountShare.estimate.selectKey')
+  if (!recommendationForm.model.trim()) return t('accountShare.estimate.selectModel')
   const requestCount = Number(recommendationForm.request_count)
-  if (!Number.isFinite(requestCount) || requestCount <= 0 || !Number.isInteger(requestCount)) return '请求次数必须是正整数'
+  if (!Number.isFinite(requestCount) || requestCount <= 0 || !Number.isInteger(requestCount)) return t('accountShare.estimate.countPositive')
   const activeHours = Number(recommendationForm.active_hours)
-  if (!Number.isFinite(activeHours) || activeHours <= 0) return '使用时长必须大于 0 小时'
+  if (!Number.isFinite(activeHours) || activeHours <= 0) return t('accountShare.estimate.hoursPositive')
   const tokenFields = [
     recommendationForm.input_tokens_per_request,
     recommendationForm.output_tokens_per_request,
@@ -7487,7 +7667,7 @@ function validateRecommendationForm(): string {
     recommendationForm.image_cache_read_tokens_per_request
   ]
   if (tokenFields.some(value => !Number.isFinite(Number(value)) || Number(value) < 0 || !Number.isInteger(Number(value)))) {
-    return '单次 token 必须是非负整数'
+    return t('accountShare.estimate.tokenNonNegative')
   }
   return ''
 }
@@ -7538,7 +7718,7 @@ async function runRecommendation(): Promise<void> {
     if (controller.signal.aborted || requestSeq !== recommendationRequestSeq || isCanceledRequest(error)) return
     recommendationResult.value = null
     recommendationRequestSnapshot.value = null
-    recommendationError.value = extractApiErrorMessage(error, '费用估算失败', accountShareRecommendationErrorMessages)
+    recommendationError.value = extractApiErrorMessage(error, t('accountShare.estimate.failed'), accountShareRecommendationErrorMessages())
   } finally {
     if (requestSeq === recommendationRequestSeq && recommendationRequestController === controller) {
       recommendationRequestController = null
@@ -7550,16 +7730,16 @@ async function runRecommendation(): Promise<void> {
 function useRecommendedListing(candidate: AccountShareRecommendationCandidate): void {
   const requestSnapshot = recommendationRequestSnapshot.value
   if (!requestSnapshot || !recommendationResult.value) {
-    recommendationError.value = '费用比较已失效，请重新测算'
+    recommendationError.value = t('accountShare.estimate.comparisonStale')
     return
   }
   const currentApiKeyID = Number(recommendationForm.api_key_id || 0)
   if (currentApiKeyID !== requestSnapshot.api_key_id) {
-    recommendationError.value = 'API Key 已改变，请重新测算后再使用费用比较'
+    recommendationError.value = t('accountShare.estimate.keyChanged')
     return
   }
   if (!recommendationKeyOptions.value.some(item => item.id === requestSnapshot.api_key_id)) {
-    recommendationError.value = '费用估算使用的 API Key 已不可用，请重新估算'
+    recommendationError.value = t('accountShare.estimate.keyUnavailable')
     return
   }
   const listing = candidate.listing
@@ -7621,7 +7801,7 @@ async function loadOwnedAccounts(force = false): Promise<void> {
     ownedAccounts.value = []
     ownedAccountsLoadedPlatform = null
     selectedOwnedAccountID.value = 0
-    ownedAccountsError.value = extractApiErrorMessage(error, '加载自有账号失败，请重试')
+    ownedAccountsError.value = extractApiErrorMessage(error, t('accountShare.errors.loadOwnedAccounts'))
     if (shouldAdvanceDraftBaseline) {
       await nextTick()
       if (showCreate.value) captureCreateDraftBaseline()
@@ -7658,7 +7838,8 @@ function buildCreateRoomPayload(accountID: number): Omit<CreateAccountShareRoomR
     codex_5h_limit_percent: Number(createForm.codex_5h_limit_percent),
     codex_7d_limit_percent: Number(createForm.codex_7d_limit_percent),
     anthropic_5h_limit_percent: Number(createForm.anthropic_5h_limit_percent),
-    anthropic_7d_limit_percent: Number(createForm.anthropic_7d_limit_percent)
+    anthropic_7d_limit_percent: Number(createForm.anthropic_7d_limit_percent),
+    join_password: createForm.join_password.trim() || undefined
   }
 }
 
@@ -7711,7 +7892,7 @@ async function createRoomFromOwnedAccount(): Promise<void> {
   }
   const account = selectedOwnedAccount.value
   if (!account) {
-    createErrorMessage.value = '所选账号状态已变化，请刷新账号列表后重试'
+    createErrorMessage.value = t('accountShare.roomCreate.accountStale')
     return
   }
 
@@ -7727,8 +7908,8 @@ async function createRoomFromOwnedAccount(): Promise<void> {
     appStore.showSuccess(
       account.external_placement?.target === 'public_pool'
         || (!account.external_placement && account.share_mode === 'public')
-        ? '房间已创建，账号已从公共号池切换到新房间'
-        : '房间已创建'
+        ? t('accountShare.roomCreate.createdFromPool')
+        : t('accountShare.roomCreate.created')
     )
     resetCreateForm()
     showCreate.value = false
@@ -7737,8 +7918,8 @@ async function createRoomFromOwnedAccount(): Promise<void> {
   } catch (error: unknown) {
     createErrorMessage.value = extractApiErrorMessage(
       error,
-      '创建房间失败',
-      accountShareRoomCreateErrorMessages
+      t('accountShare.errors.createRoom'),
+      accountShareRoomCreateErrorMessages()
     )
   } finally {
     creating.value = false
@@ -7747,7 +7928,7 @@ async function createRoomFromOwnedAccount(): Promise<void> {
 
 function openRoomAccountsDialog(listing: AccountShareListing): void {
   if (listing.deleted) {
-    showActionError('已删除房间不再提供账号管理，历史条款快照仍可查看。', '房间已删除')
+    showActionError(t('accountShare.detail.deletedNoManage'), t('accountShare.lifecycle.roomDeleted'))
     return
   }
   roomAccountsListing.value = listing
@@ -7765,22 +7946,22 @@ async function handleRoomAccountsChanged(payload: {
   const listingID = roomAccountsListing.value?.id
   if (!listingID) return
 
-  const actionLabel = payload.operation === 'add' ? '加入房间' : '退出房间'
+  const actionLabel = payload.operation === 'add' ? t('accountShare.roomAccounts.createFlow.attaching') : t('accountShare.actions.leaveRoom')
   if (payload.failed > 0) {
     appStore.showWarning(
-      `${actionLabel}部分完成：成功 ${payload.success} 个，失败 ${payload.failed} 个；失败原因已显示在房间账号窗口中。`
+      t('accountShare.roomAccounts.partialResult', { action: actionLabel, success: payload.success, failed: payload.failed  })
     )
   } else {
     appStore.showSuccess(
       payload.operation === 'add'
-        ? `已有 ${payload.success} 个账号成功加入房间`
-        : `已有 ${payload.success} 个账号成功退出房间，账号仍保持原平台账号模式`
+        ? t('accountShare.roomAccounts.joined', { count: payload.success  })
+        : t('accountShare.roomAccounts.left', { count: payload.success  })
     )
   }
 
   const [refreshed] = await Promise.all([loadListings(), loadCapabilities()])
   if (!refreshed) {
-    appStore.showWarning('账号变更已生效，但账号广场计数刷新失败；请稍后点击页面顶部“刷新”确认。')
+    appStore.showWarning(t('accountShare.roomAccounts.refreshFailed'))
     return
   }
 
@@ -7812,13 +7993,13 @@ async function joinUse(listing: AccountShareListing): Promise<void> {
   }
   errorMessage.value = ''
   if (isListingMembershipEnding(listing)) {
-    showActionError('退出结算处理中，结算完成后才能重新加入。', '暂时无法加入')
+    showActionError(t('accountShare.join.membershipEndingSuffix'), t('accountShare.join.tempUnavailable'))
     return
   }
   if (isOwnListing(listing) && ownerSelfUseRateMultiplier.value === null) {
     showActionError(
-      selfUseSettingsError.value || '全局自用抽成配置尚未加载，暂时不能使用自己的房间账号，请刷新后重试。',
-      '自用配置不可用'
+      selfUseSettingsError.value || t('accountShare.errors.selfUseConfigNotLoaded'),
+      t('accountShare.errors.selfUseUnavailable')
     )
     return
   }
@@ -7835,47 +8016,104 @@ async function joinUse(listing: AccountShareListing): Promise<void> {
   const idleTimeoutValue = idleTimeoutByListing[listing.id] ?? 0
   const idleTimeoutError = validateIdleTimeoutMinutes(idleTimeoutValue)
   if (idleTimeoutError) {
-    showActionError(idleTimeoutError, '空闲退出设置有误')
+    showActionError(idleTimeoutError, t('accountShare.errors.idleInvalid'))
     return
   }
 
   const idleTimeoutMinutes = normalizeIdleTimeoutMinutes(idleTimeoutValue)
   const key = modeApiKeysForListing(listing).find(item => item.id === apiKeyID)
+  const apiKeyLabel = key ? modeKeyLabel(key) : `Key #${apiKeyID}`
+  // 设置了加入密码的房间先收集密码；号主自用免密。
+  if (listing.has_password && !isOwnListing(listing)) {
+    joinPasswordPrompt.value = { listing, platform, apiKeyID, apiKeyLabel, idleTimeoutMinutes }
+    joinPasswordInput.value = ''
+    joinPasswordError.value = ''
+    return
+  }
+  await issueJoinIntent(listing, platform, apiKeyID, apiKeyLabel, idleTimeoutMinutes)
+}
+
+async function issueJoinIntent(
+  listing: AccountShareListing,
+  platform: AccountSharePlatform,
+  apiKeyID: number,
+  apiKeyLabel: string,
+  idleTimeoutMinutes: number,
+  password = ''
+): Promise<void> {
   preparingJoinId.value = listing.id
   joinIntentError.value = ''
   try {
     const intent = await requestJoinIntent(
       listing.id,
       apiKeyID,
-      idleTimeoutMinutes
+      idleTimeoutMinutes,
+      password || undefined
     )
+    joinUnverifiedAcknowledged.value = false
     pendingJoinConfirmation.value = {
       listingID: listing.id,
       ownerSelfUse: isOwnListing(listing),
       platform,
       apiKeyID,
-      apiKeyLabel: key ? modeKeyLabel(key) : `Key #${apiKeyID}`,
+      apiKeyLabel,
       idleTimeoutMinutes,
       intent
     }
+    joinPasswordPrompt.value = null
+    joinPasswordInput.value = ''
+    joinPasswordError.value = ''
   } catch (error: unknown) {
+    const errorCode = extractApiErrorCode(error)
+    if (
+      joinPasswordPrompt.value
+      && (errorCode === 'ACCOUNT_SHARE_ROOM_PASSWORD_REQUIRED' || errorCode === 'ACCOUNT_SHARE_ROOM_PASSWORD_INVALID')
+    ) {
+      // 密码相关错误留在密码框内提示，允许直接重输。
+      joinPasswordError.value = extractApiErrorMessage(error, t('accountShare.errors.join.passwordInvalid'), accountShareJoinErrorMessages())
+      return
+    }
+    joinPasswordPrompt.value = null
+    joinPasswordInput.value = ''
+    joinPasswordError.value = ''
     showActionError(
-      extractApiErrorMessage(error, '获取最新加入条款失败，请稍后重试', accountShareJoinErrorMessages),
-      '暂时无法确认加入'
+      extractApiErrorMessage(error, t('accountShare.errors.fetchJoinTerms'), accountShareJoinErrorMessages()),
+      t('accountShare.join.cannotConfirm')
     )
   } finally {
     if (preparingJoinId.value === listing.id) preparingJoinId.value = null
   }
 }
 
+function closeJoinPasswordPrompt(): void {
+  if (preparingJoinId.value !== null) return
+  joinPasswordPrompt.value = null
+  joinPasswordInput.value = ''
+  joinPasswordError.value = ''
+}
+
+async function submitJoinPassword(): Promise<void> {
+  const prompt = joinPasswordPrompt.value
+  if (!prompt || preparingJoinId.value !== null) return
+  const password = joinPasswordInput.value.trim()
+  if (!password) {
+    joinPasswordError.value = t('accountShare.join.passwordPrompt')
+    return
+  }
+  joinPasswordError.value = ''
+  await issueJoinIntent(prompt.listing, prompt.platform, prompt.apiKeyID, prompt.apiKeyLabel, prompt.idleTimeoutMinutes, password)
+}
+
 async function requestJoinIntent(
   listingID: number,
   apiKeyID: number,
-  idleTimeoutMinutes: number
+  idleTimeoutMinutes: number,
+  password?: string
 ): Promise<AccountShareJoinIntent> {
   const intent = await accountShareAPI.createJoinIntent(listingID, {
     api_key_id: apiKeyID,
-    idle_timeout_minutes: idleTimeoutMinutes
+    idle_timeout_minutes: idleTimeoutMinutes,
+    ...(password ? { password } : {})
   })
   const terms = intent?.terms
   const expectedVersion = Number(intent?.expected_version || 0)
@@ -7899,7 +8137,7 @@ async function requestJoinIntent(
     !Number.isFinite(expiresAtMs) ||
     expiresAtMs <= Date.now()
   ) {
-    throw new Error('服务端返回的加入确认条款不完整或已经失效，请刷新后重试')
+    throw new Error(t('accountShare.join.intentIncomplete'))
   }
   return {
     ...intent,
@@ -7919,6 +8157,7 @@ function closeJoinConfirmation(): void {
   if (joinDialogBusy.value) return
   pendingJoinConfirmation.value = null
   joinIntentError.value = ''
+  joinUnverifiedAcknowledged.value = false
 }
 
 async function confirmJoinUse(): Promise<void> {
@@ -7929,7 +8168,7 @@ async function confirmJoinUse(): Promise<void> {
     try {
       const recovered = await reconcilePendingJoinBinding(pendingJoin)
       if (recovered === 'unbound') {
-        await invalidateJoinConfirmation('加入确认已过期，未发现该 Key 正在使用此房间。房间状态已刷新，请重新点击加入并确认最新条款。')
+        await invalidateJoinConfirmation(t('accountShare.join.intentExpired'))
       }
     } finally {
       joiningId.value = null
@@ -7939,12 +8178,12 @@ async function confirmJoinUse(): Promise<void> {
   await submitJoinUse(pendingJoin)
 }
 
-async function invalidateJoinConfirmation(message: string, title = '请重新确认加入'): Promise<void> {
+async function invalidateJoinConfirmation(message: string, title = t('accountShare.join.reconfirm')): Promise<void> {
   pendingJoinConfirmation.value = null
   joinIntentError.value = ''
   const refreshed = await loadListings()
   showActionError(
-    refreshed ? message : `${message} 列表刷新失败，请先点击页面顶部“刷新”。`,
+    refreshed ? message : t('accountShare.join.refreshListFailed', { message }),
     title
   )
 }
@@ -7963,10 +8202,10 @@ async function reconcilePendingJoinBinding(
   try {
     binding = await accountShareAPI.getAPIKeyBindingStatus(pendingJoin.apiKeyID)
     if (binding.api_key_id !== pendingJoin.apiKeyID) {
-      throw new Error('服务端返回了不匹配的 Key 绑定状态')
+      throw new Error(t('accountShare.join.bindingMismatch'))
     }
   } catch (error: unknown) {
-    joinIntentError.value = `加入结果待确认，暂时无法核对绑定状态：${extractApiErrorMessage(error, '读取绑定状态失败')}。原确认已保留，请稍后重试确认结果。`
+    joinIntentError.value = t('accountShare.join.pendingCheck', { detail: extractApiErrorMessage(error, t('accountShare.endUse.bindingReadFailed')) })
     return 'unavailable'
   }
 
@@ -7978,8 +8217,8 @@ async function reconcilePendingJoinBinding(
   if (!membership) return 'unbound'
   if (membership.status === 'ending') {
     await invalidateJoinConfirmation(
-      '该 Key 正在退出此房间并结算，请在“我的使用”查看进度，结算完成前不能重新加入。',
-      '退出结算处理中'
+      t('accountShare.join.keySettling'),
+      t('accountShare.join.settling')
     )
     return 'ending'
   }
@@ -7988,9 +8227,9 @@ async function reconcilePendingJoinBinding(
   joinIntentError.value = ''
   const refreshed = await loadListings()
   if (refreshed) {
-    appStore.showSuccess('已确认当前 Key 正在使用该房间，可在“我的使用”查看。')
+    appStore.showSuccess(t('accountShare.join.confirmedUsing'))
   } else {
-    appStore.showWarning('已确认当前 Key 正在使用该房间，但列表刷新失败；请稍后刷新“我的使用”查看。')
+    appStore.showWarning(t('accountShare.join.confirmedUsingRefreshFailed'))
   }
   return 'active'
 }
@@ -8000,35 +8239,52 @@ async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void
   joiningId.value = listingID
   let joinSucceeded = false
   try {
-    await accountShareAPI.joinListing(listingID, {
-      api_key_id: apiKeyID,
-      idle_timeout_minutes: idleTimeoutMinutes,
-      intent_token: intent.token,
-      expected_version: intent.expected_version,
-      expected_revision_id: intent.expected_revision_id
-    })
+    // 房间满员时 join intent 未被消费（服务端事务回滚），在 token 有效期
+    // 内做有限次自动重试等待空位；其余错误直接抛出走既有处理分支。
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await accountShareAPI.joinListing(listingID, {
+          api_key_id: apiKeyID,
+          idle_timeout_minutes: idleTimeoutMinutes,
+          intent_token: intent.token,
+          expected_version: intent.expected_version,
+          expected_revision_id: intent.expected_revision_id,
+          ...(pendingJoinRequiresUnverifiedAck.value ? { acknowledged_unverified: true } : {})
+        })
+        break
+      } catch (error: unknown) {
+        const expiresAtMs = Date.parse(intent.expires_at)
+        const canRetry = extractApiErrorCode(error) === 'ACCOUNT_SHARE_ROOM_FULL'
+          && attempt < JOIN_ROOM_FULL_RETRY_COUNT
+          && Number.isFinite(expiresAtMs)
+          && expiresAtMs - Date.now() > JOIN_ROOM_FULL_MIN_REMAINING_MS
+        if (!canRetry) throw error
+        joinIntentError.value = t('accountShare.join.waitingSeat')
+        await new Promise(resolve => setTimeout(resolve, JOIN_ROOM_FULL_RETRY_BASE_MS * (attempt + 1)))
+      }
+    }
     joinSucceeded = true
     pendingJoinConfirmation.value = null
     joinIntentError.value = ''
-    const successMessage = '加入已成功'
+    const successMessage = t('accountShare.join.success')
     const refreshed = await loadListings()
     if (refreshed) {
       appStore.showSuccess(successMessage)
     } else {
-      const actionLabel = '加入'
-      appStore.showWarning(`${actionLabel}已成功，但状态刷新失败；记录已经创建，请稍后点击页面顶部“刷新”确认状态。`)
+      const actionLabel = t('accountShare.join.actionLabel')
+      appStore.showWarning(t('accountShare.join.successRefreshFailed', { action: actionLabel }))
     }
   } catch (error: unknown) {
     if (joinSucceeded) {
       pendingJoinConfirmation.value = null
-      appStore.showWarning('加入已成功，但状态刷新时发生异常；记录已经创建，请稍后点击页面顶部“刷新”确认状态。')
+      appStore.showWarning(t('accountShare.join.successRefreshError'))
     } else {
       const errorCode = extractApiErrorCode(error)
       if (
         errorCode === 'ACCOUNT_SHARE_JOIN_INTENT_INVALID' ||
         errorCode === 'ACCOUNT_SHARE_JOIN_TERMS_CHANGED'
       ) {
-        const message = '房间条款或确认令牌已经变化，旧确认已关闭。请重新点击加入并确认最新条款。'
+        const message = t('accountShare.join.termsChangedClose')
         await invalidateJoinConfirmation(message)
       } else if (
         errorCode === 'ACCOUNT_SHARE_JOIN_INTENT_CONSUMED'
@@ -8038,18 +8294,18 @@ async function submitJoinUse(pendingJoin: PendingJoinConfirmation): Promise<void
         if (recovered !== 'active' && recovered !== 'ending') {
           await invalidateJoinConfirmation(
             errorCode === 'ACCOUNT_SHARE_MEMBERSHIP_ENDING'
-              ? '该 Key 的退出结算尚未完成。请在“我的使用”核对进度，结算完成前不能重新加入。'
-              : '本次加入确认已使用。请在“我的使用”核对绑定及结算结果。',
-            '请核对当前使用状态'
+              ? t('accountShare.join.keySettlementPending')
+              : t('accountShare.join.intentUsed'),
+            t('accountShare.join.checkState')
           )
         }
       } else if (isJoinSubmissionOutcomeUnknown(error)) {
-        joinIntentError.value = '加入结果待确认，服务端可能已经完成绑定。原确认已保留，可重试确认结果；不要另行创建新的加入确认。'
+        joinIntentError.value = t('accountShare.join.pendingMaybeBound')
         await reconcilePendingJoinBinding(pendingJoin)
       } else {
         pendingJoinConfirmation.value = null
         joinIntentError.value = ''
-        showActionError(extractApiErrorMessage(error, '加入使用失败', accountShareJoinErrorMessages), '加入使用失败')
+        showActionError(extractApiErrorMessage(error, t('accountShare.errors.joinFailed'), accountShareJoinErrorMessages()), t('accountShare.errors.joinFailed'))
       }
     }
   } finally {
@@ -8091,7 +8347,7 @@ async function reconcilePendingMembershipEndBindings(requestSeq: number): Promis
     // Key 处置入口随后会统一读取权威绑定，复用该轮结果，避免重复请求。
     if (isKeyResolutionMode.value && keyID === keyResolutionApiKeyID.value) continue
     if (keyID <= 0) {
-      pending.bindingCheckError = '缺少关联 Key 标识，请刷新页面后核对'
+      pending.bindingCheckError = t('accountShare.endUse.missingKeyRef')
       continue
     }
     const entries = byKey.get(keyID) || []
@@ -8109,7 +8365,7 @@ async function reconcilePendingMembershipEndBindings(requestSeq: number): Promis
     try {
       const binding = await accountShareAPI.getAPIKeyBindingStatus(keyID, { signal: controller.signal })
       if (controller.signal.aborted || requestSeq !== membershipEndOperationRequestSeq) return
-      if (binding.api_key_id !== keyID) throw new Error('服务端返回的 Key 绑定状态不匹配')
+      if (binding.api_key_id !== keyID) throw new Error(t('accountShare.endUse.bindingMismatch'))
       for (const entry of entries) {
         const current = pendingMembershipEnds.value[entry.listingID]
         if (!current || current.membershipID !== entry.membershipID) continue
@@ -8143,7 +8399,7 @@ async function reconcilePendingMembershipEndBindings(requestSeq: number): Promis
           ...pendingMembershipEnds.value,
           [entry.listingID]: {
             ...current,
-            bindingCheckError: extractApiErrorMessage(error, '读取 Key 绑定状态失败')
+            bindingCheckError: extractApiErrorMessage(error, t('accountShare.endUse.bindingReadFailed'))
           }
         }
       }
@@ -8152,7 +8408,7 @@ async function reconcilePendingMembershipEndBindings(requestSeq: number): Promis
     }
   }))
   if (clearedCount > 0) {
-    appStore.showSuccess('已通过 Key 绑定状态确认使用已解除，可在历史记录查看结算结果。')
+    appStore.showSuccess(t('accountShare.endUse.confirmedUnbound'))
   }
 }
 
@@ -8188,7 +8444,7 @@ async function pollPendingMembershipEndOperations(): Promise<PendingMembershipEn
           [entry.listingID]: {
             ...pendingMembershipEnds.value[entry.listingID],
             operationStatus: 'failed',
-            operationError: '退出操作返回的完成信息不完整，正在通过 Key 绑定状态核对。'
+            operationError: t('accountShare.endUse.completionIncomplete')
           }
         }
         return null
@@ -8228,7 +8484,7 @@ async function pollPendingMembershipEndOperations(): Promise<PendingMembershipEn
             operationQueryFailures: (current.operationQueryFailures || 0) + 1,
             operationQueryError: extractApiErrorMessage(
               error,
-              '查询退出结算进度失败，系统会继续重试。',
+              t('accountShare.endUse.progressQueryFailed'),
               ROOM_LIFECYCLE_ERROR_MESSAGES
             )
           }
@@ -8249,8 +8505,8 @@ async function pollPendingMembershipEndOperations(): Promise<PendingMembershipEn
   if (completed.length > 0) {
     appStore.showSuccess(
       completed.length === 1
-        ? '退出与结算已完成'
-        : `${completed.length} 个退出与结算任务已完成`
+        ? t('accountShare.endUse.settled')
+        : t('accountShare.endUse.settledCount', { count: completed.length  })
     )
   }
   return completed
@@ -8291,21 +8547,21 @@ async function endUse(pending: PendingEndUseState): Promise<AccountShareMembersh
     }
     if (pendingEndUse.value === pending) pendingEndUse.value = null
     const successMessage = membership.status === 'ending'
-        ? '退出请求已受理，正在释放请求并完成结算'
-        : '已结束使用'
+        ? t('accountShare.endUse.exitAccepted')
+        : t('accountShare.endUse.ended')
     const refreshed = await loadListings()
     const resolutionRefreshed = !isKeyResolutionMode.value || await loadKeyResolutionState()
     if (refreshed && resolutionRefreshed) {
       appStore.showSuccess(successMessage)
     } else {
-      appStore.showWarning(`${successMessage}，但状态刷新失败；请稍后点击页面顶部“刷新”确认状态。`)
+      appStore.showWarning(t('accountShare.endUse.successRefreshFailed', { successMessage }))
     }
     return membership
   } catch (error: unknown) {
     if (endSucceeded) {
-      appStore.showWarning('结束操作已成功，但状态刷新时发生异常；请稍后点击页面顶部“刷新”确认状态。')
+      appStore.showWarning(t('accountShare.endUse.successRefreshError'))
     } else {
-      showActionError(extractApiErrorMessage(error, '结束使用失败', accountShareEndErrorMessages), '结束使用失败')
+      showActionError(extractApiErrorMessage(error, t('accountShare.errors.endUseFailed'), accountShareEndErrorMessages()), t('accountShare.errors.endUseFailed'))
     }
     return null
   } finally {
@@ -8313,8 +8569,17 @@ async function endUse(pending: PendingEndUseState): Promise<AccountShareMembersh
   }
 }
 
+const commentReviewDisabled = computed(() => capabilities.value?.comment_review_enabled === false)
+
+function ensureCapabilitiesLoaded(): void {
+  if (capabilities.value === null && !capabilitiesLoading.value) {
+    void loadCapabilities()
+  }
+}
+
 function openReviewDialog(listing: AccountShareListing, membership: AccountShareMembership): void {
   clearStableIdempotencyIntent(reviewSubmitIntent)
+  ensureCapabilitiesLoaded()
   pendingReview.value = {
     membershipID: membership.id,
     platformLabel: platformLabel(listingPlatform(listing)),
@@ -8330,14 +8595,15 @@ function openReviewDialog(listing: AccountShareListing, membership: AccountShare
 function openHistoryReviewDialog(entry: AccountShareMembershipHistoryEntry): void {
   if (entry.review || entry.usage_request_count <= 0) return
   clearStableIdempotencyIntent(reviewSubmitIntent)
+  ensureCapabilitiesLoaded()
   const normalizedPlatform = entry.platform.trim().toLowerCase()
   pendingReview.value = {
     membershipID: entry.membership_id,
     platformLabel: normalizedPlatform === 'openai' || normalizedPlatform === 'anthropic' || normalizedPlatform === 'opencode'
       ? platformLabel(normalizedPlatform)
-      : (entry.platform.trim() || '未知平台'),
-    roomName: entry.room_name.trim() || `房间 #${entry.listing_id}`,
-    ownerName: entry.owner_username?.trim() || (entry.owner_user_id > 0 ? `用户 #${entry.owner_user_id}` : '历史号主'),
+      : (entry.platform.trim() || t('accountShare.membership.unknownPlatform')),
+    roomName: entry.room_name.trim() || t('accountShare.review.roomId', { id: entry.listing_id  }),
+    ownerName: entry.owner_username?.trim() || (entry.owner_user_id > 0 ? t('accountShare.review.ownerId', { id: entry.owner_user_id  }) : t('accountShare.review.historicalOwner')),
     score: null,
     comment: '',
     submitting: false,
@@ -8355,15 +8621,16 @@ async function submitReview(): Promise<void> {
   const state = pendingReview.value
   if (!state || state.submitting) return
   if (state.score === null || state.score < 0 || state.score > 10) {
-    state.error = '请选择 0-10 分'
+    state.error = t('accountShare.review.scoreRange')
     return
   }
   state.submitting = true
   state.error = ''
   try {
+    const comment = commentReviewDisabled.value ? '' : state.comment.trim()
     const payload = {
       score: state.score,
-      comment: state.comment.trim() || undefined
+      comment: comment || undefined
     }
     const idempotencyKey = getStableIdempotencyKey(
       reviewSubmitIntent,
@@ -8374,14 +8641,14 @@ async function submitReview(): Promise<void> {
     clearStableIdempotencyIntent(reviewSubmitIntent)
     pendingReview.value = null
     await loadCurrentView()
-    appStore.showSuccess(state.comment.trim() ? '评分已提交，评论审核通过后展示' : '评分已提交')
+    appStore.showSuccess(comment ? t('accountShare.review.submittedPending') : t('accountShare.review.submitted'))
   } catch (error: unknown) {
-    state.error = extractApiErrorMessage(error, '提交评分失败', {
-      ACCOUNT_SHARE_REVIEW_ALREADY_EXISTS: '该次使用已经评分',
-      ACCOUNT_SHARE_REVIEW_NO_USAGE: '该次使用没有实际请求记录，不能评分',
-      ACCOUNT_SHARE_COMMENT_REVIEW_UNAVAILABLE: '评论审核未启用或配置不完整，请先删除评论内容或稍后再试',
-      ACCOUNT_SHARE_REVIEW_COMMENT_TOO_LONG: '评论最多 1000 个字符',
-      ACCOUNT_SHARE_REVIEW_INVALID_SCORE: '评分必须在 0-10 之间'
+    state.error = extractApiErrorMessage(error, t('accountShare.errors.submitReview'), {
+      ACCOUNT_SHARE_REVIEW_ALREADY_EXISTS: t('accountShare.errors.alreadyReviewed'),
+      ACCOUNT_SHARE_REVIEW_NO_USAGE: t('accountShare.errors.noRequestsToReview'),
+      ACCOUNT_SHARE_COMMENT_REVIEW_UNAVAILABLE: t('accountShare.errors.reviewModerationOff'),
+      ACCOUNT_SHARE_REVIEW_COMMENT_TOO_LONG: t('accountShare.review.commentMax'),
+      ACCOUNT_SHARE_REVIEW_INVALID_SCORE: t('accountShare.review.scoreMustBeInRange')
     })
   } finally {
     if (pendingReview.value) pendingReview.value.submitting = false
@@ -8395,16 +8662,16 @@ async function saveIdleTimeout(listing: AccountShareListing): Promise<void> {
   const idleTimeoutValue = idleTimeoutByListing[listing.id] ?? listing.current_idle_timeout_minutes ?? listing.queue_idle_timeout_minutes ?? 0
   const idleTimeoutError = validateIdleTimeoutMinutes(idleTimeoutValue)
   if (idleTimeoutError) {
-    showActionError(idleTimeoutError, '空闲退出设置有误')
+    showActionError(idleTimeoutError, t('accountShare.errors.idleInvalid'))
     return
   }
   savingIdleTimeoutId.value = membershipID
   try {
     await accountShareAPI.updateMembershipIdleTimeout(membershipID, normalizeIdleTimeoutMinutes(idleTimeoutValue))
     await loadListings()
-    appStore.showSuccess('空闲退出已保存')
+    appStore.showSuccess(t('accountShare.idle.saved'))
   } catch (error: unknown) {
-    showActionError(extractApiErrorMessage(error, '保存空闲自动退出失败'), '保存失败')
+    showActionError(extractApiErrorMessage(error, t('accountShare.errors.saveIdle')), t('ideas.editor.saveFailed'))
   } finally {
     savingIdleTimeoutId.value = null
   }
@@ -8461,7 +8728,7 @@ async function refreshRoomDetails(): Promise<void> {
     syncIdleTimeoutControls([detailListing.value || current])
   } catch (error: unknown) {
     if (controller.signal.aborted || requestSeq !== detailRequestSeq || isCanceledRequest(error)) return
-    detailError.value = extractApiErrorMessage(error, '房间详情加载失败，请稍后重试。')
+    detailError.value = extractApiErrorMessage(error, t('accountShare.errors.loadRoomDetail'))
   } finally {
     if (requestSeq === detailRequestSeq) {
       detailLoading.value = false
@@ -8488,7 +8755,7 @@ function normalizeEditableNumber(value: number | null | undefined, fallback: num
 
 function populateEditForm(listing: AccountShareListing): void {
   Object.assign(editForm, {
-    name: listing.room_name?.trim() ? listing.room_name : `${ACCOUNT_NAME_BASE_BY_PLATFORM[listingPlatform(listing)]}${listing.id}`,
+    name: listing.room_name?.trim() ? listing.room_name : `${ACCOUNT_NAME_BASE_BY_PLATFORM.value[listingPlatform(listing)]}${listing.id}`,
     proxy_id: null,
     concurrency: normalizeEditableNumber(listing.account_concurrency, DEFAULT_ACCOUNT_CONCURRENCY),
     seat_limit: normalizeEditableNumber(listing.seat_limit, 2),
@@ -8501,7 +8768,8 @@ function populateEditForm(listing: AccountShareListing): void {
     codex_5h_limit_percent: normalizeEditableNumber(listing.codex_5h_limit_percent, 100),
     codex_7d_limit_percent: normalizeEditableNumber(listing.codex_7d_limit_percent, 100),
     anthropic_5h_limit_percent: anthropic5hLimitPercent(listing),
-    anthropic_7d_limit_percent: anthropic7dLimitPercent(listing)
+    anthropic_7d_limit_percent: anthropic7dLimitPercent(listing),
+    join_password: ''
   } satisfies CreateFormState)
   editAllowedModels.value = Array.isArray(listing.allowed_models) ? [...listing.allowed_models] : []
 }
@@ -8513,6 +8781,7 @@ function resetConfigEditState(): void {
   editAllowedModels.value = []
   editForceActive.value = false
   editConsumerProtected.value = false
+  editJoinPasswordClear.value = false
   editReason.value = ''
   editErrorMessage.value = ''
   editVersionConflict.value = false
@@ -8541,21 +8810,22 @@ function prepareForceEdit(
 
 async function openConfigEditDialog(listing: AccountShareListing, force: boolean, forceReason = ''): Promise<void> {
   if (force && !authStore.isAdmin) {
-    showActionError('只有管理员可以强制编辑房间配置。', '无权强制编辑')
+    showActionError(t('accountShare.forceEdit.adminOnly'), t('accountShare.forceEdit.notAllowed'))
     return
   }
   if (listing.deleted) {
-    showActionError('已删除房间只能查看历史快照。', '房间已删除')
+    showActionError(t('accountShare.forceEdit.deletedOnly'), t('accountShare.lifecycle.roomDeleted'))
     return
   }
   if (!Number.isSafeInteger(Number(listing.row_version)) || Number(listing.row_version) <= 0) {
-    showActionError('房间版本无效，请刷新后重试。', '无法编辑')
+    showActionError(t('accountShare.forceEdit.staleVersion'), t('accountShare.forceEdit.cannotEdit'))
     return
   }
   await loadListingNameIndex(false)
   editingConfigListing.value = listing
   editForceActive.value = force
   editConsumerProtected.value = false
+  editJoinPasswordClear.value = false
   editReason.value = force ? forceReason.trim() : ''
   editErrorMessage.value = ''
   editVersionConflict.value = false
@@ -8569,6 +8839,7 @@ async function openConsumerProtectedEditDialog(listing: AccountShareListing): Pr
   editingConfigListing.value = listing
   editForceActive.value = false
   editConsumerProtected.value = true
+  editJoinPasswordClear.value = false
   editReason.value = ''
   editErrorMessage.value = ''
   editVersionConflict.value = false
@@ -8587,19 +8858,19 @@ async function requestOpenConfigEdit(listing: AccountShareListing): Promise<void
     return
   }
   if (listing.deleted) {
-    showActionError('已删除房间只能查看历史快照，不能再编辑配置。', '房间已删除')
+    showActionError(t('accountShare.roomEdit.deletedNoEdit'), t('accountShare.lifecycle.roomDeleted'))
     return
   }
   managedActionId.value = listing.id
   try {
     const state = await accountShareAPI.getRoomManagementState(listing.id)
     if (state.listing_id !== listing.id) {
-      throw new Error('服务端返回了不匹配的房间管理状态，请刷新后重试')
+      throw new Error(t('accountShare.roomEdit.manageStateMismatch'))
     }
     if (state.blockers.runtime_dependency_unavailable) {
       showActionError(
-        '当前无法确认房间内是否仍有运行中请求，请等待运行时状态恢复后再编辑。',
-        '暂时不能安全编辑'
+        t('accountShare.roomEdit.runtimeUnknown'),
+        t('accountShare.roomEdit.unsafeToEdit')
       )
       return
     }
@@ -8622,7 +8893,7 @@ async function requestOpenConfigEdit(listing: AccountShareListing): Promise<void
     }
     await openConfigEditDialog(currentListing, false)
   } catch (error: unknown) {
-    showActionError(extractApiErrorMessage(error, '读取房间实时状态失败，请稍后重试'), '打开编辑配置失败')
+    showActionError(extractApiErrorMessage(error, t('accountShare.errors.loadRoomRuntime')), t('accountShare.errors.openEdit'))
   } finally {
     if (managedActionId.value === listing.id) managedActionId.value = null
   }
@@ -8683,6 +8954,12 @@ async function saveConfigEdit(): Promise<void> {
       min_balance_required: Number(editForm.min_balance_required),
       reason: editReason.value.trim()
     }
+    // 加入密码三态：勾选移除传空串、输入新值传新密码、都未动则不带字段保持不变。
+    if (editJoinPasswordClear.value) {
+      payload.join_password = ''
+    } else if (editForm.join_password.trim()) {
+      payload.join_password = editForm.join_password.trim()
+    }
     if (editForceActive.value && authStore.isAdmin) {
       payload.force_active_edit = true
       payload.confirmed = true
@@ -8724,13 +9001,13 @@ async function saveConfigEdit(): Promise<void> {
     clearStableIdempotencyIntent(updateListingIntent)
     mergeListingUpdate(updated)
     await loadListings()
-    appStore.showSuccess('房间配置已更新')
+    appStore.showSuccess(t('accountShare.roomEdit.saved'))
     resetConfigEditState()
   } catch (error: unknown) {
     const errorCode = extractApiErrorCode(error)
     if (errorCode === 'ACCOUNT_SHARE_ROOM_VERSION_CONFLICT') {
       editVersionConflict.value = true
-      setConfigEditError('房间配置已被更新，请刷新后重新编辑')
+      setConfigEditError(t('accountShare.roomEdit.staleSaved'))
     } else if (errorCode === 'ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL') {
       // 后端把「缺哪个模型/哪个账号」放在错误 metadata 里；不带出来的话用户只能看到
       // 一句无从下手的英文「不支持请求的模型」。这里与 RoomAccountsDialog 的写法对齐。
@@ -8738,21 +9015,22 @@ async function saveConfigEdit(): Promise<void> {
       const model = typeof metadata.model === 'string' ? metadata.model.trim() : ''
       const accountID = typeof metadata.account_id === 'string' ? metadata.account_id.trim() : ''
       if (model) {
-        const who = accountID ? `账号 #${accountID}` : '房间内某账号'
-        setConfigEditError(`${who}不支持所选模型「${model}」。请在"我的账号"中为该账号补上这个模型，或从白名单中移除它后再试。`)
+        const who = accountID ? t('accountShare.roomEdit.accountId', { id: accountID }) : t('accountShare.roomEdit.someAccount')
+        setConfigEditError(t('accountShare.roomEdit.accountModelMissing', { who, model }))
       } else {
-        setConfigEditError('房间内存在不支持所选模型的账号，请调整模型白名单后再试。')
+        setConfigEditError(t('accountShare.roomEdit.modelUnsupported'))
       }
     } else {
-      setConfigEditError(extractApiErrorMessage(error, '保存房间配置失败', {
-        ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED: '请填写本次房间配置修改原因',
-        ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED: '管理员强制修改原因不能为空',
-        ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED: '管理员强制修改必须完成明确确认',
-        ACCOUNT_SHARE_CONSUMER_PROTECTION_VIOLATION: '当前房间已有消费者，只能降低费用、提高单用户并发、增加模型，或在不影响现有席位的前提下减少席位。如需移除模型，请先让现有消费者结束使用。',
-        ACCOUNT_SHARE_MODE_INVALID_CONCURRENCY: '单用户最高并发超出允许范围：既不能超过 50，也不能超过房间内账号的配置并发之和。',
-        ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED: '房间当前状态不允许改配置，请先下架房间，等处理完成后再编辑。',
-        ACCOUNT_SHARE_LISTING_IN_USE: '房间仍有消费者席位或结算未结束，暂时不能改配置。可先下架房间等它清空。',
-        ACCOUNT_SHARE_ROOM_OPERATION_CONFLICT: '房间有一个生命周期操作正在执行，请等它结束后再改配置。'
+      setConfigEditError(extractApiErrorMessage(error, t('accountShare.errors.saveRoomConfig'), {
+        ACCOUNT_SHARE_ROOM_UPDATE_REASON_REQUIRED: t('accountShare.roomEdit.editReasonRequired'),
+        ACCOUNT_SHARE_ROOM_FORCE_REASON_REQUIRED: t('accountShare.roomEdit.adminReasonRequired'),
+        ACCOUNT_SHARE_ROOM_FORCE_CONFIRMATION_REQUIRED: t('accountShare.roomEdit.adminConfirmRequired'),
+        ACCOUNT_SHARE_CONSUMER_PROTECTION_VIOLATION: t('accountShare.roomEdit.consumerLimits'),
+        ACCOUNT_SHARE_MODE_INVALID_CONCURRENCY: t('accountShare.roomEdit.perUserOutOfRange'),
+        ACCOUNT_SHARE_ROOM_UPDATE_REQUIRES_PAUSED: t('accountShare.roomEdit.statusBlocksEdit'),
+        ACCOUNT_SHARE_LISTING_IN_USE: t('accountShare.roomEdit.seatsOrSettlement'),
+        ACCOUNT_SHARE_ROOM_OPERATION_CONFLICT: t('accountShare.roomEdit.lifecycleOpRunning'),
+        ACCOUNT_SHARE_ROOM_PASSWORD_INVALID_LENGTH: t('accountShare.errors.roomCreate.passwordInvalidLength')
       }))
     }
   } finally {
@@ -8768,14 +9046,14 @@ async function reloadConfigEditAfterConflict(): Promise<void> {
   const refreshed = listings.value.find((item) => item.id === listingID)
     || knownListings.value.find((item) => item.id === listingID)
   if (!refreshed) {
-    showActionError('房间已不存在或当前列表无法访问，请刷新页面后重试。', '无法重新编辑')
+    showActionError(t('accountShare.roomEdit.roomGone'), t('accountShare.roomEdit.cannotReopen'))
     return
   }
   requestOpenConfigEdit(refreshed)
 }
 
 function copyModelName(model: string): void {
-  void copyToClipboard(model, `已复制 ${model}`)
+  void copyToClipboard(model, t('accountShare.common.copied', { model }))
 }
 
 watch(
@@ -8903,7 +9181,7 @@ onMounted(async () => {
     if (isKeyResolutionMode.value) initializationTasks.push(loadKeyResolutionState())
     await Promise.all(initializationTasks)
   } catch (error: unknown) {
-    errorMessage.value = extractApiErrorMessage(error, '初始化账号广场失败')
+    errorMessage.value = extractApiErrorMessage(error, t('accountShare.errors.initMarketplace'))
   }
 })
 

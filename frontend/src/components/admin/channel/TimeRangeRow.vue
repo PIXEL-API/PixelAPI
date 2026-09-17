@@ -4,12 +4,12 @@
     <!-- 时间段 + 删除 -->
     <div class="flex items-start gap-2">
       <div class="w-24">
-        <label class="text-xs text-gray-400">{{ t('admin.channels.form.startTime', '开始') }}</label>
+        <label class="text-xs text-gray-400">{{ t('admin.channels.form.startTime') }}</label>
         <input :value="range.start_time" @input="emitField('start_time', ($event.target as HTMLInputElement).value)"
           type="text" inputmode="numeric" autocomplete="off" placeholder="09:00" class="input mt-0.5 text-xs" />
       </div>
       <div class="w-24">
-        <label class="text-xs text-gray-400">{{ t('admin.channels.form.endTime', '结束') }}</label>
+        <label class="text-xs text-gray-400">{{ t('admin.channels.form.endTime') }}</label>
         <input :value="range.end_time" @input="emitField('end_time', ($event.target as HTMLInputElement).value)"
           type="text" inputmode="numeric" autocomplete="off" placeholder="18:00" class="input mt-0.5 text-xs" />
       </div>
@@ -22,37 +22,37 @@
     <!-- Token 模式：完整价格字段 -->
     <div v-if="mode === 'token'" class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
       <div>
-        <label class="text-xs text-gray-400">{{ t('admin.channels.form.inputPrice', '输入') }} <span v-if="isEmpty" class="text-red-500">*</span> <span class="text-gray-300">$/M</span></label>
+        <label class="text-xs text-gray-400">{{ t('admin.channels.form.inputPrice') }} <span v-if="isEmpty" class="text-red-500">*</span> <span class="text-gray-300">$/M</span></label>
         <input :value="range.input_price" @input="emitField('input_price', ($event.target as HTMLInputElement).value)"
           type="number" step="any" min="0" class="input mt-0.5 text-xs" />
       </div>
       <div>
-        <label class="text-xs text-gray-400">{{ t('admin.channels.form.outputPrice', '输出') }} <span class="text-gray-300">$/M</span></label>
+        <label class="text-xs text-gray-400">{{ t('admin.channels.form.outputPrice') }} <span class="text-gray-300">$/M</span></label>
         <input :value="range.output_price" @input="emitField('output_price', ($event.target as HTMLInputElement).value)"
           type="number" step="any" min="0" class="input mt-0.5 text-xs" />
       </div>
       <div>
-        <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheWritePrice', '缓存W') }} <span class="text-gray-300">$/M</span></label>
+        <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheWritePrice') }} <span class="text-gray-300">$/M</span></label>
         <input :value="range.cache_write_price" @input="emitField('cache_write_price', ($event.target as HTMLInputElement).value)"
           type="number" step="any" min="0" class="input mt-0.5 text-xs" />
       </div>
       <div>
-        <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheReadPrice', '缓存R') }} <span class="text-gray-300">$/M</span></label>
+        <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheReadPrice') }} <span class="text-gray-300">$/M</span></label>
         <input :value="range.cache_read_price" @input="emitField('cache_read_price', ($event.target as HTMLInputElement).value)"
           type="number" step="any" min="0" class="input mt-0.5 text-xs" />
       </div>
       <div>
-        <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageInputPrice', '图片输入') }} <span class="text-gray-300">$/M</span></label>
+        <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageInputPrice') }} <span class="text-gray-300">$/M</span></label>
         <input :value="range.image_input_price" @input="emitField('image_input_price', ($event.target as HTMLInputElement).value)"
           type="number" step="any" min="0" class="input mt-0.5 text-xs" />
       </div>
       <div>
-        <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageCacheReadPrice', '图片缓存') }} <span class="text-gray-300">$/M</span></label>
+        <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageCacheReadPrice') }} <span class="text-gray-300">$/M</span></label>
         <input :value="range.image_cache_read_price" @input="emitField('image_cache_read_price', ($event.target as HTMLInputElement).value)"
           type="number" step="any" min="0" class="input mt-0.5 text-xs" />
       </div>
       <div>
-        <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageTokenPrice', '图片输出') }} <span class="text-gray-300">$/M</span></label>
+        <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageTokenPrice') }} <span class="text-gray-300">$/M</span></label>
         <input :value="range.image_output_price" @input="emitField('image_output_price', ($event.target as HTMLInputElement).value)"
           type="number" step="any" min="0" class="input mt-0.5 text-xs" />
       </div>
@@ -61,7 +61,7 @@
     <!-- Per-request / Image 模式：单次价格 -->
     <div v-else class="mt-2 flex items-center gap-2">
       <div class="w-40">
-        <label class="text-xs text-gray-400">{{ t('admin.channels.form.perRequestPrice', '单次价格') }} <span v-if="isEmpty" class="text-red-500">*</span> <span class="text-gray-300">$</span></label>
+        <label class="text-xs text-gray-400">{{ t('admin.channels.form.perRequestPrice') }} <span v-if="isEmpty" class="text-red-500">*</span> <span class="text-gray-300">$</span></label>
         <input :value="range.per_request_price" @input="emitField('per_request_price', ($event.target as HTMLInputElement).value)"
           type="number" step="any" min="0" class="input mt-0.5 text-xs" />
       </div>

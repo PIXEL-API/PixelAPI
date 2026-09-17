@@ -1398,3 +1398,35 @@ func TestFilterCodexInput_PreservesRequiredAndOutputItemIDs(t *testing.T) {
 	_, hasCallID := localShell["call_id"]
 	require.False(t, hasCallID, "local_shell_call has no Responses call_id field")
 }
+
+func TestApplyCodexOAuthTransform_StripsOnlyInputItemInternalMetadata(t *testing.T) {
+	metadataValue := map[string]any{"content_item_kinds": []any{"text"}}
+	reqBody := map[string]any{
+		"model": "gpt-5.4",
+		"input": []any{
+			map[string]any{
+				"type":                           "message",
+				"role":                           "user",
+				"content":                        []any{map[string]any{"type": "input_text", "text": "hello", openAIInputInternalMetadataField: map[string]any{"keep": true}}},
+				openAIInputInternalMetadataField: metadataValue,
+			},
+		},
+		openAIInputInternalMetadataField: map[string]any{"top_level": true},
+	}
+
+	result := applyCodexOAuthTransform(reqBody, false, false)
+
+	require.True(t, result.Modified)
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 1)
+	item, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, item, openAIInputInternalMetadataField)
+	content, ok := item["content"].([]any)
+	require.True(t, ok)
+	part, ok := content[0].(map[string]any)
+	require.True(t, ok)
+	require.Contains(t, part, openAIInputInternalMetadataField)
+	require.Contains(t, reqBody, openAIInputInternalMetadataField)
+}

@@ -93,11 +93,14 @@
       </template>
     </TablePageLayout>
 
-    <Teleport to="body">
-      <div v-if="dialogOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="dialogOpen = false">
-        <form class="w-full max-w-xl rounded-lg bg-white p-5 shadow-xl dark:bg-dark-900" @submit.prevent="submitImport">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ t('admin.store.importCards') }}</h2>
-          <div class="mt-5 space-y-4">
+    <BaseDialog
+      :show="dialogOpen"
+      :title="t('admin.store.importCards')"
+      width="medium"
+      @close="dialogOpen = false"
+    >
+      <form id="store-cards-import-form" @submit.prevent="submitImport">
+        <div class="space-y-4">
             <div>
               <label class="input-label">{{ t('admin.store.product') }}</label>
               <Select v-model="importForm.product_id" :options="productOptions" />
@@ -127,14 +130,13 @@
                 </div>
               </template>
             </div>
-          </div>
-          <div class="mt-5 flex justify-end gap-2">
-            <button type="button" class="btn btn-secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</button>
-            <button type="submit" class="btn btn-primary" :disabled="saving">{{ saving ? t('common.processing') : t('common.import') }}</button>
-          </div>
-        </form>
-      </div>
-    </Teleport>
+        </div>
+      </form>
+      <template #footer>
+        <button type="button" class="btn btn-secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</button>
+        <button type="submit" form="store-cards-import-form" class="btn btn-primary" :disabled="saving">{{ saving ? t('common.processing') : t('common.import') }}</button>
+      </template>
+    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -153,6 +155,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Select from '@/components/common/Select.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()

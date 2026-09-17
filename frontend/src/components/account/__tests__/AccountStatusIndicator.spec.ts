@@ -68,7 +68,7 @@ describe('AccountStatusIndicator', () => {
     expect(wrapper.text()).toContain('admin.accounts.status.disabled')
   })
 
-  it('模型限流 + overages 启用 + 无 AICredits key → 显示 ⚡ (credits_active)', () => {
+  it('模型限流 + overages 启用 + 无 AICredits key → 显示 bolt 图标 (credits_active)', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {
         account: makeAccount({
@@ -87,16 +87,21 @@ describe('AccountStatusIndicator', () => {
       },
       global: {
         stubs: {
-          Icon: true
+          Icon: {
+            props: ['name'],
+            template: '<i :data-icon="name" />'
+          }
         }
       }
     })
 
-    expect(wrapper.text()).toContain('⚡')
-    expect(wrapper.text()).toContain('CSon45')
+    const badge = wrapper.find('span.bg-amber-100')
+    expect(badge.exists()).toBe(true)
+    expect(badge.find('[data-icon="bolt"]').exists()).toBe(true)
+    expect(badge.text()).toContain('CSon45')
   })
 
-  it('模型限流 + overages 未启用 → 普通限流样式（无 ⚡）', () => {
+  it('模型限流 + overages 未启用 → 普通限流样式（无 bolt 徽章）', () => {
     const wrapper = mount(AccountStatusIndicator, {
       props: {
         account: makeAccount({
@@ -114,13 +119,16 @@ describe('AccountStatusIndicator', () => {
       },
       global: {
         stubs: {
-          Icon: true
+          Icon: {
+            props: ['name'],
+            template: '<i :data-icon="name" />'
+          }
         }
       }
     })
 
     expect(wrapper.text()).toContain('CSon45')
-    expect(wrapper.text()).not.toContain('⚡')
+    expect(wrapper.find('[data-icon="bolt"]').exists()).toBe(false)
   })
 
   it('AICredits key 生效 → 显示积分已用尽 (credits_exhausted)', () => {

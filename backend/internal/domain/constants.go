@@ -29,7 +29,12 @@ const (
 	PlatformDeepseek    = "deepseek"
 	PlatformMiniMax     = "minimax"
 	PlatformQwen        = "qwen"
-	PlatformComposite   = "composite"
+	PlatformDevin       = "devin"
+	// PlatformAPIAggregation 是账号广场的"API聚合"渠道：房间账号由房主提供的
+	// 上游 API Key + base_url 组成，模型定价统一走 API 聚合分组渠道，
+	// 上游真实性与可靠性未经过平台验证。
+	PlatformAPIAggregation = "api_aggregation"
+	PlatformComposite      = "composite"
 )
 
 const (

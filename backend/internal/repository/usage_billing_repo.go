@@ -933,7 +933,7 @@ func applyAccountShareSettlement(ctx context.Context, tx *sql.Tx, cmd *service.U
 			Reason:       "account_share_income",
 			RefType:      "usage_log",
 			RefID:        nullablePositiveInt64(usageLogID),
-			BalanceAfter: decimalFromFloat(newBalance),
+			BalanceAfter: newBalance,
 			Metadata: map[string]any{
 				"request_id":       cmd.RequestID,
 				"api_key_id":       cmd.APIKeyID,
@@ -1015,7 +1015,7 @@ func applyAccountShareModeSettlement(ctx context.Context, tx *sql.Tx, cmd *servi
 			Reason:       "account_share_mode_income",
 			RefType:      "usage_log",
 			RefID:        nullablePositiveInt64(usageLogID),
-			BalanceAfter: decimalFromFloat(newBalance),
+			BalanceAfter: newBalance,
 			Metadata: map[string]any{
 				"request_id":       cmd.RequestID,
 				"api_key_id":       snapshot.APIKeyID,
@@ -1733,7 +1733,7 @@ func creditInviteShareBalanceEntry(ctx context.Context, tx *sql.Tx, input invite
 		Reason:       "invite_share_income",
 		RefType:      input.RefType,
 		RefID:        input.RefID,
-		BalanceAfter: decimalFromFloat(newBalance),
+		BalanceAfter: newBalance,
 		Metadata:     input.Metadata,
 	}); err != nil {
 		return err
@@ -1757,20 +1757,24 @@ func appendUsageBillingCreditUser(result *service.UsageBillingApplyResult, userI
 	result.BalanceCreditUserIDs = append(result.BalanceCreditUserIDs, userID)
 }
 
-func creditUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount decimal.Decimal) (float64, error) {
-	var newBalance float64
+func creditUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount decimal.Decimal) (decimal.Decimal, error) {
+	var newBalanceText string
 	err := tx.QueryRowContext(ctx, `
 		UPDATE users
 		SET balance = balance + $1::numeric,
 			updated_at = NOW()
 		WHERE id = $2
-		RETURNING balance
-	`, amount.StringFixed(10), userID).Scan(&newBalance)
+		RETURNING balance::text
+	`, amount.StringFixed(10), userID).Scan(&newBalanceText)
 	if errors.Is(err, sql.ErrNoRows) {
-		return 0, service.ErrUserNotFound
+		return decimal.Zero, service.ErrUserNotFound
 	}
 	if err != nil {
-		return 0, err
+		return decimal.Zero, err
+	}
+	newBalance, err := decimal.NewFromString(newBalanceText)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("parse user %d balance: %w", userID, err)
 	}
 	return newBalance, nil
 }

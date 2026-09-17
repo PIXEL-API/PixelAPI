@@ -20,6 +20,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	devinpkg "github.com/Wei-Shaw/sub2api/internal/pkg/devin"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
@@ -56,6 +57,7 @@ const (
 	defaultOpenAIImageTestPrompt = "Generate a cute orange cat astronaut sticker on a clean pastel background."
 	defaultGrokTestModel         = xai.DefaultTextModel
 	defaultOpencodeTestModel     = "deepseek-v4.1-flash"
+	defaultOpencodeZenTestModel  = "glm-5.3"
 )
 
 // opencodeTestModelFallbacks 是 opencode 校验测试的备选模型。
@@ -319,7 +321,11 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		return s.testOpencodeAccountConnection(c, account, modelID)
 	}
 
-	if account.IsCNProvider() {
+	if account.IsDevin() {
+		return s.testDevinAccountConnection(c, account, modelID)
+	}
+
+	if account.IsCNProvider() || account.IsAPIAggregation() {
 		if account.IsAnthropicProtocol() {
 			return s.testCNAnthropicProviderAccountConnection(c, account, modelID, prompt)
 		}
@@ -453,7 +459,7 @@ func (s *AccountTestService) testCNProviderAccountConnection(c *gin.Context, acc
 		return s.sendErrorAndEnd(c, "No test model available")
 	}
 	baseURL := account.GetOpenAIBaseURL()
-	if account.IsCNProvider() {
+	if account.IsRelayUpstream() {
 		baseURL = account.GetCNProtocolBaseURL(APIProtocolChatCompletions)
 	}
 	if baseURL == "" {
@@ -633,6 +639,65 @@ func (s *AccountTestService) testCNAnthropicProviderAccountConnection(c *gin.Con
 	return nil
 }
 
+// testDevinAccountConnection 探测 Devin 账号：用 GetCliModelConfigs 拉模型目录，
+// 是验证 session token + 端点可用性且不产生推理计费的最轻调用。
+// 若指定了模型，额外校验其（映射后）在上游目录中确实存在。
+func (s *AccountTestService) testDevinAccountConnection(c *gin.Context, account *Account, modelID string) error {
+	ctx := c.Request.Context()
+	if account == nil || !account.IsDevinAPIKey() {
+		return s.sendErrorAndEnd(c, "Devin account must use an API key credential")
+	}
+	token := account.GetDevinToken()
+	if token == "" {
+		return s.sendErrorAndEnd(c, "Devin session token (api_key) is missing")
+	}
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	client, err := devinpkg.NewClient(devinpkg.ClientConfig{
+		BaseURL:  account.GetDevinBaseURL(),
+		Token:    token,
+		ProxyURL: proxyURL,
+	})
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid Devin base URL: %s", err.Error()))
+	}
+	defer client.Close()
+
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+	s.sendEvent(c, TestEvent{Type: "test_start"})
+
+	models, err := client.ListModels(ctx)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Devin upstream probe failed: %s", devinpkg.Classify(err).Message))
+	}
+	if len(models) == 0 {
+		return s.sendErrorAndEnd(c, "Devin upstream returned an empty model catalog")
+	}
+
+	modelIDs := make([]string, 0, len(models))
+	catalog := make(map[string]struct{}, len(models))
+	for _, m := range models {
+		modelIDs = append(modelIDs, m.ID)
+		catalog[m.ID] = struct{}{}
+	}
+
+	if requested := strings.TrimSpace(modelID); requested != "" {
+		mapped := account.GetMappedModel(requested)
+		if _, ok := catalog[mapped]; !ok {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("model %q (upstream: %q) not found in Devin catalog", requested, mapped))
+		}
+		s.sendEvent(c, TestEvent{Type: "content", Model: requested, Text: fmt.Sprintf("model verified: %s", mapped)})
+	}
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true, Data: map[string]any{"models": modelIDs}})
+	return nil
+}
+
 func defaultCNProviderTestModel(platform string) string {
 	switch platform {
 	case PlatformKimi:
@@ -722,18 +787,23 @@ func resolveOpencodeTestCandidates(account *Account, modelID string) ([]Opencode
 	requestedModel := strings.TrimSpace(modelID)
 	if requestedModel == "" {
 		requestedModel = defaultOpencodeTestModel
+		if account.IsOpencodeZen() {
+			requestedModel = defaultOpencodeZenTestModel
+		}
 	}
 	mappedRequestedModel := account.GetMappedModel(requestedModel)
 
 	rawCandidates := make([]string, 0, 1+len(opencodeTestModelFallbacks))
 	rawCandidates = append(rawCandidates, mappedRequestedModel)
-	rawCandidates = append(rawCandidates, opencodeTestModelFallbacks...)
+	if !account.IsOpencodeZen() {
+		rawCandidates = append(rawCandidates, opencodeTestModelFallbacks...)
+	}
 
 	candidates := make([]OpencodeGoModelSpec, 0, len(rawCandidates))
 	seen := make(map[string]struct{}, len(rawCandidates))
 	for index, rawCandidate := range rawCandidates {
 		normalizedModel := NormalizeOpencodeGoModelID(rawCandidate)
-		spec, ok := opencodeGoModelByID[normalizedModel]
+		spec, ok := opencodeModelSpec(account, normalizedModel)
 		if !ok {
 			sourceModel := rawCandidate
 			if index == 0 {
@@ -2358,7 +2428,6 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	c.Writer.Flush()
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
-	s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /responses image tool...\n"})
 
 	parsed := &OpenAIImagesRequest{
 		Endpoint: openAIImagesGenerationsEndpoint,
@@ -2367,14 +2436,21 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	}
 	applyOpenAIImagesDefaults(parsed)
 
-	responsesBody, err := buildOpenAIImagesResponsesRequest(parsed, parsed.Model)
+	upstreamModel := account.GetMappedModel(parsed.Model)
+	responsesBody, targetURL, err := buildOpenAIImagesOAuthPayload(parsed, upstreamModel)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to build image request: %s", err.Error()))
+	}
+	direct := usesCodexDirectImages(upstreamModel)
+	if direct {
+		s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Calling Codex /images/generations; image model: %s\n", upstreamModel)})
+	} else {
+		s.sendEvent(c, TestEvent{Type: "content", Text: fmt.Sprintf("Calling Codex /responses image tool; driver: %s; image model: %s\n", openAIImagesResponsesMainModelValue(), upstreamModel)})
 	}
 
 	agentIdentityTaskRecoveryTried := false
 	for {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexAPIURL, bytes.NewReader(responsesBody))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(responsesBody))
 		if err != nil {
 			return s.sendErrorAndEnd(c, "Failed to create request")
 		}
@@ -2390,8 +2466,13 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		}
 		expectedAgentIdentityTaskID := strings.TrimSpace(account.GetCredential("task_id"))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "text/event-stream")
-		req.Header.Set("OpenAI-Beta", "responses=experimental")
+		if direct {
+			req.Header.Set("Accept", "application/json")
+			req.Header.Del("OpenAI-Beta")
+		} else {
+			req.Header.Set("Accept", "text/event-stream")
+			req.Header.Set("OpenAI-Beta", "responses=experimental")
+		}
 		req.Header.Set("originator", "opencode")
 		if customUA := strings.TrimSpace(account.GetOpenAIUserAgent()); customUA != "" {
 			req.Header.Set("User-Agent", customUA)
@@ -2446,12 +2527,20 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to read image response: %s", err.Error()))
 		}
-		results, _, _, _, _, err := collectOpenAIImagesFromResponsesBody(body)
+		var results []openAIResponsesImageResult
+		if direct {
+			results, err = parseCodexDirectImagesResponse(body)
+		} else {
+			results, _, _, _, _, err = collectOpenAIImagesFromResponsesBody(body)
+		}
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to parse image response: %s", err.Error()))
 		}
 		if len(results) == 0 {
-			return s.sendErrorAndEnd(c, "No images returned from responses API")
+			if direct {
+				return s.sendErrorAndEnd(c, "No images returned from Codex Images API")
+			}
+			return s.sendErrorAndEnd(c, "No images returned from Codex Responses API")
 		}
 		for _, item := range results {
 			if item.RevisedPrompt != "" {

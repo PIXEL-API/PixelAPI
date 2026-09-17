@@ -1,13 +1,13 @@
 <template>
   <div v-if="isCN" class="space-y-3 rounded-lg border border-gray-200 p-3 dark:border-dark-600">
     <div class="grid gap-3 sm:grid-cols-2">
-      <label class="text-sm font-medium text-gray-700 dark:text-gray-300">账号模式
+      <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.cnAccountMode') }}
         <select v-model="local.mode" class="input mt-1">
           <option value="payg">API key</option>
           <option value="coding">Coding Plan</option>
         </select>
       </label>
-      <label class="text-sm font-medium text-gray-700 dark:text-gray-300">API 协议
+      <label class="text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.cnApiProtocol') }}
         <select v-model="local.protocol" class="input mt-1">
           <option value="chat_completions">Chat Completions</option>
           <option value="anthropic">Anthropic Messages</option>
@@ -17,17 +17,17 @@
       </label>
     </div>
     <p class="text-xs text-gray-500 dark:text-gray-400">
-      接口地址会根据平台、账号模式和 API 协议自动选择，并锁定为官方地址。
+      {{ t('admin.accounts.cnEndpointAutoLock') }}
     </p>
     <template v-if="local.protocol === 'adaptive'">
       <div v-for="item in adaptiveItems" :key="item.key" class="space-y-1">
-        <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ item.label }} 官方地址</span>
+        <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.cnOfficialEndpoint', { label: item.label }) }}</span>
         <code v-if="isReadOnly" class="block rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 break-all dark:bg-dark-700 dark:text-gray-300">{{ item.url }}</code>
         <input v-else v-model="local.api_base_urls[item.key]" class="input mt-1" type="url" :placeholder="item.url" />
       </div>
     </template>
     <div v-else class="space-y-1">
-      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">官方接口地址</span>
+      <span class="block text-sm font-medium text-gray-700 dark:text-gray-300">{{ t('admin.accounts.cnOfficialEndpointLabel') }}</span>
       <code v-if="isReadOnly" class="block rounded-md bg-gray-50 px-3 py-2 text-xs text-gray-600 break-all dark:bg-dark-700 dark:text-gray-300">{{ defaultBaseUrl }}</code>
       <input v-else v-model="local.base_url" class="input mt-1" type="url" :placeholder="defaultBaseUrl" />
     </div>
@@ -36,13 +36,16 @@
 <script setup lang="ts">
 import { computed, reactive, watch } from 'vue'
 import { defaultCNAdaptiveBaseUrls, defaultCNBaseUrl, cnSupportsNativeResponses, type CnAccountMode, type CnApiProtocol, type CnProviderPlatform } from './credentialsBuilder'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 const props = withDefaults(defineProps<{ platform: string; modelValue: { mode: CnAccountMode; protocol: CnApiProtocol; base_url: string; api_base_urls: Record<string, string> }; allowCustomBaseUrl?: boolean }>(), {
   allowCustomBaseUrl: false
 })
 const emit = defineEmits<{ (e: 'update:modelValue', value: typeof props.modelValue): void }>()
 const isCN = computed(() => ['kimi', 'zhipu', 'deepseek', 'minimax', 'qwen'].includes(props.platform))
 const isReadOnly = computed(() => props.allowCustomBaseUrl === false)
-const allowCustomBaseUrl = computed(() => !isReadOnly.value)
+const canCustomizeBaseUrl = computed(() => !isReadOnly.value)
 const supportsResponses = computed(() => cnSupportsNativeResponses(props.platform))
 const local = reactive({ mode: props.modelValue.mode, protocol: props.modelValue.protocol, base_url: props.modelValue.base_url, api_base_urls: { ...props.modelValue.api_base_urls } })
 const defaultBaseUrl = computed(() => isCN.value ? defaultCNBaseUrl(props.platform, local.mode, local.protocol) : '')
@@ -64,9 +67,9 @@ const emitConfig = () => {
   const defaults = defaultCNAdaptiveBaseUrls(props.platform as CnProviderPlatform, local.mode)
   const isAdaptive = local.protocol === 'adaptive'
   const officialBaseUrl = isAdaptive ? defaults.chat_completions : defaultCNBaseUrl(props.platform, local.mode, local.protocol)
-  const baseUrl = allowCustomBaseUrl.value ? (local.base_url.trim() || officialBaseUrl) : officialBaseUrl
+  const baseUrl = canCustomizeBaseUrl.value ? (local.base_url.trim() || officialBaseUrl) : officialBaseUrl
   const apiBaseUrls = isAdaptive
-    ? Object.fromEntries(Object.entries(defaults).map(([key, url]) => [key, allowCustomBaseUrl.value ? (local.api_base_urls[key]?.trim() || url) : url]))
+    ? Object.fromEntries(Object.entries(defaults).map(([key, url]) => [key, canCustomizeBaseUrl.value ? (local.api_base_urls[key]?.trim() || url) : url]))
     : {}
   const nextConfig = {
     mode: local.mode,
@@ -86,7 +89,7 @@ watch(() => [local.mode, local.protocol, props.platform] as const, ([mode, proto
     local.protocol = 'chat_completions'
     return
   }
-  if (allowCustomBaseUrl.value && previous) {
+  if (canCustomizeBaseUrl.value && previous) {
     const previousDefault = defaultCNBaseUrl(previous[2], previous[0], previous[1])
     if (!local.base_url.trim() || local.base_url === previousDefault) {
       local.base_url = defaultCNBaseUrl(props.platform, mode, protocol)
@@ -110,7 +113,7 @@ watch(() => props.modelValue, (value) => {
     ? 'chat_completions'
     : value.protocol
   if (local.protocol !== protocol) local.protocol = protocol
-  if (allowCustomBaseUrl.value) {
+  if (canCustomizeBaseUrl.value) {
     if (local.base_url !== value.base_url) local.base_url = value.base_url
     if (JSON.stringify(local.api_base_urls) !== JSON.stringify(value.api_base_urls)) local.api_base_urls = { ...value.api_base_urls }
   }

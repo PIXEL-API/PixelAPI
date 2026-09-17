@@ -167,7 +167,7 @@ func RegisterGatewayRoutes(
 		// /v1/messages/count_tokens 端点；不能在这里提前拦截。
 		gateway.POST("/messages/count_tokens", func(c *gin.Context) {
 			platform := getGroupPlatform(c)
-			if isOpenAICompatiblePlatform(platform) && !service.IsCNProvider(platform) {
+			if isOpenAICompatiblePlatform(platform) && !service.IsCNProvider(platform) && !service.IsAPIAggregationProvider(platform) {
 				c.JSON(http.StatusNotFound, gin.H{
 					"type": "error",
 					"error": gin.H{
@@ -337,5 +337,5 @@ func getGroupPlatform(c *gin.Context) string {
 }
 
 func isOpenAICompatiblePlatform(platform string) bool {
-	return platform == service.PlatformOpenAI || platform == service.PlatformGrok || platform == service.PlatformOpencode || service.IsCNProvider(platform)
+	return platform == service.PlatformOpenAI || platform == service.PlatformGrok || platform == service.PlatformOpencode || platform == service.PlatformDevin || service.IsCNProvider(platform) || service.IsAPIAggregationProvider(platform)
 }

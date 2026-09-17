@@ -1119,7 +1119,7 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 		return nil, fmt.Errorf("account %d missing api_key", account.ID)
 	}
 	baseURL := strings.TrimSpace(account.GetOpenAIBaseURL())
-	if account.IsCNProvider() && account.IsAnthropicProtocol() {
+	if account.IsRelayUpstream() && account.IsAnthropicProtocol() {
 		// This compatibility bridge emits Chat Completions. An Anthropic
 		// protocol base must therefore not be used to construct /chat/completions.
 		baseURL = strings.TrimSpace(account.GetOpenAIFormatBaseURL())
@@ -1127,6 +1127,9 @@ func (s *OpenAIGatewayService) forwardAnthropicViaRawChatCompletions(
 	if account.IsOpencode() {
 		baseURL = account.GetOpencodeBaseURL()
 	} else if baseURL == "" {
+		if account.IsAPIAggregation() {
+			return nil, fmt.Errorf("account %d missing base_url", account.ID)
+		}
 		baseURL = "https://api.openai.com"
 	}
 	validatedURL, err := s.validateUpstreamBaseURL(baseURL)

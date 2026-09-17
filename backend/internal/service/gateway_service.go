@@ -11228,11 +11228,11 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return fmt.Errorf("parse request: empty request")
 	}
 
-	// 国产供应商只有 Anthropic 或 adaptive 协议才具备原生 Anthropic
-	// count_tokens 转发能力。
+	// 中继上游平台（国产供应商与 API 聚合渠道）只有 Anthropic 或 adaptive
+	// 协议才具备原生 Anthropic count_tokens 转发能力。
 	// 这条请求仍由 GatewayHandler 完成统一的计费资格、账号选择及共享账号
 	// 生命周期处理；这里只负责把请求按原生 Anthropic 协议转发出去。
-	if account != nil && account.IsCNProvider() {
+	if account != nil && account.IsRelayUpstream() {
 		// count_tokens is an Anthropic endpoint. Adaptive accounts choose the
 		// protocol per endpoint, so they use the native Anthropic path here too
 		// when an Anthropic base URL is configured. Qwen's official Anthropic

@@ -220,6 +220,10 @@ const doubaoModels = [
 ]
 
 // MiniMax
+const devinModels = [
+  'swe-2-max', 'swe-2',
+]
+
 const minimaxModels = [
   'abab6.5-chat', 'abab6.5s-chat', 'abab6.5s-chat-pro',
   'abab6-chat',
@@ -461,6 +465,8 @@ export function getModelsByPlatform(platform: string): string[] {
     case 'moonshot': return moonshotModels
     case 'doubao': return doubaoModels
     case 'minimax': return minimaxModels
+    case 'devin': return devinModels
+    case 'api_aggregation': return []
     case 'baidu': return baiduModels
     case 'spark': return sparkModels
     case 'hunyuan': return hunyuanModels

@@ -2,18 +2,18 @@
   <div v-if="visible" class="min-w-[150px] space-y-1">
     <template v-if="isQwen">
       <p class="text-[10px] leading-tight text-gray-500 dark:text-gray-400">
-        套餐剩余次数请在<a class="text-blue-600 hover:underline" href="https://bailian.console.aliyun.com/cn-beijing/?tab=plan" target="_blank" rel="noopener noreferrer">官方控制台</a>查看；下方为最近限额记录。
+        {{ t('admin.accounts.cnQuotaConsoleBefore') }}<a class="text-blue-600 hover:underline" href="https://bailian.console.aliyun.com/cn-beijing/?tab=plan" target="_blank" rel="noopener noreferrer">{{ t('admin.accounts.cnQuotaConsoleLink') }}</a>{{ t('admin.accounts.cnQuotaConsoleAfter') }}
       </p>
-      <span v-if="result && !result.success" class="block truncate text-[10px] text-red-500" :title="result.error">本次刷新失败：{{ result.error || '未知错误' }}</span>
+      <span v-if="result && !result.success" class="block truncate text-[10px] text-red-500" :title="result.error">{{ t('admin.accounts.cnRefreshFailed', { error: result.error || t('common.unknownErrorShort') }) }}</span>
       <div v-if="qwenObservations.length" class="space-y-1">
         <div v-for="observation in qwenObservations" :key="observation.window" class="flex items-center gap-1 text-[10px]">
           <span class="w-12 rounded bg-cyan-100 px-1 text-center text-cyan-700 dark:bg-cyan-900/40 dark:text-cyan-300">{{ observation.window }}</span>
           <span class="text-gray-600 dark:text-gray-300">{{ formatObservedAt(observation.observed_at) }}</span>
-          <span v-if="observation === latestQwenObservation" class="rounded bg-amber-100 px-1 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">最近记录</span>
+          <span v-if="observation === latestQwenObservation" class="rounded bg-amber-100 px-1 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{{ t('admin.accounts.cnLatestRecord') }}</span>
           <span v-if="observation.retry_at" class="text-gray-400">{{ formatRetry(observation.retry_at) }}</span>
         </div>
       </div>
-      <span v-else class="text-[10px] text-gray-400">暂无上游限额记录</span>
+      <span v-else class="text-[10px] text-gray-400">{{ t('admin.accounts.cnNoQuotaRecords') }}</span>
     </template>
     <div v-else-if="result?.success && result.tiers?.length" class="space-y-1">
       <div v-for="tier in result.tiers" :key="tier.window" class="flex items-center gap-1 text-[10px]">
@@ -22,9 +22,9 @@
         <span v-if="tier.reset_at" class="text-gray-400">{{ formatReset(tier.reset_at) }}</span>
       </div>
     </div>
-    <span v-else-if="!isQwen" class="text-[10px] text-gray-400">{{ result?.error || '暂无额度数据' }}</span>
+    <span v-else-if="!isQwen" class="text-[10px] text-gray-400">{{ result?.error || t('admin.accounts.cnNoQuotaData') }}</span>
     <button type="button" class="text-[10px] text-blue-600 hover:underline disabled:opacity-50" :disabled="loading" @click="probe">
-      {{ loading ? '刷新中…' : isQwen ? '刷新状态' : '查询额度' }}
+      {{ loading ? t('admin.accounts.cnRefreshing') : isQwen ? t('admin.accounts.cnRefreshQuota') : t('admin.accounts.cnQueryQuota') }}
     </button>
   </div>
 </template>
@@ -35,6 +35,9 @@ import { adminAPI } from '@/api/admin'
 import { queryUserQuota } from '@/api/admin/cnProviders'
 import { cnQuotaCellVisible, readQwenCodingLimitObservations, type QwenCodingLimitObservation } from './credentialsBuilder'
 import type { CNProviderQuotaProbeResult } from '@/api/admin/cnProviders'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 const props = withDefaults(defineProps<{ account: Account; scope?: 'admin' | 'user' }>(), { scope: 'admin' })
 const mode = computed(() => typeof props.account.credentials?.account_mode === 'string' ? props.account.credentials.account_mode : '')
 const visible = computed(() => cnQuotaCellVisible(props.account.platform, mode.value))
@@ -52,6 +55,6 @@ const latestQwenObservation = computed(() => qwenObservations.value.reduce<QwenC
 }, null))
 const formatReset = (value: string) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString() }
 const formatObservedAt = (value: string) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : date.toLocaleString() }
-const formatRetry = (value: string) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : `可重试 ${date.toLocaleString()}` }
-async function probe() { if (loading.value) return; loading.value = true; try { result.value = props.scope === 'user' ? await queryUserQuota(props.account.id) : await adminAPI.cnProviders.queryQuota(props.account.id) } catch (error) { result.value = { provider: props.account.platform, success: false, credential_valid: null, fetched_at: Date.now(), persisted: false, error: error instanceof Error ? error.message : '查询失败' } } finally { loading.value = false } }
+const formatRetry = (value: string) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? value : t('admin.accounts.cnRetryAt', { time: date.toLocaleString() }) }
+async function probe() { if (loading.value) return; loading.value = true; try { result.value = props.scope === 'user' ? await queryUserQuota(props.account.id) : await adminAPI.cnProviders.queryQuota(props.account.id) } catch (error) { result.value = { provider: props.account.platform, success: false, credential_valid: null, fetched_at: Date.now(), persisted: false, error: error instanceof Error ? error.message : t('common.queryFailed') } } finally { loading.value = false } }
 </script>

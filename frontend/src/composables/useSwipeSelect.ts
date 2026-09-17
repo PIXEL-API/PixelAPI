@@ -183,7 +183,7 @@ export function useSwipeSelect(
       border: isDark ? '1.5px solid rgba(96, 165, 250, 0.5)' : '1.5px solid rgba(59, 130, 246, 0.4)',
       borderRadius: '4px',
       pointerEvents: 'none',
-      zIndex: '9999',
+      zIndex: 'var(--ui-z-menu)',
       transition: 'none',
     })
     document.body.appendChild(marqueeEl)

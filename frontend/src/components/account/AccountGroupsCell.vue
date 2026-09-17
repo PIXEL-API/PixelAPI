@@ -36,7 +36,7 @@
         <div
           v-if="showPopover"
           ref="popoverRef"
-          class="fixed z-50 min-w-48 max-w-96 rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-dark-600 dark:bg-dark-800"
+          class="fixed z-[var(--ui-z-menu)] min-w-48 max-w-96 rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-dark-600 dark:bg-dark-800"
           :style="popoverStyle"
         >
           <div class="mb-2 flex items-center justify-between">
@@ -70,7 +70,7 @@
     <!-- 点击外部关闭 popover -->
     <div
       v-if="showPopover"
-      class="fixed inset-0 z-40"
+      class="fixed inset-0 z-[calc(var(--ui-z-menu)-1)]"
       @click="showPopover = false"
     />
   </div>

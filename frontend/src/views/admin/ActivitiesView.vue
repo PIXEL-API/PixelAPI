@@ -637,13 +637,17 @@
       </section>
     </div>
 
-    <Teleport to="body">
-      <div v-if="dialogOpen" class="activity-drawer-backdrop" role="presentation">
+    <ModalShell
+      :show="dialogOpen"
+      placement="right"
+      :title="editingCampaign ? t('admin.activities.edit') : t('admin.activities.create')"
+      overlay-class="activity-drawer-backdrop"
+      :z-index="60"
+      :close-disabled="saving"
+      @close="closeEditor"
+    >
         <form
           class="activity-editor-drawer"
-          role="dialog"
-          aria-modal="true"
-          :aria-label="editingCampaign ? t('admin.activities.edit') : t('admin.activities.create')"
           @submit.prevent="submitForm"
         >
           <header class="activity-editor-header">
@@ -939,12 +943,19 @@
             </div>
           </footer>
         </form>
-      </div>
-    </Teleport>
+    </ModalShell>
 
-    <Teleport to="body">
-      <div v-if="campaignActionDialog.open" class="activity-dialog-backdrop" @click.self="closeCampaignAction">
-        <section class="activity-confirm-dialog" role="alertdialog" aria-modal="true" :aria-labelledby="'campaign-action-title'">
+    <ModalShell
+      :show="campaignActionDialog.open"
+      role="alertdialog"
+      labelledby="campaign-action-title"
+      overlay-class="activity-dialog-backdrop"
+      :z-index="70"
+      :close-disabled="campaignActionDialog.busy"
+      close-on-click-outside
+      @close="closeCampaignAction"
+    >
+        <section class="activity-confirm-dialog">
           <span :class="['activity-confirm-icon', { 'activity-confirm-icon-danger': campaignActionDialog.type === 'end' }]">
             <Icon :name="campaignActionDialog.type === 'draw' ? 'sparkles' : 'exclamationTriangle'" size="md" />
           </span>
@@ -965,18 +976,24 @@
             </button>
           </footer>
         </section>
-      </div>
-    </Teleport>
+    </ModalShell>
 
-    <Teleport to="body">
-      <div v-if="winnerActionDialog.open" class="activity-dialog-backdrop" @click.self="closeWinnerAction">
-        <form class="winner-action-dialog" role="dialog" aria-modal="true" @submit.prevent="confirmWinnerAction">
+    <ModalShell
+      :show="winnerActionDialog.open"
+      labelledby="winner-action-title"
+      overlay-class="activity-dialog-backdrop"
+      :z-index="70"
+      :close-disabled="winnerActionDialog.busy"
+      close-on-click-outside
+      @close="closeWinnerAction"
+    >
+        <form class="winner-action-dialog" @submit.prevent="confirmWinnerAction">
           <header>
             <span :class="{ 'winner-action-danger': winnerActionDialog.type === 'reject' }">
               <Icon :name="winnerActionDialog.type === 'deliver' ? 'checkCircle' : 'xCircle'" size="md" />
             </span>
             <div>
-              <h2>{{ winnerActionDialog.type === 'deliver' ? t('admin.activities.winners.deliver') : t('admin.activities.winners.reject') }}</h2>
+              <h2 id="winner-action-title">{{ winnerActionDialog.type === 'deliver' ? t('admin.activities.winners.deliver') : t('admin.activities.winners.reject') }}</h2>
               <p>{{ winnerActionDialog.winner?.prize_name }} · {{ winnerActionDialog.winner?.campaign_name }}</p>
             </div>
           </header>
@@ -996,12 +1013,17 @@
             </button>
           </footer>
         </form>
-      </div>
-    </Teleport>
+    </ModalShell>
 
-    <Teleport to="body">
-      <div v-if="claimInfoWinner" class="activity-dialog-backdrop" @click.self="closeClaimInfo">
-        <section class="claim-info-dialog" role="dialog" aria-modal="true" :aria-labelledby="'claim-info-title'">
+    <ModalShell
+      :show="!!claimInfoWinner"
+      labelledby="claim-info-title"
+      overlay-class="activity-dialog-backdrop"
+      :z-index="70"
+      close-on-click-outside
+      @close="closeClaimInfo"
+    >
+        <section v-if="claimInfoWinner" class="claim-info-dialog">
           <header>
             <div>
               <span>{{ t('admin.activities.winners.claimInfoEyebrow') }}</span>
@@ -1022,8 +1044,7 @@
             <button type="button" class="btn btn-primary" @click="closeClaimInfo">{{ t('common.close') }}</button>
           </footer>
         </section>
-      </div>
-    </Teleport>
+    </ModalShell>
   </AppLayout>
 </template>
 
@@ -1032,6 +1053,7 @@ import { computed, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
+import ModalShell from '@/components/common/ModalShell.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
 import { adminActivityAPI } from '@/api/admin/activity'

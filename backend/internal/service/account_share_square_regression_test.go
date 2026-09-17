@@ -247,7 +247,9 @@ func TestAccountShareSquareRegressionSessionlessContractUpdateIsDelegatedToRepos
 				listing:       &AccountShareListing{ID: 7, AccountID: 9, OwnerUserID: 42, PerUserConcurrency: 5, AccountConcurrency: 20},
 				updateListing: accountShareSquareUpdatedListing(),
 			}
-			svc := &AccountShareModeService{repo: repo}
+			svc := &AccountShareModeService{repo: repo, pricedModelCatalog: &catalogStub{priced: func(_ context.Context, _ PricedModelQuery, _ string) (bool, error) {
+				return true, nil
+			}}}
 			expectedVersion := int64(1)
 
 			input := tc.input

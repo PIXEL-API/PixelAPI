@@ -78,7 +78,7 @@
     <div
       v-if="showDropdown && searchQuery.trim()"
       role="listbox"
-      class="absolute left-0 right-0 z-50 mt-1 max-h-60 w-full min-w-0 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-700"
+      class="absolute left-0 right-0 z-[var(--ui-z-menu)] mt-1 max-h-60 w-full min-w-0 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-700"
     >
       <div
         v-if="searchLoading"

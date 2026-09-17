@@ -176,7 +176,7 @@
 
   <BaseDialog
     :show="discardConfirmationOpen"
-    title="放弃新增账号？"
+    :title="t('accountShare.roomAccounts.createFlow.abandonTitle')"
     width="narrow"
     :z-index="70"
     :close-on-click-outside="false"
@@ -187,8 +187,8 @@
         <Icon name="exclamationCircle" size="sm" />
       </span>
       <div>
-        <strong>当前账号信息尚未提交</strong>
-        <p>关闭后，本次填写内容和 OAuth 授权进度不会保留；已经创建成功的账号不会被删除。</p>
+        <strong>{{ t('accountShare.roomAccounts.createFlow.abandonBody') }}</strong>
+        <p>{{ t('accountShare.roomAccounts.createFlow.abandonDesc') }}</p>
       </div>
     </div>
 
@@ -200,7 +200,7 @@
           data-testid="continue-create-room-account"
           @click="cancelDiscard"
         >
-          继续填写
+          {{ t('accountShare.roomAccounts.createFlow.abandonContinue') }}
         </button>
         <button
           type="button"
@@ -208,7 +208,7 @@
           data-testid="discard-create-room-account"
           @click="confirmDiscard"
         >
-          放弃并关闭
+          {{ t('accountShare.roomAccounts.createFlow.abandonConfirm') }}
         </button>
       </div>
     </template>
@@ -276,7 +276,7 @@ const roomDisplayName = computed(() => (
 
 const roomPlatform = computed<AccountPlatform>(() => {
   const platform = props.listing?.platform
-  if (platform === 'anthropic' || platform === 'opencode' || platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' || platform === 'minimax' || platform === 'qwen') return platform
+  if (platform === 'anthropic' || platform === 'opencode' || platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' || platform === 'minimax' || platform === 'qwen' || platform === 'devin' || platform === 'api_aggregation') return platform
   return 'openai'
 })
 
@@ -284,10 +284,12 @@ const roomPlatformLabel = computed(() => {
   if (roomPlatform.value === 'anthropic') return 'Anthropic'
   if (roomPlatform.value === 'opencode') return 'Opencode'
   if (roomPlatform.value === 'kimi') return 'Kimi'
-  if (roomPlatform.value === 'zhipu') return '智谱 GLM'
+  if (roomPlatform.value === 'zhipu') return t('common.platforms.zhipu')
   if (roomPlatform.value === 'deepseek') return 'DeepSeek'
   if (roomPlatform.value === 'minimax') return 'MiniMax'
-  if (roomPlatform.value === 'qwen') return '通义千问'
+  if (roomPlatform.value === 'qwen') return t('common.platforms.qwen')
+  if (roomPlatform.value === 'devin') return 'Devin'
+  if (roomPlatform.value === 'api_aggregation') return 'APIKEY'
   return 'OpenAI'
 })
 

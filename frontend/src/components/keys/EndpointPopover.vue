@@ -319,7 +319,7 @@ onBeforeUnmount(() => {
 
           <div
             data-testid="endpoint-tooltip"
-            class="pointer-events-none absolute z-20 max-w-none translate-y-1 text-left opacity-0 transition-all duration-150 group-hover/copy:pointer-events-auto group-hover/copy:translate-y-0 group-hover/copy:opacity-100 group-focus-within/copy:pointer-events-auto group-focus-within/copy:translate-y-0 group-focus-within/copy:opacity-100"
+            class="pointer-events-none absolute z-[var(--ui-z-tooltip)] max-w-none translate-y-1 text-left opacity-0 transition-all duration-150 group-hover/copy:pointer-events-auto group-hover/copy:translate-y-0 group-hover/copy:opacity-100 group-focus-within/copy:pointer-events-auto group-focus-within/copy:translate-y-0 group-focus-within/copy:opacity-100"
             :class="tooltipPositionClass(index)"
             :style="tooltipStyle(index)"
           >

@@ -249,7 +249,7 @@
       v-if="tokenTooltipVisible"
       id="admin-usage-token-tooltip"
       role="tooltip"
-      class="pointer-events-none fixed z-[9999]"
+      class="pointer-events-none fixed z-[var(--ui-z-menu)]"
       :class="{ '-translate-y-1/2': !tokenTooltipCompact }"
       :style="tokenTooltipStyle"
     >
@@ -328,7 +328,7 @@
       v-if="tooltipVisible"
       id="admin-usage-cost-tooltip"
       role="tooltip"
-      class="pointer-events-none fixed z-[9999]"
+      class="pointer-events-none fixed z-[var(--ui-z-menu)]"
       :class="{ '-translate-y-1/2': !tooltipCompact }"
       :style="tooltipStyle"
     >

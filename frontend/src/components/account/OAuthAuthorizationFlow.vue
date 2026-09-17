@@ -84,7 +84,7 @@
                 class="text-blue-600 focus:ring-blue-500"
               />
               <span class="text-sm text-blue-900 dark:text-blue-200">{{
-                t('admin.accounts.oauth.openai.mobileRefreshTokenAuth', '手动输入 Mobile RT')
+                t('admin.accounts.oauth.openai.mobileRefreshTokenAuth')
               }}</span>
             </label>
             <label v-if="showSessionTokenOption" class="flex cursor-pointer items-center gap-2">
@@ -109,7 +109,7 @@
                 class="text-blue-600 focus:ring-blue-500"
               />
               <span class="text-sm text-blue-900 dark:text-blue-200">{{
-                t('admin.accounts.oauth.openai.accessTokenAuth', '手动输入 AT')
+                t('admin.accounts.oauth.openai.accessTokenAuth')
               }}</span>
             </label>
             <label
@@ -843,7 +843,8 @@
                     <button
                       type="button"
                       class="btn btn-secondary p-2"
-                      title="Copy URL"
+                      :title="t('admin.accounts.oauth.copyAuthUrl')"
+                      :aria-label="t('admin.accounts.oauth.copyAuthUrl')"
                       @click="handleCopyUrl"
                     >
                       <svg
@@ -1230,7 +1231,7 @@ const handleGenerateUrl = () => {
 
 const handleCopyUrl = () => {
   if (props.authUrl) {
-    copyToClipboard(props.authUrl, 'URL copied to clipboard')
+    copyToClipboard(props.authUrl, t('admin.accounts.oauth.authUrlCopied'))
   }
 }
 

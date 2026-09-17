@@ -43,7 +43,7 @@
             </div>
             <div
               v-if="showUserDropdown && (userResults.length > 0 || userKeyword)"
-              class="absolute z-50 mt-1 max-h-64 w-full overflow-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800"
+              class="absolute z-[var(--ui-z-menu)] mt-1 max-h-64 w-full overflow-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800"
             >
               <button
                 v-for="user in userResults"

@@ -52,6 +52,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
 	resetOpenAIRequestIdentityState(c)
+	rememberOpencodeSession(c, account, body)
 	SetActualOpenAIUpstreamEndpoint(c, "")
 	beginUpstreamResponseModelObservation(c)
 	var opencodeResolved *OpencodeGoResolvedModel
@@ -92,9 +93,10 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 			return nil, fmt.Errorf("unsupported OpenCode Go protocol %q for model %q", resolved.Spec.Protocol, resolved.UpstreamModel)
 		}
 	}
-	// 国产平台默认使用原生 Chat Completions。只有明确选择 responses，或
-	// adaptive 平台实际具备原生 Responses 时，才进入下方 Responses 桥接。
-	if account.IsCNProvider() {
+	// 国产平台与 API聚合渠道默认使用原生 Chat Completions。只有明确选择
+	// responses，或 adaptive 平台实际具备原生 Responses 时，才进入下方
+	// Responses 桥接。
+	if account.IsRelayUpstream() {
 		switch account.GetAPIProtocol() {
 		case APIProtocolAnthropic:
 			SetActualOpenAIUpstreamEndpoint(c, "/v1/messages")
@@ -117,7 +119,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	// OpenCode Go 的协议由映射后的最终模型目录决定。普通 OpenAI API Key 的
 	// 账号级 Responses 探测/强制模式不得覆盖已经完成的 OpenCode 路由决策。
 	if account.Type == AccountTypeAPIKey && !account.IsOpencode() &&
-		!(account.IsCNProvider() && account.UsesNativeCNResponses()) &&
+		!(account.IsRelayUpstream() && account.UsesNativeCNResponses()) &&
 		!openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}

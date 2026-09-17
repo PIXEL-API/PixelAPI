@@ -19,14 +19,14 @@
             v-if="filters.user_id"
             type="button"
             @click="clearUser"
-            class="absolute right-2 top-9 text-gray-400"
-            aria-label="Clear user filter"
+            class="absolute right-2 top-9 text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300"
+            :aria-label="t('common.clearFilter')"
           >
-            ✕
+            <Icon name="x" size="sm" />
           </button>
           <div
             v-if="showUserDropdown && (userResults.length > 0 || userKeyword)"
-            class="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:bg-gray-800"
+            class="absolute z-[var(--ui-z-menu)] mt-1 max-h-60 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:bg-gray-800"
           >
             <button
               v-for="u in userResults"
@@ -56,14 +56,14 @@
             v-if="filters.api_key_id"
             type="button"
             @click="onClearApiKey"
-            class="absolute right-2 top-9 text-gray-400"
-            aria-label="Clear API key filter"
+            class="absolute right-2 top-9 text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300"
+            :aria-label="t('common.clearFilter')"
           >
-            ✕
+            <Icon name="x" size="sm" />
           </button>
           <div
             v-if="showApiKeyDropdown && apiKeyResults.length > 0"
-            class="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:bg-gray-800"
+            class="absolute z-[var(--ui-z-menu)] mt-1 max-h-60 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:bg-gray-800"
           >
             <button
               v-for="k in apiKeyResults"
@@ -99,14 +99,14 @@
             v-if="filters.account_id"
             type="button"
             @click="clearAccount"
-            class="absolute right-2 top-9 text-gray-400"
-            aria-label="Clear account filter"
+            class="absolute right-2 top-9 text-gray-400 transition-colors hover:text-gray-600 dark:hover:text-gray-300"
+            :aria-label="t('common.clearFilter')"
           >
-            ✕
+            <Icon name="x" size="sm" />
           </button>
           <div
             v-if="showAccountDropdown && (accountResults.length > 0 || accountKeyword)"
-            class="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:bg-gray-800"
+            class="absolute z-[var(--ui-z-menu)] mt-1 max-h-60 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:bg-gray-800"
           >
             <button
               v-for="a in accountResults"
@@ -191,6 +191,7 @@ import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import { displayText } from '@/utils/displayText'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
+import Icon from '@/components/icons/Icon.vue'
 import type { SimpleApiKey, SimpleUser } from '@/api/admin/usage'
 
 type ModelValue = Record<string, any>

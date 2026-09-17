@@ -61,7 +61,7 @@
           <div class="mt-1 text-sm font-medium text-gray-900 dark:text-white">
             <template v-if="hasModelMapping(detail)">
               <span class="font-mono">{{ detail.requested_model }}</span>
-              <span class="mx-1 text-gray-400">→</span>
+              <span class="mx-1 text-gray-400" aria-hidden="true">→</span>
               <span class="font-mono text-primary-600 dark:text-primary-400">{{ detail.upstream_model }}</span>
             </template>
             <template v-else>

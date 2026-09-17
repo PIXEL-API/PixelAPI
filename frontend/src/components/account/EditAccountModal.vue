@@ -77,6 +77,15 @@
         </p>
       </div>
 
+      <div v-if="account.platform === 'opencode' && account.type === 'apikey'">
+        <label for="edit-opencode-mode" class="input-label">{{ t('admin.accounts.opencode.accountMode') }}</label>
+        <select id="edit-opencode-mode" v-model="editOpencodeAccountMode" class="input">
+          <option value="go">{{ t('admin.accounts.opencode.go') }}</option>
+          <option value="zen">{{ t('admin.accounts.opencode.zen') }}</option>
+        </select>
+        <p class="input-hint">{{ t('admin.accounts.opencode.apiKeyHint') }}</p>
+      </div>
+
       <!-- User-scope OpenCode apikey: allow API key rotation (base URL is locked server-side) -->
       <div v-if="isUserScope && account.platform === 'opencode' && account.type === 'apikey'" class="space-y-4">
         <div>
@@ -141,9 +150,10 @@
       </section>
 
       <!-- API Key fields (only for apikey type) -->
-      <div v-if="(!isUserScope || isCNPlatform(account.platform)) && account.type === 'apikey'" class="space-y-4">
+      <div v-if="(!isUserScope || isCNPlatform(account.platform) || account.platform === 'devin' || account.platform === 'api_aggregation') && account.type === 'apikey'" class="space-y-4">
         <CNProviderSettings v-if="isCNPlatform(account.platform)" v-model="editCNConfig" :platform="account.platform" :allow-custom-base-url="false" />
-        <div v-if="account.platform !== 'opencode' && !isCNPlatform(account.platform)">
+        <APIAggregationSettings v-if="account.platform === 'api_aggregation'" v-model="editAPIAggregationConfig" />
+        <div v-if="account.platform !== 'opencode' && !isCNPlatform(account.platform) && account.platform !== 'api_aggregation'">
           <label class="input-label">{{ t('admin.accounts.baseUrl') }}</label>
           <input
             v-model="editBaseUrl"
@@ -158,7 +168,9 @@
                     ? 'https://cloudcode-pa.googleapis.com'
                     : account.platform === 'grok'
                       ? 'https://api.x.ai/v1'
-                      : 'https://api.anthropic.com'
+                      : account.platform === 'devin'
+                        ? 'https://server.codeium.com'
+                        : 'https://api.anthropic.com'
             "
           />
           <p class="input-hint">{{ baseUrlHint }}</p>
@@ -183,9 +195,11 @@
                 ? 'sk-proj-...'
                 : account.platform === 'gemini'
                   ? 'AIza...'
-                  : account.platform === 'antigravity' || account.platform === 'opencode'
-                    ? 'sk-...'
-                    : 'sk-ant-...'
+                  : account.platform === 'devin'
+                    ? 'devin-session-token$...'
+                    : account.platform === 'antigravity' || account.platform === 'opencode'
+                      ? 'sk-...'
+                      : 'sk-ant-...'
             "
           />
           <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
@@ -1177,7 +1191,7 @@
           <div v-else class="space-y-3">
             <div v-for="(mapping, index) in modelMappings" :key="getModelMappingKey(mapping)" class="flex items-center gap-2">
               <input v-model="mapping.from" type="text" class="input flex-1" :placeholder="t('admin.accounts.fromModel')" />
-              <span class="text-gray-400">→</span>
+              <span class="text-gray-400" aria-hidden="true">→</span>
               <input v-model="mapping.to" type="text" class="input flex-1" :placeholder="t('admin.accounts.toModel')" />
               <button type="button" @click="modelMappings.splice(index, 1)" class="text-red-500 hover:text-red-700">
                 <Icon name="trash" size="sm" />
@@ -1977,7 +1991,7 @@
                 class="input flex-1"
                 :placeholder="t('admin.accounts.fromModel')"
               />
-              <span class="text-gray-400">→</span>
+              <span class="text-gray-400" aria-hidden="true">→</span>
               <input
                 v-model="mapping.to"
                 type="text"
@@ -2626,6 +2640,7 @@ import QuotaLimitCard from '@/components/account/QuotaLimitCard.vue'
 import GrokBaseUrlPresets from '@/components/account/GrokBaseUrlPresets.vue'
 import HeaderOverrideEditor from '@/components/account/HeaderOverrideEditor.vue'
 import CNProviderSettings from '@/components/account/CNProviderSettings.vue'
+import APIAggregationSettings, { type APIAggregationConfig } from '@/components/account/APIAggregationSettings.vue'
 import {
   applyHeaderOverride,
   applyInterceptWarmup,
@@ -2811,6 +2826,7 @@ const baseUrlHint = computed(() => {
   if (props.account.platform === 'openai') return t('admin.accounts.openai.baseUrlHint')
   if (props.account.platform === 'gemini') return t('admin.accounts.gemini.baseUrlHint')
   if (props.account.platform === 'grok') return t('admin.accounts.grokCustomBaseUrl.hint')
+  if (props.account.platform === 'devin') return t('admin.accounts.devin.baseUrlHint')
   return t('admin.accounts.baseUrlHint')
 })
 
@@ -2837,7 +2853,9 @@ let pendingPlacementIntentSignature = ''
 let pendingPlacementIdempotencyKey = ''
 const editBaseUrl = ref('https://api.anthropic.com')
 const editApiKey = ref('')
+const editOpencodeAccountMode = ref<'go' | 'zen'>('go')
 const editCNConfig = ref({ mode: 'payg' as 'payg' | 'coding', protocol: 'chat_completions' as 'adaptive' | 'chat_completions' | 'anthropic' | 'responses', base_url: '', api_base_urls: {} as Record<string, string> })
+const editAPIAggregationConfig = ref<APIAggregationConfig>({ protocol: 'adaptive', base_url: '', api_base_urls: {} })
 const isCNPlatform = (platform: string) => ['kimi', 'zhipu', 'deepseek', 'minimax', 'qwen'].includes(platform)
 // Bedrock credentials
 const editBedrockAccessKeyId = ref('')
@@ -3597,6 +3615,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
             : newAccount.platform === 'opencode'
               ? ''
               : 'https://api.anthropic.com'
+    editOpencodeAccountMode.value = credentials.account_mode === 'zen' ? 'zen' : 'go'
     editBaseUrl.value = (credentials.base_url as string) || platformDefaultUrl
     if (isCNPlatform(newAccount.platform)) {
       const mode = credentials.account_mode === 'coding' ? 'coding' : 'payg'
@@ -3606,6 +3625,15 @@ const syncFormFromAccount = (newAccount: Account | null) => {
         mode,
         protocol: protocol === 'responses' && !cnSupportsNativeResponses(newAccount.platform) ? 'chat_completions' : protocol,
         base_url: typeof credentials.base_url === 'string' ? credentials.base_url : defaultCNBaseUrl(newAccount.platform, mode, protocol),
+        api_base_urls: credentials.api_base_urls && typeof credentials.api_base_urls === 'object' ? { ...(credentials.api_base_urls as Record<string, string>) } : {}
+      }
+    }
+    if (newAccount.platform === 'api_aggregation') {
+      const storedProtocol = credentials.api_protocol
+      const protocol = storedProtocol === 'adaptive' || storedProtocol === 'anthropic' || storedProtocol === 'responses' || storedProtocol === 'chat_completions' ? storedProtocol : 'adaptive'
+      editAPIAggregationConfig.value = {
+        protocol,
+        base_url: typeof credentials.base_url === 'string' ? credentials.base_url : '',
         api_base_urls: credentials.api_base_urls && typeof credentials.api_base_urls === 'object' ? { ...(credentials.api_base_urls as Record<string, string>) } : {}
       }
     }
@@ -4469,7 +4497,7 @@ const handleSubmit = async () => {
   if (!props.account) return
   const accountID = props.account.id
 
-  if (isUserScope.value && props.account.type !== 'oauth' && props.account.platform !== 'opencode' && !isCNPlatform(props.account.platform)) {
+  if (isUserScope.value && props.account.type !== 'oauth' && props.account.platform !== 'opencode' && !isCNPlatform(props.account.platform) && props.account.platform !== 'api_aggregation') {
     appStore.showError(t('userAccounts.typeNotAllowed'))
     return
   }
@@ -4535,6 +4563,8 @@ const handleSubmit = async () => {
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
       if (props.account.platform !== 'opencode') {
         newCredentials.base_url = newBaseUrl
+      } else {
+        newCredentials.account_mode = editOpencodeAccountMode.value
       }
 
       // Handle API key
@@ -4591,6 +4621,20 @@ const handleSubmit = async () => {
           newCredentials.base_url = (newCredentials.api_base_urls as Record<string, string>).chat_completions || editCNConfig.value.base_url
         } else {
           newCredentials.base_url = editCNConfig.value.base_url.trim() || defaultCNBaseUrl(props.account.platform, editCNConfig.value.mode, editCNConfig.value.protocol)
+          delete newCredentials.api_base_urls
+        }
+      }
+      if (props.account.platform === 'api_aggregation') {
+        const baseUrl = editAPIAggregationConfig.value.base_url.trim()
+        if (!baseUrl) {
+          appStore.showError(t('admin.accounts.apiAggregation.baseUrlRequired'))
+          return
+        }
+        newCredentials.api_protocol = editAPIAggregationConfig.value.protocol
+        newCredentials.base_url = baseUrl
+        if (editAPIAggregationConfig.value.protocol === 'adaptive' && Object.keys(editAPIAggregationConfig.value.api_base_urls).length > 0) {
+          newCredentials.api_base_urls = { ...editAPIAggregationConfig.value.api_base_urls }
+        } else {
           delete newCredentials.api_base_urls
         }
       }
@@ -5085,7 +5129,7 @@ const handleSubmit = async () => {
         const sanitizedCredentials = {
           ...(updatePayload.credentials as Record<string, unknown>)
         }
-        if (!isCNPlatform(props.account.platform)) delete sanitizedCredentials.base_url
+        if (!isCNPlatform(props.account.platform) && props.account.platform !== 'api_aggregation') delete sanitizedCredentials.base_url
         delete sanitizedCredentials.header_override_enabled
         delete sanitizedCredentials.header_overrides
         updatePayload.credentials = sanitizedCredentials

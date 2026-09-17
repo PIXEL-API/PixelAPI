@@ -34,39 +34,39 @@
       </template>
     </TablePageLayout>
 
-    <Teleport to="body">
-      <div v-if="dialogOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="dialogOpen = false">
-        <form class="w-full max-w-md rounded-lg bg-white p-5 shadow-xl dark:bg-dark-900" @submit.prevent="submitForm">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-            {{ editingCategory ? t('admin.store.editCategory') : t('admin.store.createCategory') }}
-          </h2>
-          <div class="mt-5 space-y-4">
+    <BaseDialog
+      :show="dialogOpen"
+      :title="editingCategory ? t('admin.store.editCategory') : t('admin.store.createCategory')"
+      width="narrow"
+      @close="dialogOpen = false"
+    >
+      <form id="store-category-form" @submit.prevent="submitForm">
+        <div class="space-y-4">
+          <div>
+            <label class="input-label">{{ t('common.name') }}</label>
+            <input v-model.trim="form.name" class="input" required />
+          </div>
+          <div>
+            <label class="input-label">{{ t('admin.store.description') }}</label>
+            <textarea v-model.trim="form.description" class="input min-h-24"></textarea>
+          </div>
+          <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label class="input-label">{{ t('common.name') }}</label>
-              <input v-model.trim="form.name" class="input" required />
+              <label class="input-label">{{ t('common.status') }}</label>
+              <Select v-model="form.status" :options="statusOptions" />
             </div>
             <div>
-              <label class="input-label">{{ t('admin.store.description') }}</label>
-              <textarea v-model.trim="form.description" class="input min-h-24"></textarea>
-            </div>
-            <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div>
-                <label class="input-label">{{ t('common.status') }}</label>
-                <Select v-model="form.status" :options="statusOptions" />
-              </div>
-              <div>
-                <label class="input-label">{{ t('admin.store.sortOrder') }}</label>
-                <input v-model.number="form.sort_order" class="input" type="number" />
-              </div>
+              <label class="input-label">{{ t('admin.store.sortOrder') }}</label>
+              <input v-model.number="form.sort_order" class="input" type="number" />
             </div>
           </div>
-          <div class="mt-5 flex justify-end gap-2">
-            <button type="button" class="btn btn-secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</button>
-            <button type="submit" class="btn btn-primary" :disabled="saving">{{ saving ? t('common.saving') : t('common.save') }}</button>
-          </div>
-        </form>
-      </div>
-    </Teleport>
+        </div>
+      </form>
+      <template #footer>
+        <button type="button" class="btn btn-secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</button>
+        <button type="submit" form="store-category-form" class="btn btn-primary" :disabled="saving">{{ saving ? t('common.saving') : t('common.save') }}</button>
+      </template>
+    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -83,6 +83,7 @@ import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/DataTable.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Select from '@/components/common/Select.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()

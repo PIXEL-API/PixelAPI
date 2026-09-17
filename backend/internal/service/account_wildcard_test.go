@@ -175,6 +175,36 @@ func TestAccountIsModelSupported(t *testing.T) {
 			requestedModel: "any-model",
 			expected:       false,
 		},
+		{
+			name:           "deepseek platform without mapping accepts official model",
+			platform:       PlatformDeepseek,
+			credentials:    nil,
+			requestedModel: "deepseek-v4-flash",
+			expected:       true,
+		},
+		{
+			name:           "deepseek platform without mapping normalizes claude context suffix",
+			platform:       PlatformDeepseek,
+			credentials:    nil,
+			requestedModel: "DeepSeek-Flash[1m]",
+			expected:       true,
+		},
+		{
+			name:           "deepseek platform without mapping rejects unknown model",
+			platform:       PlatformDeepseek,
+			credentials:    nil,
+			requestedModel: "deepseek-unknown",
+			expected:       false,
+		},
+		{
+			name:     "deepseek explicit mapping keeps custom alias",
+			platform: PlatformDeepseek,
+			credentials: map[string]any{
+				"model_mapping": map[string]any{"custom-deepseek": "deepseek-flash"},
+			},
+			requestedModel: "custom-deepseek",
+			expected:       true,
+		},
 
 		// 精确匹配
 		{

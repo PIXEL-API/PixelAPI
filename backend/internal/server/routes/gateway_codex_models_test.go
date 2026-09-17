@@ -161,6 +161,7 @@ func newCodexModelsRuntimeGateRouter(platform string) *gin.Engine {
 			nil,
 			nil,
 			nil,
+			nil,
 			cfg,
 			settingService,
 		),

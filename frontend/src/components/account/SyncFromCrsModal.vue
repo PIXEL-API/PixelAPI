@@ -105,13 +105,13 @@
             >{{ acc.platform }} / {{ acc.type }}</span>
             <span class="truncate">{{ acc.name }}</span>
             <span v-if="acc.local_account_id" class="text-[10px] text-gray-400">
-              本地 #{{ acc.local_account_id }}
+              {{ t('admin.accounts.crsLocalLabel', { localAccountId: acc.local_account_id }) }}
             </span>
             <span
               v-if="acc.requires_force_active_edit"
               class="ml-auto rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
             >
-              房间账号 · {{ acc.room_bindings?.length || 0 }} 个房间
+              {{ t('admin.accounts.crsRoomBadge', { length: acc.room_bindings?.length || 0 }) }}
             </span>
           </div>
         </div>
@@ -123,10 +123,9 @@
         data-testid="crs-force-confirmation"
       >
         <div>
-          <strong>检测到 {{ forceSyncSnapshot.accounts.length }} 个房间账号</strong>
+          <strong>{{ t('admin.accounts.crsRoomDetected', { length: forceSyncSnapshot.accounts.length }) }}</strong>
           <p class="mt-1 text-xs leading-5">
-            CRS 同步会修改这些账号的凭证或配置，后端默认拒绝。继续前必须确认管理员强制编辑，并按本次预览中的
-            {{ forceSyncSnapshot.listingCount }} 个房间版本执行并发校验。
+            {{ t('admin.accounts.crsForceSyncWarning', { listingCount: forceSyncSnapshot.listingCount }) }}
           </p>
         </div>
         <div
@@ -147,25 +146,25 @@
               data-testid="crs-force-confirmed"
             />
             <span>
-              <strong class="block">我已核对房间账号，确认使用管理员强制编辑</strong>
+              <strong class="block">{{ t('admin.accounts.crsForceConfirm') }}</strong>
               <small class="mt-1 block leading-5 text-amber-700 dark:text-amber-200">
-                已有使用记录继续按历史条款结算；本次同步会产生可审计的修改记录。
+                {{ t('admin.accounts.crsForceNote') }}
               </small>
             </span>
           </label>
           <div>
-            <label for="crs-force-reason" class="input-label">强制同步原因</label>
+            <label for="crs-force-reason" class="input-label">{{ t('admin.accounts.crsForceReasonLabel') }}</label>
             <textarea
               id="crs-force-reason"
               v-model="forceReason"
               class="input min-h-24 resize-y"
               maxlength="500"
               :disabled="syncing"
-              placeholder="例如：CRS 凭证轮换，已核对受影响房间与当前使用状态"
+              :placeholder="t('admin.accounts.crsForceReasonPlaceholder')"
               data-testid="crs-force-reason"
             ></textarea>
             <p class="mt-1 text-xs text-amber-700 dark:text-amber-200">
-              原因不能为空，并会随管理员操作写入审计记录。
+              {{ t('admin.accounts.crsForceReasonHint') }}
             </p>
           </div>
         </template>
@@ -396,22 +395,22 @@ const forceSyncSnapshot = computed<ForceSyncSnapshot>(() => {
 
   for (const account of accounts) {
     if (!Number.isInteger(account.local_account_id) || Number(account.local_account_id) <= 0) {
-      error = '预览缺少有效的本地账号 ID，无法安全强制同步。请返回并重新预览。'
+      error = t('admin.accounts.crsErrMissingLocalId')
       break
     }
     if (!Array.isArray(account.room_bindings) || account.room_bindings.length === 0) {
-      error = '预览缺少房间版本信息，无法安全强制同步。请返回并重新预览。'
+      error = t('admin.accounts.crsErrMissingVersions')
       break
     }
     for (const binding of account.room_bindings) {
       const listingID = Number(binding?.listing_id || 0)
       const rowVersion = Number(binding?.row_version || 0)
       if (!Number.isInteger(listingID) || listingID <= 0 || !Number.isInteger(rowVersion) || rowVersion <= 0) {
-        error = '预览包含无效的房间版本，无法安全强制同步。请返回并重新预览。'
+        error = t('admin.accounts.crsErrInvalidVersion')
         break
       }
       if (expectedVersions[listingID] && expectedVersions[listingID] !== rowVersion) {
-        error = `房间 #${listingID} 的预览版本不一致，无法安全强制同步。请返回并重新预览。`
+        error = t('admin.accounts.crsErrVersionMismatch', { listingID })
         break
       }
       expectedVersions[listingID] = rowVersion
@@ -565,7 +564,7 @@ const handlePreview = async () => {
       || !Number.isSafeInteger(res.expires_at)
       || res.expires_at <= 0
     ) {
-      appStore.showError('CRS 预览响应缺少有效的安全令牌，请检查服务端配置后重试')
+      appStore.showError(t('admin.accounts.crsErrMissingToken'))
       return
     }
     previewResult.value = res
@@ -599,7 +598,7 @@ const handleSync = async () => {
     if (forceSyncSnapshot.value.error) {
       appStore.showError(forceSyncSnapshot.value.error)
     } else if (requiresForceConfirmation.value) {
-      appStore.showError('房间账号同步前必须确认管理员强制编辑并填写原因')
+      appStore.showError(t('admin.accounts.crsErrNeedForceConfirm'))
     }
     return
   }
@@ -620,7 +619,7 @@ const handleSync = async () => {
   const payloadSignature = JSON.stringify(payload)
   if (!syncIdempotencyKey.value || syncPayloadSignature.value !== payloadSignature) {
     if (!globalThis.crypto?.randomUUID) {
-      appStore.showError('当前浏览器无法生成安全操作标识，请升级浏览器后重新预览')
+      appStore.showError(t('admin.accounts.crsErrNoCrypto'))
       return
     }
     syncIdempotencyKey.value = `crs-sync-${globalThis.crypto.randomUUID()}`
@@ -649,7 +648,7 @@ const handleSync = async () => {
       || code === 'CRS_PREVIEW_TOKEN_EXPIRED'
       || code === 'CRS_PREVIEW_CONTEXT_CONFLICT'
     ) {
-      appStore.showError('本次 CRS 预览已失效或数据已变化，请重新预览后再同步')
+      appStore.showError(t('admin.accounts.crsErrStalePreview'))
       handleBack()
     } else {
       appStore.showError(error?.message || t('admin.accounts.syncFailed'))

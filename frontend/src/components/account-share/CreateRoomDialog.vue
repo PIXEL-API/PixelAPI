@@ -1,7 +1,7 @@
 <template>
   <BaseDialog
     :show="show"
-    title="创建房间"
+    :title="t('accountShare.createRoom.title')"
     width="full"
     :close-disabled="busy || closeDisabled"
     :close-on-click-outside="true"
@@ -12,9 +12,9 @@
     <div class="create-room-dialog-shell">
       <div class="create-room-dialog-intro">
         <div class="create-room-intro-copy">
-          <span class="create-room-intro-kicker">房间配置向导</span>
+          <span class="create-room-intro-kicker">{{ t('accountShare.createRoom.wizardTitle') }}</span>
           <p>
-            用已有自有账号快速创建共享房间，凭证、代理和运行时能力都会沿用账号配置。
+            {{ t('accountShare.createRoom.wizardDesc') }}
           </p>
           <p
             v-if="busy"
@@ -22,11 +22,11 @@
             role="status"
             aria-live="polite"
           >
-            正在处理，请勿关闭窗口。
+            {{ t('accountShare.createRoom.processing') }}
           </p>
         </div>
         <div class="create-room-intro-actions">
-          <span class="create-room-intro-progress">4 个步骤 · 约 1 分钟</span>
+          <span class="create-room-intro-progress">{{ t('accountShare.createRoom.stepsMeta') }}</span>
           <button
             class="btn btn-secondary min-h-11 w-full shrink-0 sm:w-auto"
             type="button"
@@ -34,12 +34,12 @@
             @click="emit('reset')"
           >
             <Icon name="refresh" size="sm" class="mr-2" />
-            重置
+            {{ t('accountShare.createRoom.reset') }}
           </button>
         </div>
       </div>
 
-      <div class="create-room-stepper" aria-label="创建房间步骤">
+      <div class="create-room-stepper" :aria-label="t('accountShare.createRoom.stepsLabel')">
         <div v-for="(step, index) in steps" :key="step.title" class="create-room-step" :class="{ 'create-room-step-active': index === 0 }">
           <span class="create-room-step-index">{{ index + 1 }}</span>
           <span>
@@ -57,6 +57,9 @@
 <script setup lang="ts">
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 interface Props {
   show: boolean
@@ -77,10 +80,10 @@ withDefaults(defineProps<Props>(), {
 const emit = defineEmits<Emits>()
 
 const steps = [
-  { title: '选择账号', description: '账号来源' },
-  { title: '设置规则', description: '计费与并发' },
-  { title: '保护模型', description: '白名单与额度' },
-  { title: '确认创建', description: '检查并提交' },
+  { title: t('accountShare.createRoom.step1Title'), description: t('accountShare.createRoom.step1Desc') },
+  { title: t('accountShare.createRoom.step2Title'), description: t('accountShare.createRoom.step2Desc') },
+  { title: t('accountShare.createRoom.step3Title'), description: t('accountShare.createRoom.step3Desc') },
+  { title: t('accountShare.createRoom.step4Title'), description: t('accountShare.createRoom.step4Desc') },
 ]
 </script>
 

@@ -146,7 +146,7 @@ func (s *AccountTestService) buildUpstreamModelsRequest(ctx context.Context, acc
 		return s.buildGrokUpstreamModelsRequest(ctx, account)
 	case account.IsQwen() && (account.IsCodingPlan() || account.IsAnthropicProtocol()):
 		return nil, newUpstreamModelSyncUnsupportedError("This Qwen billing mode or protocol does not provide model discovery; configure the model whitelist from the provider catalog", nil)
-	case account.IsOpenAI(), account.IsCNProvider():
+	case account.IsOpenAI(), account.IsCNProvider(), account.IsAPIAggregation():
 		return s.buildOpenAIUpstreamModelsRequest(ctx, account)
 	case account.IsGemini():
 		return s.buildGeminiUpstreamModelsRequest(ctx, account)

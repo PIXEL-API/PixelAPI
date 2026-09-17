@@ -414,7 +414,17 @@ const baseSettingsResponse = {
   account_quota_notify_emails: [],
 };
 
+const ensureDialogRoot = () => {
+  if (document.getElementById("dialog-root")) {
+    return;
+  }
+  const dialogRoot = document.createElement("div");
+  dialogRoot.id = "dialog-root";
+  document.body.appendChild(dialogRoot);
+};
+
 function mountView() {
+  ensureDialogRoot();
   return mount(SettingsView, {
     global: {
       stubs: {

@@ -28,6 +28,19 @@
       <div v-if="loading" class="flex items-center justify-center py-12">
         <LoadingSpinner />
       </div>
+      <div
+        v-else-if="loadError && !stats"
+        class="rounded-xl border border-red-200 bg-red-50 px-6 py-10 text-center dark:border-red-900/60 dark:bg-red-950/30"
+        role="alert"
+      >
+        <Icon name="exclamationCircle" size="lg" class="mx-auto text-red-500 dark:text-red-400" />
+        <p class="mt-3 text-sm font-medium text-red-800 dark:text-red-200">
+          {{ loadError }}
+        </p>
+        <button type="button" class="btn btn-primary mt-5" @click="loadDashboard">
+          {{ t('common.tryAgain') }}
+        </button>
+      </div>
       <template v-else-if="stats">
         <OrderStatsCards :stats="stats" />
         <DailyRevenueChart :data="stats.daily_series || []" :loading="loading" />
@@ -86,6 +99,7 @@ const appStore = useAppStore()
 const DAYS_OPTIONS = [7, 30, 90] as const
 const days = ref<number>(30)
 const loading = ref(false)
+const loadError = ref('')
 const stats = ref<DashboardStats | null>(null)
 
 function methodColor(type: string): string {
@@ -106,11 +120,17 @@ function rankClass(idx: number): string {
 
 async function loadDashboard() {
   loading.value = true
+  loadError.value = ''
   try {
     const res = await adminPaymentAPI.getDashboard(days.value)
     stats.value = res.data
   } catch (err: unknown) {
-    appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
+    const message = extractI18nErrorMessage(err, t, 'payment.errors', t('common.error'))
+    if (stats.value) {
+      appStore.showError(message)
+    } else {
+      loadError.value = message
+    }
   } finally {
     loading.value = false
   }

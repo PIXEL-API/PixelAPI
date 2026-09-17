@@ -155,7 +155,7 @@
             class="channel-tab"
             :class="activeTab === 'basic' ? 'channel-tab-active' : 'channel-tab-inactive'"
           >
-            {{ t('admin.channels.form.basicSettings', '基础设置') }}
+            {{ t('admin.channels.form.basicSettings') }}
           </button>
           <!-- Platform Tabs (only enabled) -->
           <button
@@ -241,7 +241,7 @@
 
             <!-- Platform Management -->
             <div class="space-y-3">
-              <label class="input-label mb-0">{{ t('admin.channels.form.platformConfig', '平台配置') }}</label>
+              <label class="input-label mb-0">{{ t('admin.channels.form.platformConfig') }}</label>
               <div class="flex flex-wrap gap-2">
                 <label
                   v-for="p in platformOrder"
@@ -378,7 +378,7 @@
                     :placeholder="t('admin.channels.form.mappingSource', 'Source model')"
                     @change="renameMappingKey(sIdx, srcModel, ($event.target as HTMLInputElement).value)"
                   />
-                  <span class="text-gray-400 text-xs">→</span>
+                  <span class="text-gray-400 text-xs" aria-hidden="true">→</span>
                   <input
                     :value="section.model_mapping[srcModel]"
                     type="text"
@@ -512,7 +512,7 @@
                     <!-- Search results dropdown -->
                     <div
                       v-if="showRuleAccountDropdown[`${section.platform}-${ruleIndex}`] && (ruleAccountSearchResults[`${section.platform}-${ruleIndex}`]?.length ?? 0) > 0"
-                      class="absolute z-50 mt-1 max-h-48 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
+                      class="absolute z-[var(--ui-z-menu)] mt-1 max-h-48 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
                     >
                       <button
                         v-for="account in ruleAccountSearchResults[`${section.platform}-${ruleIndex}`]"
@@ -757,6 +757,8 @@ const platformOrder: GroupPlatform[] = [
   'deepseek',
   'minimax',
   'qwen',
+  'devin',
+  'api_aggregation',
 ]
 
 // ── Helpers ──
@@ -1363,14 +1365,14 @@ async function handleSubmit() {
   for (const section of form.platforms.filter(s => s.enabled)) {
     if (section.group_ids.length === 0) {
       const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
-      appStore.showError(t('admin.channels.noGroupsSelected', { platform: platformLabel }, `${platformLabel} 平台未选择分组，请至少选择一个分组或禁用该平台`))
+      appStore.showError(t('admin.channels.noGroupsSelected', { platform: platformLabel }, t('admin.channels.errNoGroupForPlatform', { platformLabel })))
       activeTab.value = section.platform
       return
     }
     for (const entry of section.model_pricing) {
       if (entry.models.length === 0) {
         const platformLabel = t('admin.groups.platforms.' + section.platform, section.platform)
-        appStore.showError(t('admin.channels.emptyModelsInPricing', { platform: platformLabel }, `${platformLabel} 平台下有定价条目未添加模型，请添加模型或删除该条目`))
+        appStore.showError(t('admin.channels.emptyModelsInPricing', { platform: platformLabel }, t('admin.channels.errPricingNoModel', { platformLabel })))
         activeTab.value = section.platform
         return
       }
@@ -1389,7 +1391,7 @@ async function handleSubmit() {
       appStore.showError(
         t('admin.channels.modelConflict',
           { model1: pricingConflict[0], model2: pricingConflict[1] },
-          `模型模式 '${pricingConflict[0]}' 和 '${pricingConflict[1]}' 冲突：匹配范围重叠`)
+          t('admin.channels.errModelPatternConflict', { p0: pricingConflict[0], p1: pricingConflict[1] }))
       )
       activeTab.value = section.platform
       return
@@ -1402,7 +1404,7 @@ async function handleSubmit() {
         appStore.showError(
           t('admin.channels.mappingConflict',
             { model1: mappingConflict[0], model2: mappingConflict[1] },
-            `模型映射源 '${mappingConflict[0]}' 和 '${mappingConflict[1]}' 冲突：匹配范围重叠`)
+            t('admin.channels.errMappingConflict', { p0: mappingConflict[0], p1: mappingConflict[1] }))
         )
         activeTab.value = section.platform
         return
@@ -1417,7 +1419,7 @@ async function handleSubmit() {
       if ((entry.billing_mode === 'per_request' || entry.billing_mode === 'image') &&
           (entry.per_request_price == null || entry.per_request_price === '') &&
           (!entry.intervals || entry.intervals.length === 0)) {
-        appStore.showError(t('admin.channels.form.perRequestPriceRequired', '按次/图片计费模式必须设置默认价格或至少一个计费层级'))
+        appStore.showError(t('admin.channels.form.perRequestPriceRequired'))
         return
       }
     }

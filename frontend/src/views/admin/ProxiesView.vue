@@ -148,7 +148,7 @@
                 <!-- 右键展开格式选择菜单 -->
                 <div
                   v-if="copyMenuProxyId === row.id"
-                  class="absolute left-0 top-full z-50 mt-1 w-auto min-w-[180px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-500 dark:bg-dark-700"
+                  class="absolute left-0 top-full z-[var(--ui-z-menu)] mt-1 w-auto min-w-[180px] rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-500 dark:bg-dark-700"
                 >
                   <button
                     v-for="fmt in getCopyFormats(row)"
@@ -561,7 +561,7 @@
               </div>
               <div
                 v-if="ownerDropdownOpen"
-                class="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-700"
+                class="absolute left-0 right-0 z-[var(--ui-z-menu)] mt-1 max-h-60 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-700"
               >
                 <div v-if="ownerSearchLoading" class="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">
                   {{ t('common.loading') }}
@@ -904,7 +904,7 @@
               </div>
               <div
                 v-if="ownerDropdownOpen"
-                class="absolute left-0 right-0 z-50 mt-1 max-h-60 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-700"
+                class="absolute left-0 right-0 z-[var(--ui-z-menu)] mt-1 max-h-60 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-700"
               >
                 <div v-if="ownerSearchLoading" class="px-4 py-2 text-sm text-gray-500 dark:text-gray-400">
                   {{ t('common.loading') }}

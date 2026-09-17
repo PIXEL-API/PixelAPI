@@ -17,6 +17,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	devinpkg "github.com/Wei-Shaw/sub2api/internal/pkg/devin"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 )
@@ -827,8 +828,17 @@ func (a *Account) IsMiniMax() bool    { return a != nil && a.Platform == Platfor
 func (a *Account) IsQwen() bool       { return a != nil && a.Platform == PlatformQwen }
 func (a *Account) IsCNProvider() bool { return a != nil && IsCNProvider(a.Platform) }
 
+// IsAPIAggregation reports whether the account is an account-square "API聚合"
+// channel backed by an upstream api_key + base_url. It shares the relay-style
+// credential layout with CN providers but has no official defaults.
+func (a *Account) IsAPIAggregation() bool { return a != nil && IsAPIAggregationProvider(a.Platform) }
+
+// IsRelayUpstream reports whether the account forwards to a user-configured
+// upstream through api_key/base_url credentials (CN providers + API聚合).
+func (a *Account) IsRelayUpstream() bool { return a != nil && IsRelayUpstreamProvider(a.Platform) }
+
 func (a *Account) IsOpenAICompatible() bool {
-	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.Platform == PlatformOpencode || a.IsCNProvider())
+	return a != nil && (a.Platform == PlatformOpenAI || a.Platform == PlatformGrok || a.Platform == PlatformOpencode || a.Platform == PlatformDevin || a.IsCNProvider() || a.IsAPIAggregation())
 }
 
 func (a *Account) GeminiOAuthType() string {
@@ -1357,9 +1367,14 @@ func (a *Account) IsModelSupported(requestedModel string) bool {
 
 // IsModelSupportedByMapping 保留共享场景的账号模型能力边界（支持通配符）。
 // 个人账号空 mapping 拒绝全部，平台账号未配置 mapping 时保持历史兼容。
+// DeepSeek 平台账号空 mapping 例外：未知模型透传上游只会触发模型级冷却或被
+// 静默兜底，需按官方模型名单在调度阶段快速失败。
 func (a *Account) IsModelSupportedByMapping(requestedModel string) bool {
 	mapping := a.GetModelMapping()
 	if len(mapping) == 0 {
+		if a.Platform == PlatformDeepseek {
+			return isDeepseekServableModel(requestedModel)
+		}
 		return a.OwnerUserID == nil
 	}
 	for _, candidate := range requestedModelLookupCandidates(a.Platform, requestedModel) {
@@ -2037,7 +2052,7 @@ func (a *Account) OpencodeQuotaProtectionResetAt(now time.Time) *time.Time {
 }
 
 func (a *Account) OpencodeUsageProgress(window string, now time.Time) *UsageProgress {
-	if a == nil || !a.IsOpencodeApiKey() {
+	if !a.IsOpencodeGoPlan() {
 		return nil
 	}
 	return buildOpencodeUsageProgressFromExtra(a.Extra, window, now)
@@ -2062,7 +2077,7 @@ func opencodeUsedPercentFromExtra(a *Account, key string) float64 {
 }
 
 func (a *Account) opencodeQuotaProtectionWindowAt(now time.Time) (string, *time.Time) {
-	if a == nil || !a.IsOpencodeApiKey() || a.Extra == nil {
+	if !a.IsOpencodeGoPlan() || a.Extra == nil {
 		return "", nil
 	}
 	reason, resetAt := "", time.Time{}
@@ -2282,10 +2297,10 @@ func (a *Account) IsOpenAIApiKey() bool {
 }
 
 func (a *Account) GetOpenAIBaseURL() string {
-	if !a.IsOpenAI() && !a.IsCNProvider() {
+	if !a.IsOpenAI() && !a.IsRelayUpstream() {
 		return ""
 	}
-	if a.IsCNProvider() && a.IsAdaptiveAPIProtocol() {
+	if a.IsRelayUpstream() && a.IsAdaptiveAPIProtocol() {
 		if urls, ok := a.Credentials["api_base_urls"].(map[string]any); ok {
 			if value, ok := urls[APIProtocolChatCompletions].(string); ok && strings.TrimSpace(value) != "" {
 				return strings.TrimSpace(value)
@@ -2317,6 +2332,9 @@ func (a *Account) GetOpenAIBaseURL() string {
 			return DefaultQwenCodingBaseURL
 		}
 		return DefaultQwenBaseURL
+	case PlatformAPIAggregation:
+		// 聚合渠道没有任何官方默认地址；缺失 base_url 是数据异常，快速失败。
+		return ""
 	default:
 		return "https://api.openai.com"
 	}
@@ -2333,11 +2351,16 @@ func (a *Account) GetAccountMode() string {
 	return ""
 }
 func (a *Account) GetOpenAIFormatBaseURL() string {
-	if a == nil || !a.IsCNProvider() || !a.IsAnthropicProtocol() {
+	if a == nil || !a.IsRelayUpstream() || !a.IsAnthropicProtocol() {
 		if a == nil {
 			return ""
 		}
 		return a.GetOpenAIBaseURL()
+	}
+	if a.IsAPIAggregation() {
+		// 聚合渠道无官方默认地址：OpenAI 格式桥接统一走 chat_completions 端点，
+		// 未单独配置时回落 base_url。
+		return a.GetCNProtocolBaseURL(APIProtocolChatCompletions)
 	}
 	switch a.Platform {
 	case PlatformKimi:
@@ -2360,8 +2383,21 @@ func (a *Account) GetOpenAIFormatBaseURL() string {
 }
 func (a *Account) IsCodingPlan() bool { return a.GetAccountMode() == AccountModeCoding }
 func (a *Account) GetAPIProtocol() string {
-	if a == nil || !a.IsCNProvider() {
+	if a == nil || !a.IsRelayUpstream() {
 		return APIProtocolChatCompletions
+	}
+	if a.IsAPIAggregation() {
+		// 聚合渠道支持全部三种上游协议，缺省按 adaptive 自适应。
+		switch strings.TrimSpace(a.GetCredential("api_protocol")) {
+		case APIProtocolChatCompletions:
+			return APIProtocolChatCompletions
+		case APIProtocolAnthropic:
+			return APIProtocolAnthropic
+		case APIProtocolResponses:
+			return APIProtocolResponses
+		default:
+			return APIProtocolAdaptive
+		}
 	}
 	switch strings.TrimSpace(a.GetCredential("api_protocol")) {
 	case APIProtocolAnthropic:
@@ -2380,7 +2416,7 @@ func (a *Account) IsAdaptiveAPIProtocol() bool {
 	return a.GetAPIProtocol() == APIProtocolAdaptive
 }
 func (a *Account) SupportsNativeCNResponses() bool {
-	return a != nil && (a.Platform == PlatformDeepseek || a.Platform == PlatformKimi || a.Platform == PlatformMiniMax)
+	return a != nil && (a.Platform == PlatformDeepseek || a.Platform == PlatformKimi || a.Platform == PlatformMiniMax || a.IsAPIAggregation())
 }
 func (a *Account) UsesNativeCNResponses() bool {
 	if a == nil || !a.SupportsNativeCNResponses() {
@@ -2392,9 +2428,19 @@ func (a *Account) UsesNativeCNResponses() bool {
 
 // GetCNProtocolBaseURL resolves a protocol-specific endpoint for adaptive
 // accounts. Legacy accounts continue to use base_url for Chat Completions.
+// API聚合渠道复用同一解析规则：api_base_urls[protocol] 优先，缺省回落
+// base_url，且没有任何官方默认地址。
 func (a *Account) GetCNProtocolBaseURL(protocol string) string {
-	if a == nil || !a.IsCNProvider() {
+	if a == nil || !a.IsRelayUpstream() {
 		return ""
+	}
+	if a.IsAPIAggregation() {
+		if urls, ok := a.Credentials["api_base_urls"].(map[string]any); ok {
+			if value, ok := urls[protocol].(string); ok && strings.TrimSpace(value) != "" {
+				return strings.TrimSpace(value)
+			}
+		}
+		return strings.TrimSpace(a.GetCredential("base_url"))
 	}
 	if a.IsAdaptiveAPIProtocol() {
 		if urls, ok := a.Credentials["api_base_urls"].(map[string]any); ok {
@@ -2469,6 +2515,9 @@ func (a *Account) GetAnthropicProtocolBaseURL() string {
 	if a == nil || (!a.IsAnthropicProtocol() && !a.IsAdaptiveAPIProtocol()) {
 		return ""
 	}
+	if a.IsAPIAggregation() {
+		return a.GetCNProtocolBaseURL(APIProtocolAnthropic)
+	}
 	if a.IsAdaptiveAPIProtocol() {
 		return a.GetCNProtocolBaseURL(APIProtocolAnthropic)
 	}
@@ -2479,8 +2528,23 @@ func (a *Account) GetAnthropicProtocolBaseURL() string {
 	}
 	return a.GetCNProtocolBaseURL(APIProtocolAnthropic)
 }
+
+// HasProtocolBaseURL 判断账号是否在 api_base_urls 中为指定协议配置了
+// 专用上游地址（区别于 base_url 回落）。
+func (a *Account) HasProtocolBaseURL(protocol string) bool {
+	if a == nil {
+		return false
+	}
+	urls, ok := a.Credentials["api_base_urls"].(map[string]any)
+	if !ok {
+		return false
+	}
+	value, ok := urls[protocol].(string)
+	return ok && strings.TrimSpace(value) != ""
+}
+
 func (a *Account) GetCNAPIKey() string {
-	if a == nil || !a.IsCNProvider() {
+	if a == nil || !a.IsRelayUpstream() {
 		return ""
 	}
 	return a.GetCredential("api_key")
@@ -2489,7 +2553,7 @@ func (a *Account) GetOpenAIProtocolAPIKey() string {
 	if a == nil {
 		return ""
 	}
-	if a.IsCNProvider() {
+	if a.IsRelayUpstream() {
 		return a.GetCNAPIKey()
 	}
 	return a.GetOpenAIApiKey()
@@ -2580,7 +2644,7 @@ func (a *Account) GetOpenAIIDToken() string {
 }
 
 func (a *Account) GetOpenAIApiKey() string {
-	if !a.IsOpenAIApiKey() && !a.IsOpencodeApiKey() && !(a != nil && a.IsCNProvider() && a.Type == AccountTypeAPIKey) {
+	if !a.IsOpenAIApiKey() && !a.IsOpencodeApiKey() && !(a != nil && a.IsRelayUpstream() && a.Type == AccountTypeAPIKey) {
 		return ""
 	}
 	return a.GetCredential("api_key")
@@ -2598,10 +2662,14 @@ func (a *Account) GetOpencodeApiKey() string {
 }
 
 func (a *Account) GetOpencodeBaseURL() string {
-	if !a.IsOpencode() {
+	switch a.GetOpencodeAccountMode() {
+	case OpencodeAccountModeGo:
+		return OpencodeDefaultBaseURL
+	case OpencodeAccountModeZen:
+		return OpencodeZenBaseURL
+	default:
 		return ""
 	}
-	return OpencodeDefaultBaseURL
 }
 
 func (a *Account) GetOpenAIUserAgent() string {
@@ -3918,4 +3986,35 @@ func parseExtraInt(value any) int {
 		}
 	}
 	return 0
+}
+
+// IsDevin reports whether the account is a Devin platform account.
+func (a *Account) IsDevin() bool {
+	return a != nil && a.Platform == PlatformDevin
+}
+
+// IsDevinAPIKey reports whether the account is a Devin apikey account.
+func (a *Account) IsDevinAPIKey() bool {
+	return a.IsDevin() && a.Type == AccountTypeAPIKey
+}
+
+// GetDevinToken 返回 Devin session token（credentials.api_key）。
+// 上游认证为 HTTP Basic "<token>-<token>"，token 形如 devin-session-token$...。
+func (a *Account) GetDevinToken() string {
+	if !a.IsDevinAPIKey() {
+		return ""
+	}
+	return strings.TrimSpace(a.GetCredential("api_key"))
+}
+
+// GetDevinBaseURL 返回 Devin Connect 上游地址；缺省回落到 CLI 官方端点。
+func (a *Account) GetDevinBaseURL() string {
+	if !a.IsDevin() {
+		return ""
+	}
+	baseURL := strings.TrimSpace(a.GetCredential("base_url"))
+	if baseURL == "" {
+		return devinpkg.DefaultBaseURL
+	}
+	return strings.TrimRight(baseURL, "/")
 }

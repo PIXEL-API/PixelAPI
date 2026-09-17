@@ -41,5 +41,15 @@ config.global.stubs = {
   // 可以在这里添加全局 stub
 }
 
+// Teleport 目标：BaseDialog/ModalShell 等弹层组件统一挂载到 #dialog-root。
+// 生产环境由 index.html 提供；测试环境缺失会导致 Teleport 目标为 null 并引发更新崩溃。
+if (typeof document !== 'undefined' && !document.getElementById('dialog-root')) {
+  const dialogRoot = document.createElement('div')
+  dialogRoot.id = 'dialog-root'
+  dialogRoot.className = 'notranslate'
+  dialogRoot.translate = false
+  document.body.appendChild(dialogRoot)
+}
+
 // 设置全局测试超时
 vi.setConfig({ testTimeout: 10000 })

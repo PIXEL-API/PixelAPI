@@ -46,6 +46,12 @@
     <path d="M7 15V9l5 4 5-4v6" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
   </svg>
   <span v-else-if="platform === 'qwen'" :class="sizeClass" aria-hidden="true">Q</span>
+  <span v-else-if="platform === 'devin'" :class="sizeClass" aria-hidden="true">D</span>
+  <!-- API 聚合：链接/汇聚图标 -->
+  <svg v-else-if="platform === 'api_aggregation'" :class="sizeClass" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+  </svg>
   <!-- Fallback: generic platform icon -->
   <svg v-else :class="sizeClass" fill="currentColor" viewBox="0 0 24 24">
     <path

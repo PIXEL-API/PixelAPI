@@ -103,7 +103,7 @@
                     <el-tooltip :content="modelMappingTooltip(log)" placement="top" :show-after="500">
                       <span class="flex items-center gap-1 truncate font-mono text-[11px] text-gray-700 dark:text-gray-300">
                         <span class="truncate">{{ log.requested_model }}</span>
-                        <span class="flex-shrink-0 text-gray-400">→</span>
+                        <span class="flex-shrink-0 text-gray-400" aria-hidden="true">→</span>
                         <span class="truncate text-primary-600 dark:text-primary-400">{{ log.upstream_model }}</span>
                       </span>
                     </el-tooltip>

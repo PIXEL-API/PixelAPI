@@ -510,8 +510,8 @@ type UpdateProxyInput struct {
 	Protocol string
 	Host     string
 	Port     int
-	Username string
-	Password string
+	Username *string
+	Password *string
 	Status   string
 	// Platform / RequiredAccountLevel 用指针区分“未提供”与“显式设为空”，
 	// 空字符串分别表示改为通用代理 / 所有等级可用。
@@ -3580,7 +3580,13 @@ func (s *adminServiceImpl) prepareAccountCreate(ctx context.Context, input *Crea
 	if !IsSupportedAccountPlatform(input.Platform) {
 		return nil, nil, ErrAccountPlatformUnsupported
 	}
+	if err := validateOpencodeAccountConfiguration(input.Platform, input.Type, input.Credentials); err != nil {
+		return nil, nil, err
+	}
 	if err := validateQwenAccountConfiguration(input.Platform, input.Type, input.Credentials); err != nil {
+		return nil, nil, err
+	}
+	if err := validateDevinAccountConfiguration(input.Platform, input.Type, input.Credentials); err != nil {
 		return nil, nil, err
 	}
 	if _, err := validateAdminGrokManagedExtra(input.Extra); err != nil {
@@ -3958,7 +3964,13 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			account.OwnerUserID = input.OwnerUserID
 		}
 	}
+	if err := validateOpencodeAccountConfiguration(account.Platform, account.Type, account.Credentials); err != nil {
+		return nil, err
+	}
 	if err := validateQwenAccountConfiguration(account.Platform, account.Type, account.Credentials); err != nil {
+		return nil, err
+	}
+	if err := validateDevinAccountConfiguration(account.Platform, account.Type, account.Credentials); err != nil {
 		return nil, err
 	}
 	// 个人账号创建/变更模型白名单时，必须使用当前定价目录中的 canonical 模型 ID。
@@ -4233,6 +4245,12 @@ func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUp
 			credentials := mergeAccountMapPreservingSensitiveCreds(account.Credentials, input.Credentials)
 			if err := NormalizeHeaderOverrideCredentials(credentials); err != nil {
 				return nil, invalidBulkAccountInput(err.Error())
+			}
+			if err := validateOpencodeAccountConfiguration(account.Platform, account.Type, credentials); err != nil {
+				return nil, err
+			}
+			if err := validateDevinAccountConfiguration(account.Platform, account.Type, credentials); err != nil {
+				return nil, err
 			}
 			if account.OwnerUserID != nil &&
 				strings.EqualFold(strings.TrimSpace(account.Platform), PlatformOpencode) &&
@@ -5129,11 +5147,11 @@ func (s *adminServiceImpl) UpdateProxy(ctx context.Context, id int64, input *Upd
 	if input.Port != 0 {
 		proxy.Port = input.Port
 	}
-	if input.Username != "" {
-		proxy.Username = input.Username
+	if input.Username != nil {
+		proxy.Username = strings.TrimSpace(*input.Username)
 	}
-	if input.Password != "" {
-		proxy.Password = input.Password
+	if input.Password != nil {
+		proxy.Password = strings.TrimSpace(*input.Password)
 	}
 	if input.Status != "" {
 		proxy.Status = input.Status

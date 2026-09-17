@@ -39,6 +39,10 @@ func openAICompatibleRoutingPlatform(apiKey *service.APIKey) string {
 			return service.PlatformGrok
 		case service.PlatformOpencode:
 			return service.PlatformOpencode
+		case service.PlatformDevin:
+			return service.PlatformDevin
+		case service.PlatformAPIAggregation:
+			return service.PlatformAPIAggregation
 		}
 	}
 	return service.PlatformOpenAI

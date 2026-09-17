@@ -116,6 +116,7 @@ const (
 	codexSparkImageUnsupportedMarker     = "<sub2api-codex-spark-image-unsupported>"
 	codexSparkImageUnsupportedText       = codexSparkImageUnsupportedMarker + "\nThe current model is gpt-5.3-codex-spark, which does not support image generation, image editing, image input, the `image_generation` tool, or Codex `image_gen`/`$imagegen` workflows. If the user asks for image generation or image editing, clearly explain this model limitation and ask them to switch to a non-Spark Codex model such as gpt-5.3-codex or gpt-5.4. Do not claim that the local environment merely lacks image_gen tooling, and do not suggest CLI fallback as the primary fix while the model remains Spark.\n</sub2api-codex-spark-image-unsupported>"
 	defaultCodexInstructions             = "You are a helpful coding assistant."
+	openAIInputInternalMetadataField     = "internal_chat_message_metadata_passthrough"
 )
 
 var openAIChatGPTInternalUnsupportedFields = []string{
@@ -245,6 +246,16 @@ func applyCodexOAuthTransform(reqBody map[string]any, isCodexCLI bool, isCompact
 
 	// 续链场景保留 item_reference 与 id，避免 call_id 上下文丢失。
 	if input, ok := reqBody["input"].([]any); ok {
+		// Codex 自定义 provider 可能携带内部消息元数据；ChatGPT 上游只拒绝
+		// input item 顶层字段，不能递归删除用户 content 中的同名字段。
+		for _, rawItem := range input {
+			if item, ok := rawItem.(map[string]any); ok {
+				if _, exists := item[openAIInputInternalMetadataField]; exists {
+					delete(item, openAIInputInternalMetadataField)
+					result.Modified = true
+				}
+			}
+		}
 		if normalizedInput, modified := normalizeCodexToolRoleMessages(input); modified {
 			input = normalizedInput
 			result.Modified = true

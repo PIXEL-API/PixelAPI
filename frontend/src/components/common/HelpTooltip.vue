@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, useTemplateRef } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 type TooltipPlacement = 'top' | 'bottom'
 
@@ -11,10 +14,14 @@ const props = withDefaults(defineProps<{
   content?: string
   trigger?: 'hover' | 'click'
   widthClass?: string
+  label?: string
 }>(), {
   trigger: 'hover',
   widthClass: 'w-64',
 })
+
+let tooltipIdCounter = 0
+const tooltipId = `help-tooltip-${++tooltipIdCounter}`
 
 const show = ref(false)
 const triggerRef = useTemplateRef<HTMLElement>('trigger')
@@ -45,6 +52,31 @@ function onEnter() {
 function onLeave() {
   if (props.trigger !== 'hover') return
   closeTooltip()
+}
+
+// 键盘聚焦/触屏点击也能触发 hover 模式的提示（keyboard & touch parity）
+function onFocus() {
+  if (props.trigger !== 'hover') return
+  openTooltip()
+}
+
+function onBlur() {
+  if (props.trigger !== 'hover') return
+  closeTooltip()
+}
+
+function onTriggerKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape') {
+    closeTooltip()
+    return
+  }
+  if (props.trigger !== 'click') return
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    event.stopPropagation()
+    if (show.value) closeTooltip()
+    else openTooltip()
+  }
 }
 
 function onClick(event: MouseEvent) {
@@ -152,10 +184,18 @@ onBeforeUnmount(() => {
 <template>
   <div
     ref="trigger"
-    class="group relative ml-1 inline-flex items-center align-middle"
+    class="group relative ml-1 inline-flex items-center align-middle rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500"
+    tabindex="0"
+    :role="props.trigger === 'click' ? 'button' : undefined"
+    :aria-expanded="props.trigger === 'click' ? show : undefined"
+    :aria-label="label"
+    :aria-describedby="show ? tooltipId : undefined"
     @mouseenter="onEnter"
     @mouseleave="onLeave"
     @click="onClick"
+    @focus="onFocus"
+    @blur="onBlur"
+    @keydown="onTriggerKeydown"
   >
     <!-- Trigger Icon -->
     <slot name="trigger">
@@ -179,10 +219,11 @@ onBeforeUnmount(() => {
       <div
         ref="tooltip"
         v-show="show"
+        :id="tooltipId"
         role="tooltip"
         :data-placement="placement"
         :class="[
-          'fixed z-[99999] max-w-[calc(100vw-2rem)] rounded-lg bg-gray-900 p-3 text-xs leading-relaxed text-white shadow-xl ring-1 ring-white/10 dark:bg-gray-800',
+          'fixed z-[var(--ui-z-tooltip)] max-w-[calc(100vw-2rem)] rounded-lg bg-gray-900 p-3 text-xs leading-relaxed text-white shadow-xl ring-1 ring-white/10 dark:bg-gray-800',
           props.widthClass,
         ]"
         :style="tooltipStyle"
@@ -191,7 +232,7 @@ onBeforeUnmount(() => {
           v-if="props.trigger === 'click'"
           type="button"
           class="absolute right-1.5 top-1.5 rounded p-1 text-gray-300 transition-colors hover:bg-white/10 hover:text-white"
-          aria-label="Close"
+          :aria-label="t('common.close')"
           @click.stop="closeTooltip"
         >
           <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">

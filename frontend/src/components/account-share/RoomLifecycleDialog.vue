@@ -1,7 +1,7 @@
 <template>
   <BaseDialog
     :show="listing !== null"
-    :title="listing ? `${displayName} · 房间管理` : '房间管理'"
+    :title="listing ? t('accountShare.lifecycle.titleWithName', { name: displayName }) : t('accountShare.lifecycle.title')"
     width="normal"
     :close-disabled="roomLifecycleCommandBusy"
     @close="closeRoomLifecycleDialog"
@@ -13,7 +13,7 @@
         data-testid="room-lifecycle-loading"
       >
         <Icon name="refresh" size="sm" class="animate-spin" />
-        <span>正在读取房间的最新状态...</span>
+        <span>{{ t('accountShare.lifecycle.loading') }}</span>
       </div>
 
       <div
@@ -24,7 +24,7 @@
       >
         <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
         <div class="min-w-0">
-          <strong>操作没有完成</strong>
+          <strong>{{ t('accountShare.lifecycle.opIncomplete') }}</strong>
           <p>{{ roomLifecycleError }}</p>
           <code v-if="roomLifecycleErrorCode">{{ roomLifecycleErrorCode }}</code>
         </div>
@@ -37,8 +37,8 @@
       >
         <Icon name="checkCircle" size="sm" class="mt-0.5 flex-shrink-0" />
         <div>
-          <strong>房间已删除</strong>
-          <p>房间不会再出现在可用列表中，历史消费、结算和评价记录仍会保留。</p>
+          <strong>{{ t('accountShare.lifecycle.roomDeleted') }}</strong>
+          <p>{{ t('accountShare.lifecycle.roomDeletedDesc') }}</p>
         </div>
       </div>
 
@@ -46,7 +46,7 @@
         <section class="room-lifecycle-overview">
           <div class="room-lifecycle-overview-head">
             <div>
-              <span class="room-lifecycle-eyebrow">当前状态</span>
+              <span class="room-lifecycle-eyebrow">{{ t('accountShare.lifecycle.currentStatus') }}</span>
               <div class="mt-1 flex flex-wrap items-center gap-2">
                 <strong class="text-base text-gray-950 dark:text-white">
                   {{ roomLifecycleStatusLabel(roomLifecycleState.lifecycle_status) }}
@@ -56,22 +56,22 @@
                 </span>
               </div>
             </div>
-            <span class="room-lifecycle-version">版本 {{ roomLifecycleState.row_version }}</span>
+            <span class="room-lifecycle-version">{{ t('accountShare.lifecycle.version', { rowVersion: roomLifecycleState.row_version }) }}</span>
           </div>
           <p v-if="roomLifecycleState.status_reason" class="room-lifecycle-status-reason">
             {{ roomLifecycleState.status_reason }}
           </p>
           <div class="room-lifecycle-metrics">
             <div>
-              <span>消费者席位</span>
+              <span>{{ t('accountShare.lifecycle.consumerSeats') }}</span>
               <strong>{{ roomLifecycleState.active_seats }}/{{ roomLifecycleState.seat_limit }}</strong>
             </div>
             <div>
-              <span>房间账号</span>
+              <span>{{ t('accountShare.lifecycle.roomAccounts') }}</span>
               <strong>{{ roomLifecycleState.room_account_count }}</strong>
             </div>
             <div>
-              <span>进行中请求</span>
+              <span>{{ t('accountShare.lifecycle.inFlightRequests') }}</span>
               <strong>{{ roomLifecycleState.in_flight_concurrency }}</strong>
             </div>
           </div>
@@ -99,20 +99,20 @@
         </section>
 
         <p v-if="roomLifecycleLastQueryAt" class="text-xs text-gray-500 dark:text-dark-300" data-testid="room-operation-query-observation">
-          最近查询{{ roomLifecycleQueryFailed ? '失败' : '成功' }}：{{ new Date(roomLifecycleLastQueryAt).toLocaleTimeString() }}
-          <span v-if="roomLifecycleQueryFailed && roomLifecycleLastSuccessAt"> · 最近成功查询：{{ new Date(roomLifecycleLastSuccessAt).toLocaleTimeString() }}</span>
-          <span v-if="roomLifecycleQueryFailed && roomLifecyclePolling"> · 系统会继续重试</span>
+          {{ t('accountShare.lifecycle.lastQuery', { result: roomLifecycleQueryFailed ? t('accountShare.lifecycle.queryFailed') : t('accountShare.lifecycle.querySuccess'), time: new Date(roomLifecycleLastQueryAt).toLocaleTimeString() }) }}
+          <span v-if="roomLifecycleQueryFailed && roomLifecycleLastSuccessAt"> {{ t('accountShare.lifecycle.lastSuccessAt', { time: new Date(roomLifecycleLastSuccessAt).toLocaleTimeString() }) }}</span>
+          <span v-if="roomLifecycleQueryFailed && roomLifecyclePolling"> {{ t('accountShare.lifecycle.willRetry') }}</span>
         </p>
         <p v-if="roomLifecycleQueryStopped" class="text-sm text-amber-700 dark:text-amber-300" role="status" data-testid="room-operation-query-stopped">
-          已达到本轮 10 分钟自动查询期限，后台处理仍可能继续；点击“继续查询”重新核对状态。
+          {{ t('accountShare.lifecycle.pollStopped') }}
         </p>
 
         <template v-if="!roomLifecycleHasPendingOperation">
           <section v-if="roomLifecycleAction === null" class="space-y-3">
             <div>
-              <span class="room-lifecycle-eyebrow">可用操作</span>
+              <span class="room-lifecycle-eyebrow">{{ t('accountShare.lifecycle.availableActions') }}</span>
               <p class="mt-1 text-sm leading-6 text-gray-500 dark:text-dark-300">
-                下架后停止新增用户，现有消费者保持不变；需要恢复招募时可重新上架。
+                {{ t('accountShare.lifecycle.delistHint') }}
               </p>
             </div>
             <div class="room-lifecycle-action-grid">
@@ -125,8 +125,8 @@
               >
                 <Icon name="clock" size="sm" />
                 <span>
-                  <strong>下架房间</strong>
-                  <small>停止新增，已有用户继续使用</small>
+                  <strong>{{ t('accountShare.lifecycle.delist') }}</strong>
+                  <small>{{ t('accountShare.lifecycle.delistDesc') }}</small>
                 </span>
               </button>
               <button
@@ -138,8 +138,8 @@
               >
                 <Icon name="play" size="sm" />
                 <span>
-                  <strong>重新上架</strong>
-                  <small>完成账号连通性校验后重新开放</small>
+                  <strong>{{ t('accountShare.lifecycle.relist') }}</strong>
+                  <small>{{ t('accountShare.lifecycle.relistDesc') }}</small>
                 </span>
               </button>
               <button
@@ -151,8 +151,8 @@
               >
                 <Icon name="ban" size="sm" />
                 <span>
-                  <strong>紧急停用</strong>
-                  <small>仅管理员用于异常处置</small>
+                  <strong>{{ t('accountShare.lifecycle.emergencyStop') }}</strong>
+                  <small>{{ t('accountShare.lifecycle.emergencyStopDesc') }}</small>
                 </span>
               </button>
               <button
@@ -163,8 +163,8 @@
               >
                 <Icon name="trash" size="sm" />
                 <span>
-                  <strong>删除房间</strong>
-                  <small>先检查使用、结算与运行时阻塞项</small>
+                  <strong>{{ t('accountShare.lifecycle.deleteRoom') }}</strong>
+                  <small>{{ t('accountShare.lifecycle.deleteRoomDesc') }}</small>
                 </span>
               </button>
             </div>
@@ -172,7 +172,7 @@
               v-if="!roomLifecycleHasStateChangeAction"
               class="room-lifecycle-muted-note"
             >
-              当前没有可执行的状态变更；你仍可检查删除条件，或刷新状态。
+              {{ t('accountShare.lifecycle.noActions') }}
             </p>
           </section>
 
@@ -181,7 +181,7 @@
             class="room-lifecycle-confirm-panel"
             data-testid="room-lifecycle-confirm"
           >
-            <span class="room-lifecycle-eyebrow">确认操作</span>
+            <span class="room-lifecycle-eyebrow">{{ t('accountShare.lifecycle.confirmAction') }}</span>
             <h4>{{ roomLifecycleActionTitle(roomLifecycleAction) }}</h4>
             <p>{{ roomLifecycleActionDescription(roomLifecycleAction) }}</p>
             <div class="room-lifecycle-alert room-lifecycle-alert-warning">
@@ -189,15 +189,15 @@
               <p>{{ roomLifecycleActionImpact(roomLifecycleAction) }}</p>
             </div>
             <label v-if="authStore.isAdmin" class="field">
-              <span>管理员操作原因</span>
+              <span>{{ t('accountShare.lifecycle.adminReason') }}</span>
               <textarea
                 v-model="roomLifecycleReason"
                 class="input min-h-24"
                 maxlength="500"
-                placeholder="请说明本次生命周期变更原因"
+                :placeholder="t('accountShare.lifecycle.reasonPlaceholder')"
                 data-testid="room-lifecycle-reason"
               ></textarea>
-              <small>原因会写入房间事件与审计记录。</small>
+              <small>{{ t('accountShare.lifecycle.reasonNote') }}</small>
             </label>
           </section>
 
@@ -206,20 +206,20 @@
             class="room-lifecycle-confirm-panel"
             data-testid="room-delete-confirm"
           >
-            <span class="room-lifecycle-eyebrow">删除校验</span>
-            <h4>删除房间</h4>
-            <p>系统会先检查使用中成员、请求、结算和其他房间操作，全部清零后才签发两分钟有效的确认令牌。</p>
+            <span class="room-lifecycle-eyebrow">{{ t('accountShare.lifecycle.deleteCheck') }}</span>
+            <h4>{{ t('accountShare.lifecycle.deleteRoom') }}</h4>
+            <p>{{ t('accountShare.lifecycle.deleteCheckDesc') }}</p>
 
             <label v-if="authStore.isAdmin" class="field">
-              <span>管理员删除原因</span>
+              <span>{{ t('accountShare.lifecycle.adminDeleteReason') }}</span>
               <textarea
                 v-model="roomLifecycleReason"
                 class="input min-h-24"
                 maxlength="500"
-                placeholder="请说明为什么需要删除此房间"
+                :placeholder="t('accountShare.lifecycle.deleteReasonPlaceholder')"
                 data-testid="room-delete-reason"
               ></textarea>
-              <small>必须填写原因后才能检查删除条件，原因会写入审计记录。</small>
+              <small>{{ t('accountShare.lifecycle.deleteReasonNote') }}</small>
             </label>
 
             <button
@@ -231,7 +231,7 @@
               @click="loadRoomDeleteIntent"
             >
               <Icon name="search" size="sm" />
-              检查删除条件
+              {{ t('accountShare.lifecycle.checkDelete') }}
             </button>
 
             <div
@@ -240,7 +240,7 @@
               data-testid="room-delete-intent-loading"
             >
               <Icon name="refresh" size="sm" class="animate-spin" />
-              <span>正在检查删除条件...</span>
+              <span>{{ t('accountShare.lifecycle.checkingDelete') }}</span>
             </div>
 
             <template v-else-if="roomDeleteIntent">
@@ -259,7 +259,7 @@
                   class="mt-0.5 flex-shrink-0"
                 />
                 <div>
-                  <strong>{{ roomDeleteIntent.can_delete ? '删除条件已满足' : '暂时不能删除' }}</strong>
+                  <strong>{{ roomDeleteIntent.can_delete ? t('accountShare.lifecycle.deleteReady') : t('accountShare.lifecycle.deleteBlocked') }}</strong>
                   <p>{{ roomDeleteIntent.history_notice }}</p>
                 </div>
               </div>
@@ -276,7 +276,7 @@
               </ul>
 
               <label v-if="roomDeleteIntent.can_delete" class="field">
-                <span>输入房间名确认</span>
+                <span>{{ t('accountShare.lifecycle.confirmNameLabel') }}</span>
                 <input
                   v-model="roomDeleteNameConfirmation"
                   class="input min-h-11"
@@ -285,7 +285,7 @@
                   :placeholder="roomDeleteIntent.room_name"
                   data-testid="room-delete-name-input"
                 />
-                <small>请完整输入“{{ roomDeleteIntent.room_name }}”。确认令牌将在 {{ formatRoomDeleteIntentExpiry(roomDeleteIntent.expires_at) }} 失效。</small>
+                <small>{{ t('accountShare.lifecycle.confirmNameHint', { roomName: roomDeleteIntent.room_name, expiresAt: formatRoomDeleteIntentExpiry(roomDeleteIntent.expires_at) }) }}</small>
               </label>
             </template>
           </section>
@@ -302,7 +302,7 @@
           :disabled="roomLifecycleCommandBusy"
           @click="resetRoomLifecycleAction"
         >
-          返回
+          {{ t('common.back') }}
         </button>
         <button
           v-else
@@ -311,7 +311,7 @@
           :disabled="roomLifecycleCommandBusy"
           @click="closeRoomLifecycleDialog"
         >
-          关闭
+          {{ t('common.close') }}
         </button>
         <button
           v-if="roomLifecycleHasPendingOperation && !roomLifecycleDeleted"
@@ -322,7 +322,7 @@
           @click="pollRoomLifecycleOperationNow"
         >
           <Icon name="refresh" size="sm" :class="{ 'animate-spin': roomLifecyclePolling }" />
-          {{ roomLifecyclePolling ? '自动查询中' : '继续查询' }}
+          {{ roomLifecyclePolling ? t('accountShare.lifecycle.polling') : t('accountShare.lifecycle.resumeQuery') }}
         </button>
         <button
           v-else-if="roomLifecycleAction === null && !roomLifecycleDeleted"
@@ -332,7 +332,7 @@
           @click="refreshRoomLifecycleState"
         >
           <Icon name="refresh" size="sm" :class="{ 'animate-spin': roomLifecycleLoading }" />
-          刷新状态
+          {{ t('accountShare.lifecycle.refreshStatus') }}
         </button>
         <button
           v-else-if="roomLifecycleAction === 'delete' && roomDeleteIntent && (!roomDeleteIntent.can_delete || roomDeleteIntentExpired)"
@@ -341,7 +341,7 @@
           :disabled="roomLifecycleCommandBusy"
           @click="loadRoomDeleteIntent"
         >
-          {{ roomDeleteIntentExpired ? '重新获取确认' : '重新检查' }}
+          {{ roomDeleteIntentExpired ? t('accountShare.lifecycle.reconfirm') : t('accountShare.lifecycle.recheck') }}
         </button>
         <button
           v-else-if="roomLifecycleAction !== null && !roomLifecycleDeleted"
@@ -356,7 +356,7 @@
             size="sm"
             :class="{ 'animate-pulse': roomLifecycleSubmitting }"
           />
-          {{ roomLifecycleSubmitting ? '提交中...' : roomLifecycleSubmitLabel }}
+          {{ roomLifecycleSubmitting ? t('common.submitting') : roomLifecycleSubmitLabel }}
         </button>
       </div>
     </template>
@@ -400,6 +400,9 @@ import {
   ROOM_LIFECYCLE_ERROR_MESSAGES,
   ROOM_LIFECYCLE_TERMINAL_OPERATION_STATUSES
 } from './roomLifecycleConstants'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 interface RoomLifecycleBlockerItem {
   key: keyof AccountShareRoomBlockers
@@ -497,27 +500,27 @@ const roomLifecycleBlockerItems = computed<RoomLifecycleBlockerItem[]>(() => {
   ) => {
     if (value > 0) items.push({ key, label, value: String(value) })
   }
-  appendCount('active_membership_count', '正在使用的成员', blockers.active_membership_count)
-  appendCount('ending_membership_count', '正在退出或结算的成员', blockers.ending_membership_count)
-  appendCount('in_flight_request_count', '进行中的请求', blockers.in_flight_request_count)
-  appendCount('pending_billing_intent_count', '待处理计费意图', blockers.pending_billing_intent_count)
+  appendCount('active_membership_count', t('accountShare.lifecycle.blockerActiveMembers'), blockers.active_membership_count)
+  appendCount('ending_membership_count', t('accountShare.lifecycle.blockerEndingMembers'), blockers.ending_membership_count)
+  appendCount('in_flight_request_count', t('accountShare.lifecycle.blockerInFlight'), blockers.in_flight_request_count)
+  appendCount('pending_billing_intent_count', t('accountShare.lifecycle.blockerBillingIntents'), blockers.pending_billing_intent_count)
   appendCount(
     'synchronous_billing_pending_count',
-    '同步结算任务',
+    t('accountShare.lifecycle.blockerSyncBilling'),
     blockers.synchronous_billing_pending_count
   )
   if (blockers.conflicting_operation) {
     items.push({
       key: 'conflicting_operation',
-      label: '其他生命周期操作',
-      value: blockers.conflicting_operation_id || '正在执行'
+      label: t('accountShare.lifecycle.blockerOtherOp'),
+      value: blockers.conflicting_operation_id || t('accountShare.lifecycle.blockerRunning')
     })
   }
   if (blockers.runtime_dependency_unavailable) {
     items.push({
       key: 'runtime_dependency_unavailable',
-      label: '运行时状态',
-      value: '暂时无法确认'
+      label: t('accountShare.lifecycle.blockerRuntime'),
+      value: t('accountShare.lifecycle.blockerUnknown')
     })
   }
   return items
@@ -546,30 +549,30 @@ const canSubmitRoomLifecycleAction = computed(() => {
 const roomLifecycleSubmitLabel = computed(() => {
   switch (roomLifecycleAction.value) {
     case 'drain':
-      return '确认下架'
+      return t('accountShare.lifecycle.confirmDelist')
     case 'activate':
-      return '确认重新上架'
+      return t('accountShare.lifecycle.confirmRelist')
     case 'suspend':
-      return '确认紧急停用'
+      return t('accountShare.lifecycle.confirmEmergency')
     case 'delete':
-      return roomDeleteIntentExpired.value ? '确认已过期' : '确认删除'
+      return roomDeleteIntentExpired.value ? t('accountShare.lifecycle.confirmExpired') : t('accountShare.lifecycle.confirmDelete')
     default:
-      return '确认操作'
+      return t('accountShare.lifecycle.confirmAction')
   }
 })
 
 function roomLifecycleStatusLabel(status: AccountShareRoomLifecycleStatus): string {
   switch (status) {
     case 'active':
-      return '开放使用'
+      return t('accountShare.lifecycle.statusOpen')
     case 'paused':
-      return '已下架'
+      return t('accountShare.lifecycle.statusDelisted')
     case 'validating':
-      return '上架校验中'
+      return t('accountShare.lifecycle.statusRelisting')
     case 'draining':
-      return '下架处理中'
+      return t('accountShare.lifecycle.statusDelisting')
     case 'suspended':
-      return '管理员暂停'
+      return t('accountShare.lifecycle.statusAdminPaused')
   }
 }
 
@@ -591,11 +594,11 @@ function roomLifecycleStatusBadgeClass(status: AccountShareRoomLifecycleStatus):
 function roomLifecycleHealthLabel(healthState: AccountShareRoomHealthState): string {
   switch (healthState) {
     case 'healthy':
-      return '健康'
+      return t('accountShare.lifecycle.healthOk')
     case 'degraded':
-      return '部分可用'
+      return t('accountShare.lifecycle.healthPartial')
     case 'unavailable':
-      return '不可用'
+      return t('accountShare.lifecycle.healthDown')
   }
 }
 
@@ -606,51 +609,51 @@ function roomLifecycleActionAllowed(action: AccountShareRoomLifecycleAction): bo
 function roomLifecycleActionTitle(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '下架房间'
+      return t('accountShare.lifecycle.delist')
     case 'activate':
-      return '重新上架'
+      return t('accountShare.lifecycle.relist')
     case 'suspend':
-      return '紧急停用房间'
+      return t('accountShare.lifecycle.actionEmergencyStop')
   }
 }
 
 function roomLifecycleActionDescription(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '房间将立即停止接收新成员，并结束现有成员的使用。等待进行中的请求完成后，系统按停费时间结算并退还未用预付款；全部处理完成后，房间转为“已下架”，可重新上架。'
+      return t('accountShare.lifecycle.delistDetail')
     case 'activate':
-      return '系统会校验房间主账号的连通性和可用状态；只有校验通过才会重新开放。'
+      return t('accountShare.lifecycle.relistDetail')
     case 'suspend':
-      return '管理员将因异常立即停用房间，恢复前不会再分配给消费用户。'
+      return t('accountShare.lifecycle.emergencyDetail')
   }
 }
 
 function roomLifecycleActionImpact(action: Exclude<AccountShareRoomLifecycleAction, 'delete'>): string {
   switch (action) {
     case 'drain':
-      return '下架会立即停止新请求，等待在途请求完成后结算退款；全部处理完成后显示“已下架”，历史记录继续保留。'
+      return t('accountShare.lifecycle.delistConsequence')
     case 'activate':
-      return '上架校验失败时房间保持下架，并展示失败原因。'
+      return t('accountShare.lifecycle.relistFailNote')
     case 'suspend':
-      return '紧急停用不会删除房间或历史记录，操作原因会被审计。'
+      return t('accountShare.lifecycle.emergencyNote')
   }
 }
 
 function roomLifecycleOperationLabel(operation: AccountShareRoomOperation): string {
-  const actionLabel = operation.action === 'delete_room' ? '删除房间' : '房间下架处理'
+  const actionLabel = operation.action === 'delete_room' ? t('accountShare.lifecycle.deleteRoom') : t('accountShare.lifecycle.opDelistLabel')
   switch (operation.status) {
     case 'succeeded':
-      return `${actionLabel}已完成`
+      return t('accountShare.lifecycle.opDone', { action: actionLabel })
     case 'failed':
-      return `${actionLabel}失败`
+      return t('accountShare.lifecycle.opFailed', { action: actionLabel })
     case 'cancelled':
-      return `${actionLabel}已取消`
+      return t('accountShare.lifecycle.opCancelled', { action: actionLabel })
     case 'needs_attention':
-      return `${actionLabel}需要处理阻塞项`
+      return t('accountShare.lifecycle.opBlocked', { action: actionLabel })
     case 'running':
-      return `${actionLabel}执行中`
+      return t('accountShare.lifecycle.opRunning', { action: actionLabel })
     case 'pending':
-      return `${actionLabel}等待执行`
+      return t('accountShare.lifecycle.opPending', { action: actionLabel })
   }
 }
 
@@ -659,23 +662,23 @@ function roomLifecycleOperationStatusDescription(operation: AccountShareRoomOper
   if (reason) return reason
   switch (operation.status) {
     case 'succeeded':
-      return '服务端已完成全部状态与历史快照写入。'
+      return t('accountShare.lifecycle.opDoneDesc')
     case 'failed':
-      return '操作未完成，请根据错误信息处理后重新打开房间状态。'
+      return t('accountShare.lifecycle.opFailedDesc')
     case 'cancelled':
-      return '操作已经取消，房间未按本次请求继续变更。'
+      return t('accountShare.lifecycle.opCancelledDesc')
     case 'needs_attention':
-      return '仍有运行时或结算阻塞项，系统会继续等待。'
+      return t('accountShare.lifecycle.opBlockedDesc')
     case 'running':
-      return '正在等待请求、成员与结算安全收口。'
+      return t('accountShare.lifecycle.opRunningDesc')
     case 'pending':
-      return '操作已受理，正在等待后台处理。'
+      return t('accountShare.lifecycle.opPendingDesc')
   }
 }
 
 function formatRoomDeleteIntentExpiry(value?: string): string {
   const expiresAt = normalizeDateInput(value)
-  if (!expiresAt) return '令牌过期时'
+  if (!expiresAt) return t('accountShare.lifecycle.tokenExpiredAt')
   return expiresAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
@@ -821,7 +824,7 @@ async function refreshRoomLifecycleState(): Promise<void> {
     ) {
       return
     }
-    setRoomLifecycleError(error, '读取房间生命周期状态失败，请稍后重试。')
+    setRoomLifecycleError(error, t('accountShare.lifecycle.loadFailed'))
   } finally {
     if (requestSeq === roomLifecycleStateRequestSeq) {
       roomLifecycleLoading.value = false
@@ -859,7 +862,7 @@ async function loadRoomDeleteIntent(): Promise<void> {
   const reason = roomLifecycleReason.value.trim()
   if (authStore.isAdmin && !reason) {
     roomLifecycleErrorCode.value = 'ACCOUNT_SHARE_ROOM_REASON_REQUIRED'
-    roomLifecycleError.value = '管理员必须填写删除原因后再检查删除条件。'
+    roomLifecycleError.value = t('accountShare.lifecycle.deleteReasonRequired')
     return
   }
 
@@ -883,7 +886,7 @@ async function loadRoomDeleteIntent(): Promise<void> {
     roomDeleteIntent.value = intent
   } catch (error: unknown) {
     if (!props.listing) return
-    setRoomLifecycleError(error, '检查房间删除条件失败，请稍后重试。')
+    setRoomLifecycleError(error, t('accountShare.lifecycle.checkDeleteFailed'))
   } finally {
     roomDeleteIntentLoading.value = false
   }
@@ -906,7 +909,7 @@ async function submitRoomLifecycleAction(): Promise<void> {
     if (expiresAt && expiresAt.getTime() <= Date.now()) {
       emit('sync-now')
       roomLifecycleErrorCode.value = 'ACCOUNT_SHARE_ROOM_DELETION_TOKEN_INVALID'
-      roomLifecycleError.value = '删除确认已经过期，请重新获取确认后再提交。'
+      roomLifecycleError.value = t('accountShare.lifecycle.confirmTokenExpired')
       return
     }
   }
@@ -941,7 +944,7 @@ async function submitRoomLifecycleAction(): Promise<void> {
         await handleRoomLifecycleTerminalOperation(operation)
       } else {
         startRoomLifecycleOperationPolling(operation.id)
-        appStore.showSuccess('删除请求已受理，正在等待处理完成')
+        appStore.showSuccess(t('accountShare.lifecycle.deleteAccepted'))
       }
       return
     }
@@ -971,19 +974,19 @@ async function submitRoomLifecycleAction(): Promise<void> {
     if (refreshedListing) emit('update:listing', refreshedListing)
     if (updatedState.pending_operation_id) {
       startRoomLifecycleOperationPolling(updatedState.pending_operation_id)
-      appStore.showSuccess('房间正在处理下架')
+      appStore.showSuccess(t('accountShare.lifecycle.delisting'))
     } else {
       appStore.showSuccess(
         action === 'activate'
-          ? '房间已重新上架'
+          ? t('accountShare.lifecycle.relisted')
           : action === 'drain'
-            ? '房间已下架并清退全部成员'
-            : '房间已紧急停用'
+            ? t('accountShare.lifecycle.delistedAll')
+            : t('accountShare.lifecycle.emergencyStopped')
       )
     }
   } catch (error: unknown) {
     if (!props.listing) return
-    setRoomLifecycleError(error, '房间生命周期操作失败，请稍后重试。')
+    setRoomLifecycleError(error, t('accountShare.lifecycle.actionFailed'))
   } finally {
     roomLifecycleSubmitting.value = false
   }
@@ -1071,7 +1074,7 @@ async function pollRoomLifecycleOperation(
     }
     roomLifecycleLastQueryAt.value = Date.now()
     roomLifecycleQueryFailed.value = true
-    setRoomLifecycleError(error, '查询房间操作进度失败，系统会继续重试。')
+    setRoomLifecycleError(error, t('accountShare.lifecycle.pollFailed'))
     scheduleRoomLifecycleOperationPoll(operationID, pollSeq)
   } finally {
     if (roomLifecycleOperationController === controller) {
@@ -1087,8 +1090,8 @@ async function handleRoomLifecycleTerminalOperation(
     roomLifecycleErrorCode.value = operation.error_code || operation.status
     roomLifecycleError.value = operation.error_message ||
       (operation.status === 'cancelled'
-        ? '房间操作已取消，当前房间没有按本次请求继续变更。'
-        : '房间操作执行失败，请处理错误后重新打开房间状态。')
+        ? t('accountShare.lifecycle.opCancelledNotice')
+        : t('accountShare.lifecycle.opFailedNotice'))
     return
   }
 
@@ -1101,11 +1104,11 @@ async function handleRoomLifecycleTerminalOperation(
     roomDeleteNameConfirmation.value = ''
     roomLifecycleReason.value = ''
     await Promise.all([props.reloadListings(), props.reloadCapabilities()])
-    appStore.showSuccess('房间已删除，历史消费、结算和评价记录继续保留')
+    appStore.showSuccess(t('accountShare.lifecycle.deletedNotice'))
     return
   }
 
-  appStore.showSuccess('房间已完成下架')
+  appStore.showSuccess(t('accountShare.lifecycle.delistDone'))
   await Promise.all([props.reloadListings(), refreshRoomLifecycleState()])
   const refreshedListing = props.findListing(operation.listing_id)
   if (refreshedListing) emit('update:listing', refreshedListing)

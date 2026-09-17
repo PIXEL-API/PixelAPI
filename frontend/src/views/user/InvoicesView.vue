@@ -6,10 +6,10 @@
       >
         <div>
           <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-            发票管理
+            {{ t('invoices.title') }}
           </h1>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            选择可开票来源并提交发票申请
+            {{ t('invoices.subtitle') }}
           </p>
         </div>
         <button
@@ -18,7 +18,7 @@
           @click="reloadAll"
           :disabled="loading"
         >
-          刷新
+          {{ t('invoices.refresh') }}
         </button>
       </div>
 
@@ -26,44 +26,44 @@
         <section class="card p-5">
           <div class="mb-4 flex items-center justify-between">
             <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-              发票资料
+              {{ t('invoices.profiles') }}
             </h2>
             <button
               class="btn btn-sm btn-secondary"
               type="button"
               @click="resetForm"
             >
-              新资料
+              {{ t('invoices.newProfile') }}
             </button>
           </div>
 
           <div class="space-y-4">
             <div>
-              <label class="input-label">发票类型</label>
+              <label class="input-label">{{ t('invoices.type') }}</label>
               <select v-model="form.invoice_type" class="input">
-                <option value="personal_normal">个人普票</option>
-                <option value="enterprise_normal">企业普票</option>
-                <option value="enterprise_special">企业专票</option>
+                <option value="personal_normal">{{ t('invoices.typePersonal') }}</option>
+                <option value="enterprise_normal">{{ t('invoices.typeEntNormal') }}</option>
+                <option value="enterprise_special">{{ t('invoices.typeEntSpecial') }}</option>
               </select>
             </div>
 
             <div>
               <label class="input-label">{{
                 form.invoice_type === "personal_normal"
-                  ? "个人名称"
-                  : "企业名称"
+                  ? t('invoices.personalName')
+                  : t('invoices.entName')
               }}</label>
               <input v-model.trim="form.title_name" class="input" type="text" />
             </div>
 
             <div v-if="isEnterprise">
-              <label class="input-label">纳税人识别号</label>
+              <label class="input-label">{{ t('invoices.taxId') }}</label>
               <input v-model.trim="form.tax_id" class="input" type="text" />
             </div>
 
             <template v-if="isSpecial">
               <div>
-                <label class="input-label">注册地址</label>
+                <label class="input-label">{{ t('invoices.registeredAddress') }}</label>
                 <input
                   v-model.trim="form.registered_address"
                   class="input"
@@ -71,7 +71,7 @@
                 />
               </div>
               <div>
-                <label class="input-label">注册电话</label>
+                <label class="input-label">{{ t('invoices.registeredPhone') }}</label>
                 <input
                   v-model.trim="form.registered_phone"
                   class="input"
@@ -79,7 +79,7 @@
                 />
               </div>
               <div>
-                <label class="input-label">开户行</label>
+                <label class="input-label">{{ t('invoices.bankName') }}</label>
                 <input
                   v-model.trim="form.bank_name"
                   class="input"
@@ -87,7 +87,7 @@
                 />
               </div>
               <div>
-                <label class="input-label">银行账号</label>
+                <label class="input-label">{{ t('invoices.bankAccount') }}</label>
                 <input
                   v-model.trim="form.bank_account"
                   class="input"
@@ -97,7 +97,7 @@
             </template>
 
             <div>
-              <label class="input-label">接收邮箱</label>
+              <label class="input-label">{{ t('invoices.receiptEmail') }}</label>
               <input
                 v-model.trim="form.recipient_email"
                 class="input"
@@ -106,7 +106,7 @@
             </div>
 
             <div>
-              <label class="input-label">接收手机号</label>
+              <label class="input-label">{{ t('invoices.receiptPhone') }}</label>
               <input
                 v-model.trim="form.recipient_phone"
                 class="input"
@@ -115,11 +115,11 @@
             </div>
 
             <div>
-              <label class="input-label">发票备注</label>
+              <label class="input-label">{{ t('invoices.remark') }}</label>
               <textarea
                 v-model.trim="form.remark"
                 class="input min-h-20"
-                placeholder="可选，将写入批量开票文件的发票备注"
+                :placeholder="t('invoices.batchRemarkPlaceholder')"
               ></textarea>
             </div>
 
@@ -131,7 +131,7 @@
                 type="checkbox"
                 class="rounded border-gray-300 text-primary-600"
               />
-              设为默认资料
+              {{ t('invoices.setDefault') }}
             </label>
 
             <div class="flex gap-2">
@@ -141,7 +141,7 @@
                 @click="saveProfile"
                 :disabled="savingProfile"
               >
-                {{ editingProfileId ? "保存资料" : "添加资料" }}
+                {{ editingProfileId ? t('invoices.saveProfile') : t('invoices.addProfile') }}
               </button>
               <button
                 class="btn btn-secondary flex-1"
@@ -149,7 +149,7 @@
                 @click="submitInvoice"
                 :disabled="submitting || selectedRefs.length === 0"
               >
-                提交开票
+                {{ t('invoices.submit') }}
               </button>
             </div>
           </div>
@@ -161,11 +161,10 @@
               class="border-b border-gray-100 px-5 py-4 dark:border-dark-700"
             >
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                可开票来源
+                {{ t('invoices.availableSources') }}
               </h2>
               <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                已选择 {{ selectedRefs.length }} 项，合计
-                {{ formatMoney(selectedAmount) }}
+                {{ t('invoices.selectedSummary', { length: selectedRefs.length, selectedAmount: formatMoney(selectedAmount) }) }}
               </p>
             </div>
             <div class="overflow-x-auto">
@@ -177,10 +176,10 @@
                 >
                   <tr>
                     <th class="w-12 px-4 py-3"></th>
-                    <th class="px-4 py-3">来源</th>
-                    <th class="px-4 py-3">编号</th>
-                    <th class="px-4 py-3 text-right">可开金额</th>
-                    <th class="px-4 py-3">时间</th>
+                    <th class="px-4 py-3">{{ t('invoices.colSource') }}</th>
+                    <th class="px-4 py-3">{{ t('invoices.colId') }}</th>
+                    <th class="px-4 py-3 text-right">{{ t('invoices.colAvailable') }}</th>
+                    <th class="px-4 py-3">{{ t('invoices.colTime') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
@@ -215,7 +214,7 @@
                       colspan="5"
                       class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400"
                     >
-                      暂无可开票来源
+                      {{ t('invoices.noSources') }}
                     </td>
                   </tr>
                 </tbody>
@@ -228,7 +227,7 @@
               class="border-b border-gray-100 px-5 py-4 dark:border-dark-700"
             >
               <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-                常用资料
+                {{ t('invoices.savedProfiles') }}
               </h2>
             </div>
             <div class="divide-y divide-gray-100 dark:divide-dark-700">
@@ -245,7 +244,7 @@
                     <span
                       v-if="profile.is_default"
                       class="rounded bg-primary-50 px-2 py-0.5 text-xs text-primary-600 dark:bg-primary-900/30 dark:text-primary-300"
-                      >默认</span
+                      >{{ t('invoices.defaultProfile') }}</span
                     >
                   </div>
                   <p
@@ -261,14 +260,14 @@
                     type="button"
                     @click="applyProfile(profile)"
                   >
-                    套用
+                    {{ t('invoices.applyProfile') }}
                   </button>
                   <button
                     class="btn btn-sm btn-secondary"
                     type="button"
                     @click="editProfile(profile)"
                   >
-                    编辑
+                    {{ t('common.edit') }}
                   </button>
                   <button
                     v-if="!profile.is_default"
@@ -276,14 +275,14 @@
                     type="button"
                     @click="setDefault(profile.id)"
                   >
-                    默认
+                    {{ t('invoices.defaultProfile') }}
                   </button>
                   <button
                     class="btn btn-sm btn-danger"
                     type="button"
                     @click="deleteProfile(profile.id)"
                   >
-                    删除
+                    {{ t('common.delete') }}
                   </button>
                 </div>
               </div>
@@ -291,7 +290,7 @@
                 v-if="!profiles.length"
                 class="px-5 py-8 text-center text-sm text-gray-500 dark:text-gray-400"
               >
-                暂无常用资料
+                {{ t('invoices.noProfiles') }}
               </div>
             </div>
           </div>
@@ -301,7 +300,7 @@
       <section class="card overflow-hidden">
         <div class="border-b border-gray-100 px-5 py-4 dark:border-dark-700">
           <h2 class="text-lg font-semibold text-gray-900 dark:text-white">
-            开票申请
+            {{ t('invoices.requests') }}
           </h2>
         </div>
         <div class="overflow-x-auto">
@@ -312,13 +311,13 @@
               class="bg-gray-50 text-left text-xs uppercase text-gray-500 dark:bg-dark-800 dark:text-gray-400"
             >
               <tr>
-                <th class="px-4 py-3">申请号</th>
-                <th class="px-4 py-3">抬头</th>
-                <th class="px-4 py-3">类型</th>
-                <th class="px-4 py-3 text-right">金额</th>
-                <th class="px-4 py-3">状态</th>
-                <th class="px-4 py-3">申请时间</th>
-                <th class="px-4 py-3 text-right">操作 / 说明</th>
+                <th class="px-4 py-3">{{ t('invoices.colRequestNo') }}</th>
+                <th class="px-4 py-3">{{ t('invoices.colTitle') }}</th>
+                <th class="px-4 py-3">{{ t('invoices.colType') }}</th>
+                <th class="px-4 py-3 text-right">{{ t('invoices.colAmount') }}</th>
+                <th class="px-4 py-3">{{ t('invoices.colStatus') }}</th>
+                <th class="px-4 py-3">{{ t('invoices.colCreatedAt') }}</th>
+                <th class="px-4 py-3 text-right">{{ t('invoices.colActions') }}</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
@@ -350,7 +349,7 @@
                     type="button"
                     @click="cancelRequest(request.id)"
                   >
-                    取消
+                    {{ t('common.cancel') }}
                   </button>
                   <span
                     v-else-if="request.status === 'rejected'"
@@ -366,7 +365,7 @@
                   colspan="7"
                   class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400"
                 >
-                  暂无开票申请
+                  {{ t('invoices.noRequests') }}
                 </td>
               </tr>
             </tbody>
@@ -392,6 +391,9 @@ import type {
 } from "@/types";
 import { extractApiErrorMessage } from "@/utils/apiError";
 import { formatCurrency, formatDateTime } from "@/utils/format";
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const appStore = useAppStore();
 const loading = ref(false);
@@ -456,7 +458,7 @@ async function reloadAll(): Promise<void> {
       applyProfile(defaultProfile);
     }
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, "发票数据加载失败"));
+    appStore.showError(extractApiErrorMessage(error, t('invoices.loadFailed')));
   } finally {
     loading.value = false;
   }
@@ -468,15 +470,15 @@ async function saveProfile(): Promise<void> {
     const payload = profilePayload();
     if (editingProfileId.value) {
       await invoicesAPI.updateProfile(editingProfileId.value, payload);
-      appStore.showSuccess("发票资料已更新");
+      appStore.showSuccess(t('invoices.profileUpdated'));
     } else {
       await invoicesAPI.createProfile(payload);
-      appStore.showSuccess("发票资料已添加");
+      appStore.showSuccess(t('invoices.profileAdded'));
     }
     resetForm();
     await reloadAll();
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, "发票资料保存失败"));
+    appStore.showError(extractApiErrorMessage(error, t('invoices.profileSaveFailed')));
   } finally {
     savingProfile.value = false;
   }
@@ -484,7 +486,7 @@ async function saveProfile(): Promise<void> {
 
 async function submitInvoice(): Promise<void> {
   if (selectedRefs.value.length === 0) {
-    appStore.showError("请选择开票来源");
+    appStore.showError(t('invoices.selectSourceRequired'));
     return;
   }
   submitting.value = true;
@@ -504,11 +506,11 @@ async function submitInvoice(): Promise<void> {
       source_refs: selectedRefs.value,
     };
     await invoicesAPI.createRequest(payload);
-    appStore.showSuccess("开票申请已提交");
+    appStore.showSuccess(t('invoices.submitSuccess'));
     selectedSourceKeys.value = [];
     await reloadAll();
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, "开票申请提交失败"));
+    appStore.showError(extractApiErrorMessage(error, t('invoices.submitFailed')));
   } finally {
     submitting.value = false;
   }
@@ -517,31 +519,31 @@ async function submitInvoice(): Promise<void> {
 async function setDefault(id: number): Promise<void> {
   try {
     await invoicesAPI.setDefaultProfile(id);
-    appStore.showSuccess("默认资料已更新");
+    appStore.showSuccess(t('invoices.defaultUpdated'));
     await reloadAll();
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, "设置默认资料失败"));
+    appStore.showError(extractApiErrorMessage(error, t('invoices.defaultFailed')));
   }
 }
 
 async function deleteProfile(id: number): Promise<void> {
   try {
     await invoicesAPI.deleteProfile(id);
-    appStore.showSuccess("发票资料已删除");
+    appStore.showSuccess(t('invoices.profileDeleted'));
     if (editingProfileId.value === id) resetForm();
     await reloadAll();
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, "删除发票资料失败"));
+    appStore.showError(extractApiErrorMessage(error, t('invoices.profileDeleteFailed')));
   }
 }
 
 async function cancelRequest(id: number): Promise<void> {
   try {
     await invoicesAPI.cancelRequest(id);
-    appStore.showSuccess("开票申请已取消");
+    appStore.showSuccess(t('invoices.cancelSuccess'));
     await reloadAll();
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, "取消开票申请失败"));
+    appStore.showError(extractApiErrorMessage(error, t('invoices.cancelFailed')));
   }
 }
 
@@ -604,17 +606,17 @@ function sourceKey(source: InvoiceEligibleSource): string {
 }
 
 function invoiceTypeLabel(type: InvoiceType): string {
-  if (type === "enterprise_special") return "企业专票";
-  if (type === "enterprise_normal") return "企业普票";
-  return "个人普票";
+  if (type === "enterprise_special") return t('invoices.typeEntSpecial');
+  if (type === "enterprise_normal") return t('invoices.typeEntNormal');
+  return t('invoices.typePersonal');
 }
 
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
-    pending: "待处理",
-    issued: "已开票",
-    rejected: "已驳回",
-    cancelled: "已取消",
+    pending: t('invoices.statusPending'),
+    issued: t('invoices.statusIssued'),
+    rejected: t('invoices.statusRejected'),
+    cancelled: t('invoices.statusCancelled'),
   };
   return labels[status] || status;
 }

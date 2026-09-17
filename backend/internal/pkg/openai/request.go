@@ -155,7 +155,7 @@ func matchCodexClientHeaderStrictPrefixes(value string, prefixes []string) bool 
 // same official client or it responds with 404.
 func PairCodexClientIdentity(userAgent string) (originator string, pairedUA string, ok bool) {
 	// Validate before trimming so control bytes cannot become a valid identity.
-	if !httpguts.ValidHeaderFieldValue(userAgent) {
+	if !validCodexUserAgentValue(userAgent) {
 		return "", "", false
 	}
 	ua := strings.TrimSpace(userAgent)
@@ -173,6 +173,14 @@ func PairCodexClientIdentity(userAgent string) (originator string, pairedUA stri
 		return trailer, trailer + ua[slash:], true
 	}
 	return "", "", false
+}
+
+func validCodexUserAgentValue(value string) bool {
+	if !httpguts.ValidHeaderFieldValue(value) {
+		return false
+	}
+	// httpguts 允许历史 obs-fold；User-Agent 不接受折叠，转发前拒绝 CR/LF。
+	return !strings.ContainsAny(value, "\r\n")
 }
 
 const codexOriginatorMaxLen = 64

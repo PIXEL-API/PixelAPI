@@ -109,6 +109,7 @@ func ProvideSettingHandler(settingService *service.SettingService, buildInfo Bui
 
 func ProvideOpenAIGatewayHandler(
 	gatewayService *service.OpenAIGatewayService,
+	devinGatewayService *service.DevinGatewayService,
 	concurrencyService *service.ConcurrencyService,
 	billingCacheService *service.BillingCacheService,
 	apiKeyService *service.APIKeyService,
@@ -133,6 +134,7 @@ func ProvideOpenAIGatewayHandler(
 		cfg,
 	)
 	h.grokMediaEligibilityProber = grokQuotaService
+	h.SetDevinGatewayService(devinGatewayService)
 	return h
 }
 

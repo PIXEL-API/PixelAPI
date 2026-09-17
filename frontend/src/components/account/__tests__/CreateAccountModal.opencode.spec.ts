@@ -14,8 +14,9 @@ describe('CreateAccountModal Opencode boundary', () => {
 
   it('renders only an API key field for opencode, locking the endpoint', () => {
     expect(source).toContain('v-if="form.platform === \'opencode\'"')
-    expect(source).toContain('opencode-go-api-key...')
+    expect(source).toContain('opencode-api-key...')
     expect(source).toContain('t(\'admin.accounts.opencode.apiKeyHint\')')
+    expect(source).toContain('account_mode: opencodeAccountMode.value')
     // opencode 不计入通用 apikey 块（该块含 base_url 输入框），避免暴露 base_url。
     expect(source).toContain("form.platform !== 'opencode'")
   })

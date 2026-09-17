@@ -1,38 +1,38 @@
 <template>
-  <section class="room-reviews" :aria-busy="loading" aria-label="本房间评价" data-testid="room-reviews-panel">
+  <section class="room-reviews" :aria-busy="loading" :aria-label="t('accountShare.reviews.title')" data-testid="room-reviews-panel">
     <div class="room-reviews-summary">
       <div class="room-reviews-rating">
-        <span>本房间评分</span>
+        <span>{{ t('accountShare.reviews.ratingTitle') }}</span>
         <strong>{{ ratingCount > 0 ? scoreLabel(ratingAverage) : '—' }}<small>/ 10</small></strong>
-        <span>{{ ratingCount > 0 ? `${ratingCount} 次评分` : '暂无评分' }}</span>
+        <span>{{ ratingCount > 0 ? t('accountShare.reviews.ratingCount', { count: ratingCount }) : t('accountShare.reviews.noRating') }}</span>
       </div>
       <div class="room-reviews-summary-copy">
-        <strong>来自使用过这个房间的用户</strong>
-        <p>评分统计包含本房间全部有效评分；下方仅展示已审核通过的文字评价。</p>
+        <strong>{{ t('accountShare.reviews.ratingSub') }}</strong>
+        <p>{{ t('accountShare.reviews.ratingNote') }}</p>
       </div>
     </div>
 
     <div class="room-reviews-heading">
-      <h3>本房间评论</h3>
+      <h3>{{ t('accountShare.reviews.commentsTitle') }}</h3>
       <span aria-live="polite">{{ total === null ? '尚未加载' : `${total} 条公开文字评论` }}</span>
     </div>
 
     <div v-if="errorMessage" class="room-reviews-error" role="alert">
       <div>
-        <strong>{{ reviews.length > 0 ? '后续评论暂时无法加载' : '评论暂时无法加载' }}</strong>
+        <strong>{{ reviews.length > 0 ? t('accountShare.reviews.loadMoreFailed') : t('accountShare.reviews.loadFailed') }}</strong>
         <p>{{ errorMessage }}</p>
       </div>
-      <button type="button" class="room-reviews-button" :disabled="loading" @click="loadReviews(retryPage)">重新加载</button>
+      <button type="button" class="room-reviews-button" :disabled="loading" @click="loadReviews(retryPage)">{{ t('accountShare.reviews.reload') }}</button>
     </div>
 
     <div v-if="loading && reviews.length === 0" class="room-reviews-empty" role="status">
       <Icon name="refresh" size="md" class="animate-spin" />
-      <span>正在加载本房间评论…</span>
+      <span>{{ t('accountShare.reviews.loading') }}</span>
     </div>
     <div v-else-if="!errorMessage && total !== null && reviews.length === 0" class="room-reviews-empty" data-testid="room-reviews-empty">
       <Icon name="chat" size="lg" />
-      <strong>还没有公开文字评论</strong>
-      <span>已提交的评分与公开文字评论分别统计。</span>
+      <strong>{{ t('accountShare.reviews.empty') }}</strong>
+      <span>{{ t('accountShare.reviews.emptyHint') }}</span>
     </div>
 
     <div v-if="reviews.length > 0" class="room-reviews-list">
@@ -40,17 +40,17 @@
         <header class="room-review-header">
           <span class="room-review-avatar" aria-hidden="true"><Icon name="user" size="sm" /></span>
           <div class="room-review-author">
-            <strong>匿名用户</strong>
+            <strong>{{ t('accountShare.reviews.anonymous') }}</strong>
             <time :datetime="review.created_at">{{ formatDateOnly(review.created_at) }}</time>
           </div>
-          <span class="room-review-score"><span aria-hidden="true">★</span>{{ scoreLabel(review.score) }}<small>/ 10</small></span>
+          <span class="room-review-score"><Icon name="star" size="xs" aria-hidden="true" />{{ scoreLabel(review.score) }}<small>/ 10</small></span>
         </header>
         <p class="room-review-comment">{{ review.comment }}</p>
       </article>
     </div>
 
     <div v-if="reviews.length > 0" class="room-reviews-footer">
-      <span>已显示 {{ reviews.length }} / {{ total }} 条</span>
+      <span>{{ t('accountShare.reviews.shownCount', { length: reviews.length, total }) }}</span>
       <button
         v-if="hasMore && !errorMessage"
         type="button"
@@ -59,7 +59,7 @@
         @click="loadReviews(page + 1)"
       >
         <Icon v-if="loading" name="refresh" size="sm" class="animate-spin" />
-        {{ loading ? '加载中…' : '继续加载评论' }}
+        {{ loading ? t('accountShare.reviews.loadingMore') : t('accountShare.reviews.loadMore') }}
       </button>
     </div>
   </section>
@@ -72,6 +72,9 @@ import Icon from '@/components/icons/Icon.vue'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateOnly } from '@/utils/format'
 import { isCanceledRequest } from '@/utils/requestSafety'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = withDefaults(defineProps<{
   listingId: number
@@ -106,7 +109,7 @@ async function loadReviews(nextPage = 1): Promise<void> {
   if (loading.value) return
   const listingId = props.listingId
   if (!Number.isInteger(listingId) || listingId <= 0) {
-    errorMessage.value = '房间信息无效，请重新打开房间详情。'
+    errorMessage.value = t('accountShare.reviews.errInvalidRoom')
     return
   }
 
@@ -138,7 +141,7 @@ async function loadReviews(nextPage = 1): Promise<void> {
     pages.value = result.pages
   } catch (error: unknown) {
     if (controller.signal.aborted || sequence !== requestSequence || props.listingId !== listingId || isCanceledRequest(error)) return
-    errorMessage.value = extractApiErrorMessage(error, '加载本房间评论失败，请稍后重试。')
+    errorMessage.value = extractApiErrorMessage(error, t('accountShare.reviews.errLoadFailed'))
   } finally {
     if (sequence === requestSequence && requestController === controller) {
       loading.value = false

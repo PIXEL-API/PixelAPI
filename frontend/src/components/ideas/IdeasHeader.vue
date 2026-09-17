@@ -1,5 +1,5 @@
 <template>
-  <header class="sticky top-0 z-30 border-b border-line bg-canvas/90 backdrop-blur-md">
+  <header class="sticky top-0 z-[var(--ui-z-header)] border-b border-line bg-canvas/90 backdrop-blur-md">
     <div class="mx-auto flex min-h-16 max-w-6xl items-center gap-3 px-4 md:px-6">
       <RouterLink
         to="/ideas"

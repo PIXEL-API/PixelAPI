@@ -258,6 +258,33 @@ func TestOpencodeGoResolveForwardModelRejectsUnknownMappedModel(t *testing.T) {
 	require.Contains(t, err.Error(), "not present in the audited model catalog")
 }
 
+func TestOpencodeGoResolveForwardModelUsesZenCatalogForZenAccounts(t *testing.T) {
+	account := newOpencodeGoGatewayTestAccount(nil)
+	account.Credentials["account_mode"] = OpencodeAccountModeZen
+
+	chat, err := resolveOpencodeGoForwardModel(account, "minimax-m3", "")
+	require.NoError(t, err)
+	require.Equal(t, "minimax-m3", chat.UpstreamModel)
+	require.Equal(t, OpencodeGoProtocolChat, chat.Spec.Protocol)
+
+	messages, err := resolveOpencodeGoForwardModel(account, "qwen3.7-plus", "")
+	require.NoError(t, err)
+	require.Equal(t, "qwen3.7-plus", messages.UpstreamModel)
+	require.Equal(t, OpencodeGoProtocolMessages, messages.Spec.Protocol)
+
+	responses, err := resolveOpencodeGoForwardModel(account, "gpt-5.5", "")
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.5", responses.UpstreamModel)
+	require.Equal(t, OpencodeGoProtocolResponses, responses.Spec.Protocol)
+
+	resolved, err := resolveOpencodeGoForwardModel(account, "deepseek-v4.1-flash", "")
+	require.Error(t, err)
+	require.Equal(t, OpencodeGoResolvedModel{}, resolved)
+	var routingErr *opencodeGoRoutingError
+	require.ErrorAs(t, err, &routingErr)
+	require.Equal(t, "unknown_model", routingErr.kind)
+}
+
 func TestOpencodeGoResolveForwardModelNormalizesExactlyOnce(t *testing.T) {
 	account := newOpencodeGoGatewayTestAccount(map[string]any{
 		"double-prefix-alias": "opencode/opencode-go/deepseek-v4-flash",
@@ -1147,6 +1174,207 @@ func TestOpencodeGoNativeChatUsesResolvedAliasBearerAndFixedEndpoint(t *testing.
 	require.Equal(t, openAIChatRawEndpoint, GetActualOpenAIUpstreamEndpoint(c))
 }
 
+func TestOpencodeGoForwardWithAnalysisPreservesPromptCacheKeyAcrossChatConversion(t *testing.T) {
+	upstream := &opencodeGoGatewayCaptureUpstream{
+		responseBody: `{
+			"id":"chatcmpl_opencode_session_bridge",
+			"object":"chat.completion",
+			"model":"deepseek-v4-flash",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
+		}`,
+	}
+	service := newOpencodeGoGatewayTestService(upstream)
+	account := newOpencodeGoGatewayTestAccount(map[string]any{
+		"client-responses-chat-alias": "opencode-go/deepseek-v4-flash[1m]",
+	})
+	body := []byte(`{
+		"model":"client-responses-chat-alias",
+		"input":"hello",
+		"stream":false,
+		"max_output_tokens":32,
+		"prompt_cache_key":"responses-conversation-1"
+	}`)
+	c, recorder := newOpencodeGoGatewayContext(http.MethodPost, "/v1/responses", body)
+	c.Set("api_key", &APIKey{ID: 9101})
+
+	result, err := service.ForwardWithAnalysis(context.Background(), c, account, body, nil)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, 1, upstream.calls)
+	require.NotNil(t, upstream.req)
+	require.Equal(t, "/zen/go/v1/chat/completions", upstream.req.URL.Path)
+	require.Equal(t,
+		isolateOpenAISessionID(9101, "opencode-session:responses-conversation-1"),
+		upstream.req.Header.Get("x-opencode-session"),
+	)
+}
+
+func TestOpencodeGoSessionFallsBackToStableConversationAnchor(t *testing.T) {
+	account := newOpencodeGoGatewayTestAccount(nil)
+	firstTurn := []byte(`{
+		"model":"deepseek-v4-flash",
+		"messages":[{"role":"user","content":"same conversation root"}],
+		"stream":false
+	}`)
+	secondTurn := []byte(`{
+		"model":"deepseek-v4-flash",
+		"messages":[
+			{"role":"user","content":"same conversation root"},
+			{"role":"assistant","content":"first answer"},
+			{"role":"user","content":"follow up"}
+		],
+		"stream":false
+	}`)
+
+	newRequest := func() *http.Request {
+		return httptest.NewRequest(http.MethodPost, "https://opencode.ai/zen/go/v1/chat/completions", nil)
+	}
+	newContext := func(apiKeyID int64) *gin.Context {
+		c, _ := newOpencodeGoGatewayContext(http.MethodPost, "/v1/chat/completions", nil)
+		c.Set("api_key", &APIKey{ID: apiKeyID})
+		return c
+	}
+
+	firstReq := newRequest()
+	firstCtx := newContext(9201)
+	rememberOpencodeSession(firstCtx, account, firstTurn)
+	ensureOpencodeSessionHeader(firstCtx, account, firstReq, []byte(`{"model":"deepseek-v4-flash","messages":[]}`))
+	firstSession := firstReq.Header.Get("x-opencode-session")
+	require.NotEmpty(t, firstSession)
+
+	secondReq := newRequest()
+	secondCtx := newContext(9201)
+	rememberOpencodeSession(secondCtx, account, secondTurn)
+	ensureOpencodeSessionHeader(secondCtx, account, secondReq, secondTurn)
+	require.Equal(t, firstSession, secondReq.Header.Get("x-opencode-session"))
+
+	otherKeyReq := newRequest()
+	otherKeyCtx := newContext(9202)
+	rememberOpencodeSession(otherKeyCtx, account, firstTurn)
+	ensureOpencodeSessionHeader(otherKeyCtx, account, otherKeyReq, firstTurn)
+	require.NotEqual(t, firstSession, otherKeyReq.Header.Get("x-opencode-session"), "API-key isolation must prevent cross-tenant cache identity sharing")
+
+	otherConversationReq := newRequest()
+	otherConversationCtx := newContext(9201)
+	otherConversation := []byte(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"different conversation root"}],"stream":false}`)
+	rememberOpencodeSession(otherConversationCtx, account, otherConversation)
+	ensureOpencodeSessionHeader(otherConversationCtx, account, otherConversationReq, otherConversation)
+	require.NotEqual(t, firstSession, otherConversationReq.Header.Get("x-opencode-session"))
+
+	otherSystemReq := newRequest()
+	otherSystemCtx := newContext(9201)
+	otherSystem := []byte(`{"model":"deepseek-v4-flash","system":[{"type":"text","text":"different system prompt"}],"messages":[{"role":"user","content":"same conversation root"}],"stream":false}`)
+	rememberOpencodeSession(otherSystemCtx, account, otherSystem)
+	ensureOpencodeSessionHeader(otherSystemCtx, account, otherSystemReq, otherSystem)
+	require.NotEqual(t, firstSession, otherSystemReq.Header.Get("x-opencode-session"), "Anthropic top-level system prompts are part of the conversation anchor")
+}
+
+func TestOpencodeGoSessionIsolatesInboundHeaderByAPIKey(t *testing.T) {
+	account := newOpencodeGoGatewayTestAccount(nil)
+	body := []byte(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+
+	newRequest := func() *http.Request {
+		return httptest.NewRequest(http.MethodPost, "https://opencode.ai/zen/go/v1/chat/completions", nil)
+	}
+	newContext := func(apiKeyID int64) *gin.Context {
+		c, _ := newOpencodeGoGatewayContext(http.MethodPost, "/v1/chat/completions", body)
+		c.Set("api_key", &APIKey{ID: apiKeyID})
+		c.Request.Header.Set("x-opencode-session", "client-supplied-session")
+		return c
+	}
+
+	firstReq := newRequest()
+	firstReq.Header.Set("x-opencode-session", "fixed-account-value")
+	ensureOpencodeSessionHeader(newContext(9301), account, firstReq, body)
+	firstSession := firstReq.Header.Get("x-opencode-session")
+	require.Equal(t, isolateOpenAISessionID(9301, "opencode-session:client-supplied-session"), firstSession)
+	require.NotEqual(t, "client-supplied-session", firstSession)
+
+	secondKeyReq := newRequest()
+	ensureOpencodeSessionHeader(newContext(9302), account, secondKeyReq, body)
+	require.NotEqual(t, firstSession, secondKeyReq.Header.Get("x-opencode-session"))
+}
+
+func TestOpencodeGoSessionDoesNotInventValueWithoutStableAnchor(t *testing.T) {
+	account := newOpencodeGoGatewayTestAccount(nil)
+	c, _ := newOpencodeGoGatewayContext(http.MethodPost, "/v1/chat/completions", nil)
+	c.Set("api_key", &APIKey{ID: 9301})
+	req := httptest.NewRequest(http.MethodPost, "https://opencode.ai/zen/go/v1/chat/completions", nil)
+	req.Header.Set("x-opencode-session", "fixed-account-value")
+
+	ensureOpencodeSessionHeader(c, account, req, []byte(`{"model":"deepseek-v4-flash","stream":false}`))
+
+	require.Empty(t, req.Header.Get("x-opencode-session"), "OpenCode Go requests with no durable conversation signal must not get a random, fixed, or tenant-wide fallback")
+
+	zenAccount := newOpencodeGoGatewayTestAccount(nil)
+	zenAccount.Credentials["account_mode"] = OpencodeAccountModeZen
+	zenReq := httptest.NewRequest(http.MethodPost, "https://opencode.ai/zen/v1/chat/completions", nil)
+	zenReq.Header.Set("x-opencode-session", "fixed-account-value")
+	ensureOpencodeSessionHeader(c, zenAccount, zenReq, []byte(`{"model":"minimax-m3","stream":false}`))
+	require.Equal(t, "fixed-account-value", zenReq.Header.Get("x-opencode-session"), "Zen keeps the existing account-level header override because its session header is optional")
+}
+
+func TestOpencodeGoSessionUsesCodexTurnMetadataAcrossTurns(t *testing.T) {
+	account := newOpencodeGoGatewayTestAccount(nil)
+	body := []byte(`{"model":"deepseek-v4-flash","messages":[{"role":"user","content":"hello"}],"stream":false}`)
+
+	newRequest := func() *http.Request {
+		return httptest.NewRequest(http.MethodPost, "https://opencode.ai/zen/go/v1/chat/completions", nil)
+	}
+	newContext := func(turnID string) *gin.Context {
+		c, _ := newOpencodeGoGatewayContext(http.MethodPost, "/v1/responses", body)
+		c.Set("api_key", &APIKey{ID: 9401})
+		c.Request.Header.Set("x-codex-turn-metadata", `{"session_id":"codex-session-1","thread_id":"codex-thread-1","turn_id":"`+turnID+`"}`)
+		return c
+	}
+
+	firstReq := newRequest()
+	ensureOpencodeSessionHeader(newContext("turn-1"), account, firstReq, body)
+	firstSession := firstReq.Header.Get("x-opencode-session")
+	require.NotEmpty(t, firstSession)
+
+	secondReq := newRequest()
+	ensureOpencodeSessionHeader(newContext("turn-2"), account, secondReq, body)
+	require.Equal(t, firstSession, secondReq.Header.Get("x-opencode-session"), "Codex turn_id rotates every request; only the stable session/thread identity may seed x-opencode-session")
+}
+
+func TestOpencodeZenNativeChatUsesZenEndpointAndCatalog(t *testing.T) {
+	upstream := &opencodeGoGatewayCaptureUpstream{
+		responseBody: `{
+			"id":"chatcmpl_opencode_zen",
+			"object":"chat.completion",
+			"model":"minimax-m3",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
+		}`,
+	}
+	service := newOpencodeGoGatewayTestService(upstream)
+	account := newOpencodeGoGatewayTestAccount(nil)
+	account.Credentials["account_mode"] = OpencodeAccountModeZen
+	body := []byte(`{
+		"model":"minimax-m3",
+		"messages":[{"role":"user","content":"hello"}],
+		"stream":false
+	}`)
+	c, recorder := newOpencodeGoGatewayContext(http.MethodPost, "/v1/chat/completions", body)
+	c.Request.Header.Set("x-opencode-session", "zen-session-1")
+
+	result, err := service.ForwardAsChatCompletions(context.Background(), c, account, body, "", "")
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, 1, upstream.calls)
+	require.Equal(t, "https://opencode.ai/zen/v1/chat/completions", upstream.req.URL.String())
+	require.Equal(t, "Bearer opencode-go-test-key", upstream.req.Header.Get("Authorization"))
+	require.Equal(t, "zen-session-1", upstream.req.Header.Get("x-opencode-session"))
+	require.Equal(t, "minimax-m3", gjson.GetBytes(upstream.body, "model").String())
+	require.Equal(t, "minimax-m3", result.UpstreamModel)
+}
+
 func TestOpencodeGoNativeMessagesUsesResolvedAliasAPIKeyAndFixedEndpoint(t *testing.T) {
 	upstream := &opencodeGoGatewayCaptureUpstream{
 		responseBody: `{
@@ -1196,6 +1424,52 @@ func TestOpencodeGoNativeMessagesUsesResolvedAliasAPIKeyAndFixedEndpoint(t *test
 	require.Equal(t, "opencode-go/qwen3.8-flash[1m]", result.BillingModel)
 	require.Equal(t, "qwen3.8-flash", result.UpstreamModel)
 	require.Equal(t, opencodeMessagesRawEndpoint, GetActualOpenAIUpstreamEndpoint(c))
+}
+
+func TestOpencodeGoMessagesToChatKeepsStableSessionAcrossTurns(t *testing.T) {
+	upstream := &opencodeGoGatewayCaptureUpstream{
+		responseBody: `{
+			"id":"chatcmpl_opencode_messages_session",
+			"object":"chat.completion",
+			"model":"deepseek-v4-flash",
+			"choices":[{"index":0,"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],
+			"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}
+		}`,
+	}
+	service := newOpencodeGoGatewayTestService(upstream)
+	account := newOpencodeGoGatewayTestAccount(nil)
+	firstTurn := []byte(`{
+		"model":"deepseek-v4-flash",
+		"max_tokens":128,
+		"messages":[{"role":"user","content":"same messages conversation root"}],
+		"stream":false
+	}`)
+	secondTurn := []byte(`{
+		"model":"deepseek-v4-flash",
+		"max_tokens":128,
+		"messages":[
+			{"role":"user","content":"same messages conversation root"},
+			{"role":"assistant","content":"first answer"},
+			{"role":"user","content":"follow up"}
+		],
+		"stream":false
+	}`)
+
+	forward := func(body []byte) string {
+		c, recorder := newOpencodeGoGatewayContext(http.MethodPost, "/v1/messages", body)
+		c.Set("api_key", &APIKey{ID: 9501})
+		result, err := service.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+		require.NoError(t, err)
+		require.NotNil(t, result)
+		require.Equal(t, http.StatusOK, recorder.Code)
+		require.NotNil(t, upstream.req)
+		return upstream.req.Header.Get("x-opencode-session")
+	}
+
+	firstSession := forward(firstTurn)
+	secondSession := forward(secondTurn)
+	require.NotEmpty(t, firstSession)
+	require.Equal(t, firstSession, secondSession)
 }
 
 func TestOpencodeGoResponsesToChatUsesResolvedAliasBearerAndFixedEndpoint(t *testing.T) {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useDarkMode } from '@/composables/useDarkMode'
 import { useI18n } from 'vue-i18n'
 import {
   Chart as ChartJS,
@@ -31,7 +32,7 @@ interface Props {
 const props = defineProps<Props>()
 const { t } = useI18n()
 
-const isDarkMode = computed(() => document.documentElement.classList.contains('dark'))
+const isDarkMode = useDarkMode()
 const colors = computed(() => ({
   blue: '#6b9bf0',
   blueAlpha: '#6b9bf020',

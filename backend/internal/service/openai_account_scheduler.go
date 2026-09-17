@@ -54,9 +54,12 @@ var openAIAdvancedSchedulerSettingCache atomic.Value // *cachedOpenAIAdvancedSch
 var openAIAdvancedSchedulerSettingSF singleflight.Group
 
 type OpenAIAccountScheduleRequest struct {
-	GroupID                    *int64
-	SessionHash                string
-	StickyAccountID            int64
+	GroupID         *int64
+	SessionHash     string
+	StickyAccountID int64
+	// StickyOnly restricts selection to StickyAccountID and permits a bounded
+	// wait for that account instead of falling back to load balancing.
+	StickyOnly                 bool
 	PreviousResponseID         string
 	RequestedModel             string
 	RequiredTransport          OpenAIUpstreamTransport
@@ -324,6 +327,12 @@ func (s *defaultOpenAIAccountScheduler) Select(
 		decision.SelectedAccountType = selection.Account.Type
 		return selection, decision, nil
 	}
+	if req.StickyOnly {
+		if stickyAcquireErr != nil {
+			return nil, decision, stickyAcquireErr
+		}
+		return nil, decision, ErrNoAvailableAccounts
+	}
 
 	loadBalanceReq := req
 	if stickyAcquireErr != nil && req.StickyAccountID > 0 {
@@ -451,7 +460,7 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	// 不会破坏上游会话连续性。不要让一个繁忙的粘性账号把请求阻塞到
 	// StickySessionWaitTimeout（生产默认 120 秒）；继续走负载均衡层，
 	// 由候选账号立即尝试可用槽位。只有 WS continuation 才必须保留等待计划。
-	if strings.TrimSpace(req.PreviousResponseID) == "" {
+	if strings.TrimSpace(req.PreviousResponseID) == "" && !req.StickyOnly {
 		return nil, nil
 	}
 
@@ -2044,20 +2053,73 @@ func openAIQuotaHeadroomFactor(account *Account, now time.Time) float64 {
 	if account == nil || len(account.Extra) == 0 || openAIQuotaHeadroomSnapshotStale(account.Extra, now) {
 		return openAIQuotaHeadroomNeutralFactor
 	}
-	primaryUsedPercent, ok := openAIQuotaHeadroomExtraNumber(account.Extra, "codex_primary_used_percent", "codex_7d_used_percent")
-	if !ok || openAIQuotaWindowResetAny(account.Extra, now, "primary", "7d") {
+	window5h, window7d := openAICanonicalQuotaWindows(account.Extra, now)
+	if !window7d.hasUsed || window7d.reset {
 		return openAIQuotaHeadroomNeutralFactor
 	}
 
-	factor := 1 - clamp01(primaryUsedPercent/100)
-	if secondaryUsedPercent, ok := openAIQuotaHeadroomExtraNumber(account.Extra, "codex_secondary_used_percent", "codex_5h_used_percent"); ok &&
-		!openAIQuotaWindowResetAny(account.Extra, now, "secondary", "5h") {
-		secondaryRemaining := 1 - clamp01(secondaryUsedPercent/100)
-		if secondaryRemaining < openAIQuotaHeadroomSecondaryLowRemain {
+	factor := 1 - clamp01(window7d.usedPercent/100)
+	if window5h.hasUsed && !window5h.reset {
+		remaining := 1 - clamp01(window5h.usedPercent/100)
+		if remaining < openAIQuotaHeadroomSecondaryLowRemain {
 			factor *= openAIQuotaHeadroomNeutralFactor
 		}
 	}
 	return factor
+}
+
+type openAICanonicalQuotaWindow struct {
+	usedPercent float64
+	hasUsed     bool
+	reset       bool
+}
+
+// 规范字段优先；历史原始字段复用写入端 Normalize 的窗口分类，不能固定把 primary 当作 7d。
+func openAICanonicalQuotaWindows(extra map[string]any, now time.Time) (window5h, window7d openAICanonicalQuotaWindow) {
+	if used, ok := openAIQuotaHeadroomExtraNumber(extra, "codex_5h_used_percent"); ok {
+		window5h = openAICanonicalQuotaWindow{usedPercent: used, hasUsed: true, reset: openAIQuotaWindowReset(extra, "5h", now)}
+	}
+	if used, ok := openAIQuotaHeadroomExtraNumber(extra, "codex_7d_used_percent"); ok {
+		window7d = openAICanonicalQuotaWindow{usedPercent: used, hasUsed: true, reset: openAIQuotaWindowReset(extra, "7d", now)}
+	}
+	if window5h.hasUsed && window7d.hasUsed {
+		return window5h, window7d
+	}
+
+	snapshot := &OpenAICodexUsageSnapshot{}
+	if used, ok := openAIQuotaHeadroomExtraNumber(extra, "codex_primary_used_percent"); ok {
+		snapshot.PrimaryUsedPercent = &used
+	}
+	if used, ok := openAIQuotaHeadroomExtraNumber(extra, "codex_secondary_used_percent"); ok {
+		snapshot.SecondaryUsedPercent = &used
+	}
+	if minutes := parseExtraInt(extra["codex_primary_window_minutes"]); minutes > 0 {
+		snapshot.PrimaryWindowMinutes = &minutes
+	}
+	if minutes := parseExtraInt(extra["codex_secondary_window_minutes"]); minutes > 0 {
+		snapshot.SecondaryWindowMinutes = &minutes
+	}
+	normalized := snapshot.Normalize()
+	if normalized == nil {
+		return window5h, window7d
+	}
+	fromRaw := func(used *float64) openAICanonicalQuotaWindow {
+		if used == nil {
+			return openAICanonicalQuotaWindow{}
+		}
+		window := "secondary"
+		if used == snapshot.PrimaryUsedPercent {
+			window = "primary"
+		}
+		return openAICanonicalQuotaWindow{usedPercent: *used, hasUsed: true, reset: openAIQuotaWindowReset(extra, window, now)}
+	}
+	if !window5h.hasUsed {
+		window5h = fromRaw(normalized.Used5hPercent)
+	}
+	if !window7d.hasUsed {
+		window7d = fromRaw(normalized.Used7dPercent)
+	}
+	return window5h, window7d
 }
 
 func openAIQuotaHeadroomExtraNumber(extra map[string]any, keys ...string) (float64, bool) {
@@ -2124,24 +2186,31 @@ func openAIQuotaWindowResetAny(extra map[string]any, now time.Time, windows ...s
 }
 
 func openAIQuotaWindowReset(extra map[string]any, window string, now time.Time) bool {
+	resetAt, ok := openAICodexWindowResetAt(extra, window)
+	return ok && !now.Before(resetAt)
+}
+
+func openAICodexWindowResetAt(extra map[string]any, window string) (time.Time, bool) {
 	if len(extra) == 0 {
-		return false
+		return time.Time{}, false
 	}
 	if resetAtRaw, ok := extra["codex_"+window+"_reset_at"]; ok && resetAtRaw != nil {
 		if resetAt, err := parseTime(strings.TrimSpace(fmt.Sprint(resetAtRaw))); err == nil {
-			return !now.Before(resetAt)
+			return resetAt, true
 		}
 	}
 	resetAfterSeconds := parseExtraInt(extra["codex_"+window+"_reset_after_seconds"])
 	if resetAfterSeconds <= 0 {
-		return false
+		return time.Time{}, false
 	}
-	base := now
-	if updatedRaw, ok := extra["codex_usage_updated_at"]; ok && updatedRaw != nil {
-		if updatedAt, err := parseTime(strings.TrimSpace(fmt.Sprint(updatedRaw))); err == nil {
-			base = updatedAt
-		}
+	// reset_after 以快照写入时刻为锚；缺失 updated_at 时不滑动续期。
+	updatedRaw, ok := extra["codex_usage_updated_at"]
+	if !ok || updatedRaw == nil {
+		return time.Time{}, false
 	}
-	resetAt := base.Add(time.Duration(resetAfterSeconds) * time.Second)
-	return !now.Before(resetAt)
+	updatedAt, err := parseTime(strings.TrimSpace(fmt.Sprint(updatedRaw)))
+	if err != nil {
+		return time.Time{}, false
+	}
+	return updatedAt.Add(time.Duration(resetAfterSeconds) * time.Second), true
 }

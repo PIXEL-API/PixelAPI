@@ -34,7 +34,7 @@
             v-if="entry.models.length === 0"
             class="text-xs italic text-gray-400"
           >
-            {{ t('admin.channels.form.noModels', '未添加模型') }}
+            {{ t('admin.channels.form.noModels') }}
           </span>
         </div>
 
@@ -48,7 +48,7 @@
 
       <!-- Expanded: show the label "Pricing Entry" or similar -->
       <div v-else class="flex-1 text-xs font-medium text-gray-500 dark:text-gray-400">
-        {{ t('admin.channels.form.pricingEntry', '定价配置') }}
+        {{ t('admin.channels.form.pricingEntry') }}
       </div>
 
       <!-- Remove button (always visible, stop propagation) -->
@@ -71,19 +71,19 @@
         <div class="mt-3 flex items-start gap-2">
           <div class="flex-1">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
-              {{ t('admin.channels.form.models', '模型列表') }} <span class="text-red-500">*</span>
+              {{ t('admin.channels.form.models') }} <span class="text-red-500">*</span>
             </label>
             <ModelTagInput
               :models="entry.models"
               :platform="props.platform"
               @update:models="onModelsUpdate($event)"
-              :placeholder="t('admin.channels.form.modelsPlaceholder', '输入模型名后按回车添加，支持通配符 *')"
+              :placeholder="t('admin.channels.form.modelsPlaceholder')"
               class="mt-1"
             />
           </div>
           <div class="w-40">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
-              {{ t('admin.channels.form.billingMode', '计费模式') }}
+              {{ t('admin.channels.form.billingMode') }}
             </label>
             <Select
               :modelValue="entry.billing_mode"
@@ -104,10 +104,10 @@
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div class="min-w-0">
                 <div class="text-sm font-medium text-gray-700 dark:text-gray-200">
-                  {{ t('admin.channels.form.longContextPricingTitle', 'OpenAI API 长上下文倍率') }}
+                  {{ t('admin.channels.form.longContextPricingTitle') }}
                 </div>
                 <p class="mt-1 text-xs leading-5 text-gray-500 dark:text-gray-400">
-                  {{ t('admin.channels.form.longContextPricingDescription', '总输入超过阈值后按模型价卡倍率对整次请求计费') }}
+                  {{ t('admin.channels.form.longContextPricingDescription') }}
                 </p>
                 <p class="mt-1 text-xs" :class="longContextStatusClass">
                   {{ longContextStatusLabel }}
@@ -117,15 +117,15 @@
               <div class="flex min-h-11 shrink-0 items-center justify-between gap-3 sm:justify-end">
                 <span class="text-sm text-gray-600 dark:text-gray-300">
                   {{ longContextToggleValue
-                    ? t('admin.channels.form.longContextPricingOn', '开启')
-                    : t('admin.channels.form.longContextPricingOff', '关闭')
+                    ? t('admin.channels.form.longContextPricingOn')
+                    : t('admin.channels.form.longContextPricingOff')
                   }}
                 </span>
                 <Toggle
                   :model-value="longContextToggleValue"
                   :disabled="longContextToggleDisabled"
                   :aria-disabled="longContextToggleDisabled"
-                  :aria-label="t('admin.channels.form.longContextPricingTitle', 'OpenAI API 长上下文倍率')"
+                  :aria-label="t('admin.channels.form.longContextPricingTitle')"
                   data-testid="long-context-toggle"
                   class="disabled:cursor-not-allowed disabled:opacity-50"
                   @update:model-value="onLongContextToggle"
@@ -135,7 +135,7 @@
 
             <div class="mt-3 grid grid-cols-1 gap-1 sm:max-w-sm">
               <label class="text-xs font-medium text-gray-600 dark:text-gray-300">
-                {{ t('admin.channels.form.longContextThreshold', '输入 Token 阈值') }}
+                {{ t('admin.channels.form.longContextThreshold') }}
               </label>
               <input
                 :value="entry.long_context_input_token_threshold"
@@ -147,55 +147,55 @@
                 :disabled="hasTokenIntervals"
                 data-testid="long-context-threshold"
                 class="input min-h-11 w-full text-sm disabled:cursor-not-allowed disabled:opacity-50"
-                :placeholder="t('admin.channels.form.longContextThresholdPlaceholder', '请输入阈值')"
+                :placeholder="t('admin.channels.form.longContextThresholdPlaceholder')"
                 @input="onLongContextThresholdInput(($event.target as HTMLInputElement).value)"
               />
               <p class="text-xs leading-5 text-gray-400">
-                {{ t('admin.channels.form.longContextThresholdHint', '请输入正整数；修改阈值会将策略设为显式开启。') }}
+                {{ t('admin.channels.form.longContextThresholdHint') }}
               </p>
             </div>
           </div>
 
           <!-- Default prices (fallback when no interval matches) -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
-            {{ t('admin.channels.form.defaultPrices', '默认价格（未命中区间时使用）') }}
+            {{ t('admin.channels.form.defaultPrices') }}
             <span class="ml-1 font-normal text-gray-400">$/MTok</span>
           </label>
           <div class="mt-1 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-7">
             <div>
-              <label class="text-xs text-gray-400">{{ t('admin.channels.form.inputPrice', '输入') }}</label>
+              <label class="text-xs text-gray-400">{{ t('admin.channels.form.inputPrice') }}</label>
               <input :value="entry.input_price" @input="emitField('input_price', ($event.target as HTMLInputElement).value)"
-                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
+                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder')" />
             </div>
             <div>
-              <label class="text-xs text-gray-400">{{ t('admin.channels.form.outputPrice', '输出') }}</label>
+              <label class="text-xs text-gray-400">{{ t('admin.channels.form.outputPrice') }}</label>
               <input :value="entry.output_price" @input="emitField('output_price', ($event.target as HTMLInputElement).value)"
-                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
+                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder')" />
             </div>
             <div>
-              <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheWritePrice', '缓存写入') }}</label>
+              <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheWritePrice') }}</label>
               <input :value="entry.cache_write_price" @input="emitField('cache_write_price', ($event.target as HTMLInputElement).value)"
-                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
+                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder')" />
             </div>
             <div>
-              <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheReadPrice', '缓存读取') }}</label>
+              <label class="text-xs text-gray-400">{{ t('admin.channels.form.cacheReadPrice') }}</label>
               <input :value="entry.cache_read_price" @input="emitField('cache_read_price', ($event.target as HTMLInputElement).value)"
-                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
+                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder')" />
             </div>
             <div>
-              <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageInputPrice', '图片输入') }}</label>
+              <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageInputPrice') }}</label>
               <input :value="entry.image_input_price" @input="emitField('image_input_price', ($event.target as HTMLInputElement).value)"
-                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
+                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder')" />
             </div>
             <div>
-              <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageCacheReadPrice', '图片缓存') }}</label>
+              <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageCacheReadPrice') }}</label>
               <input :value="entry.image_cache_read_price" @input="emitField('image_cache_read_price', ($event.target as HTMLInputElement).value)"
-                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
+                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder')" />
             </div>
             <div>
-              <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageTokenPrice', '图片输出') }}</label>
+              <label class="text-xs text-gray-400">{{ t('admin.channels.form.imageTokenPrice') }}</label>
               <input :value="entry.image_output_price" @input="emitField('image_output_price', ($event.target as HTMLInputElement).value)"
-                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
+                type="number" step="any" min="0" class="input mt-0.5 text-sm" :placeholder="t('admin.channels.form.pricePlaceholder')" />
             </div>
           </div>
 
@@ -203,7 +203,7 @@
           <div class="mt-3">
             <div class="flex items-center justify-between">
               <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
-                {{ t('admin.channels.form.intervals', '上下文区间定价（可选）') }}
+                {{ t('admin.channels.form.intervals') }}
                 <span class="ml-1 font-normal text-gray-400">(min, max]</span>
               </label>
               <button
@@ -213,11 +213,11 @@
                 class="min-h-11 rounded px-2 text-xs text-primary-600 hover:text-primary-700 disabled:cursor-not-allowed disabled:text-gray-400"
                 @click="addInterval"
               >
-                + {{ t('admin.channels.form.addInterval', '添加区间') }}
+                + {{ t('admin.channels.form.addInterval') }}
               </button>
             </div>
             <p v-if="longContextIntervalsBlocked" class="mt-1 text-xs leading-5 text-amber-600 dark:text-amber-400">
-              {{ t('admin.channels.form.longContextAddIntervalBlocked', '已显式开启 OpenAI API 长上下文倍率，关闭后才能添加自定义区间。') }}
+              {{ t('admin.channels.form.longContextAddIntervalBlocked') }}
             </p>
             <div v-if="entry.intervals && entry.intervals.length > 0" class="mt-2 space-y-2">
               <IntervalRow
@@ -236,21 +236,21 @@
         <div v-else-if="entry.billing_mode === 'per_request'">
           <!-- Default per-request price -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
-            {{ t('admin.channels.form.defaultPerRequestPrice', '默认单次价格（未命中层级时使用）') }}
+            {{ t('admin.channels.form.defaultPerRequestPrice') }}
             <span class="ml-1 font-normal text-gray-400">$</span>
           </label>
           <div class="mt-1 w-48">
             <input :value="entry.per_request_price" @input="emitField('per_request_price', ($event.target as HTMLInputElement).value)"
-              type="number" step="any" min="0" class="input text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
+              type="number" step="any" min="0" class="input text-sm" :placeholder="t('admin.channels.form.pricePlaceholder')" />
           </div>
 
           <!-- Tiers -->
           <div class="mt-3 flex items-center justify-between">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
-              {{ t('admin.channels.form.requestTiers', '按次计费层级') }}
+              {{ t('admin.channels.form.requestTiers') }}
             </label>
             <button type="button" @click="addInterval" class="text-xs text-primary-600 hover:text-primary-700">
-              + {{ t('admin.channels.form.addTier', '添加层级') }}
+              + {{ t('admin.channels.form.addTier') }}
             </button>
           </div>
           <div v-if="entry.intervals && entry.intervals.length > 0" class="mt-2 space-y-2">
@@ -264,7 +264,7 @@
             />
           </div>
           <div v-else class="mt-2 rounded border border-dashed border-gray-300 p-3 text-center text-xs text-gray-400 dark:border-dark-500">
-            {{ t('admin.channels.form.noTiersYet', '暂无层级，点击添加配置按次计费价格') }}
+            {{ t('admin.channels.form.noTiersYet') }}
           </div>
         </div>
 
@@ -272,21 +272,21 @@
         <div v-else-if="entry.billing_mode === 'image'">
           <!-- Default image price (per-request, same as per_request mode) -->
           <label class="mt-3 block text-xs font-medium text-gray-500 dark:text-gray-400">
-            {{ t('admin.channels.form.defaultImagePrice', '默认图片价格（未命中层级时使用）') }}
+            {{ t('admin.channels.form.defaultImagePrice') }}
             <span class="ml-1 font-normal text-gray-400">$</span>
           </label>
           <div class="mt-1 w-48">
             <input :value="entry.per_request_price" @input="emitField('per_request_price', ($event.target as HTMLInputElement).value)"
-              type="number" step="any" min="0" class="input text-sm" :placeholder="t('admin.channels.form.pricePlaceholder', '默认')" />
+              type="number" step="any" min="0" class="input text-sm" :placeholder="t('admin.channels.form.pricePlaceholder')" />
           </div>
 
           <!-- Image tiers -->
           <div class="mt-3 flex items-center justify-between">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
-              {{ t('admin.channels.form.imageTiers', '图片计费层级（按次）') }}
+              {{ t('admin.channels.form.imageTiers') }}
             </label>
             <button type="button" @click="addImageTier" class="text-xs text-primary-600 hover:text-primary-700">
-              + {{ t('admin.channels.form.addTier', '添加层级') }}
+              + {{ t('admin.channels.form.addTier') }}
             </button>
           </div>
           <div v-if="entry.intervals && entry.intervals.length > 0" class="mt-2 space-y-2">
@@ -305,7 +305,7 @@
         <div class="mt-3 border-t border-gray-100 pt-3 dark:border-dark-600">
           <div class="flex items-center justify-between">
             <label class="text-xs font-medium text-gray-500 dark:text-gray-400">
-              {{ t('admin.channels.form.timeRanges', '时间段价格（峰谷价，可选）') }}
+              {{ t('admin.channels.form.timeRanges') }}
             </label>
             <button
               type="button"
@@ -313,11 +313,11 @@
               class="min-h-11 rounded px-2 text-xs text-primary-600 hover:text-primary-700"
               @click="addTimeRange"
             >
-              + {{ t('admin.channels.form.addTimeRange', '添加时间段') }}
+              + {{ t('admin.channels.form.addTimeRange') }}
             </button>
           </div>
           <p class="mt-1 text-xs leading-5 text-gray-400">
-            {{ t('admin.channels.form.timeRangesHint', '命中时段时按这些价格覆盖默认价；未填字段回退到默认价。') }}
+            {{ t('admin.channels.form.timeRangesHint') }}
           </p>
           <div v-if="entry.time_ranges && entry.time_ranges.length > 0" class="mt-2 space-y-2">
             <TimeRangeRow
@@ -371,8 +371,8 @@ const collapsed = ref(props.entry.models.length > 0)
 
 const billingModeOptions = computed(() => [
   { value: 'token', label: 'Token' },
-  { value: 'per_request', label: t('admin.channels.billingMode.perRequest', '按次') },
-  { value: 'image', label: t('admin.channels.billingMode.image', '图片（按次）') }
+  { value: 'per_request', label: t('admin.channels.billingMode.perRequest') },
+  { value: 'image', label: t('admin.channels.billingMode.image') }
 ])
 
 const billingModeLabel = computed(() => {
@@ -403,15 +403,15 @@ const longContextToggleDisabled = computed(() => (
 const longContextStatusLabel = computed(() => {
   if (hasTokenIntervals.value) {
     return props.entry.long_context_pricing_enabled === true
-      ? t('admin.channels.form.longContextConflictStatus', '配置冲突：请关闭倍率或删除自定义区间')
-      : t('admin.channels.form.longContextCustomIntervals', '自定义上下文区间已接管')
+      ? t('admin.channels.form.longContextConflictStatus')
+      : t('admin.channels.form.longContextCustomIntervals')
   }
   if (props.entry.long_context_pricing_enabled === null) {
-    return t('admin.channels.form.longContextInherited', '默认关闭（未显式开启）')
+    return t('admin.channels.form.longContextInherited')
   }
   return props.entry.long_context_pricing_enabled
-    ? t('admin.channels.form.longContextExplicitlyEnabled', '已显式开启')
-    : t('admin.channels.form.longContextExplicitlyDisabled', '已显式关闭')
+    ? t('admin.channels.form.longContextExplicitlyEnabled')
+    : t('admin.channels.form.longContextExplicitlyDisabled')
 })
 
 const longContextStatusClass = computed(() => {

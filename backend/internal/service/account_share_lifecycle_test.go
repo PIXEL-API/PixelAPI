@@ -698,6 +698,7 @@ func TestCreateRoomFromOwnedAccountStartsValidatingAndCompletesAsyncValidation(t
 		concurrencyService: NewConcurrencyService(nil),
 		accountTestService: tester,
 		rateLimitService:   recovery,
+		pricedModelCatalog: &accountSharePricedCatalogStub{},
 	}
 
 	type createRoomResult struct {
@@ -877,8 +878,8 @@ func TestAccountShareOpencodeRoomActivationUsesFixedConnectivityModel(t *testing
 	require.Equal(t, AccountShareListingStatusActive, state.LifecycleStatus)
 	require.Equal(t, 1, tester.calls)
 	require.Equal(t, int64(199), tester.accountID)
-	require.Equal(t, defaultOpencodeTestModel, tester.modelID)
-	require.Equal(t, []string{defaultOpencodeTestModel}, tester.modelIDs)
+	require.Empty(t, tester.modelID)
+	require.Equal(t, []string{""}, tester.modelIDs)
 }
 
 func TestAccountShareRoomValidationWorkerUsesDedicatedClusterLease(t *testing.T) {

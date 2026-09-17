@@ -534,7 +534,7 @@ onUnmounted(() => {
 }
 
 .date-picker-dropdown {
-  @apply fixed z-[100000020];
+  @apply fixed z-[var(--ui-z-select,100000020)];
   @apply bg-white dark:bg-dark-800;
   @apply rounded-xl;
   @apply border border-gray-200 dark:border-dark-700;

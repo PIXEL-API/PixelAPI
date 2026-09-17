@@ -3492,6 +3492,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 // ForwardWithAnalysis forwards request to OpenAI API and reuses parsed /responses metadata when available.
 func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.Context, account *Account, body []byte, analysis *OpenAIResponsesRequestAnalysis) (*OpenAIForwardResult, error) {
 	resetOpenAIRequestIdentityState(c)
+	rememberOpencodeSession(c, account, body)
 	SetActualOpenAIUpstreamEndpoint(c, "")
 	beginUpstreamResponseModelObservation(c)
 	clearGrokResponsesClientToolMapping(c)
@@ -3604,7 +3605,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 			return nil, fmt.Errorf("unsupported OpenCode Go protocol %q for model %q", resolved.Spec.Protocol, resolved.UpstreamModel)
 		}
 	}
-	if account != nil && account.IsCNProvider() && account.IsAnthropicProtocol() {
+	if account != nil && account.IsRelayUpstream() && account.IsAnthropicProtocol() {
 		SetActualOpenAIUpstreamEndpoint(c, "/v1/messages")
 		return s.forwardResponsesViaNativeAnthropic(ctx, c, account, body, "")
 	}
@@ -3613,7 +3614,7 @@ func (s *OpenAIGatewayService) ForwardWithAnalysis(ctx context.Context, c *gin.C
 		return rejectImageOnlyResponsesRequest("model", requestErr)
 	}
 	if account.Type == AccountTypeAPIKey &&
-		!(account.IsCNProvider() && account.UsesNativeCNResponses()) &&
+		!(account.IsRelayUpstream() && account.UsesNativeCNResponses()) &&
 		!openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
 	}
@@ -9810,6 +9811,23 @@ func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, boo
 		}
 		normalized = next
 		changed = true
+	}
+
+	// Codex 可为名为 OpenAI 的自定义 provider 附加内部消息元数据；只删除
+	// input item 顶层字段，保留用户 content 中同名的普通业务字段。
+	input := gjson.GetBytes(normalized, "input")
+	if input.IsArray() {
+		for i, item := range input.Array() {
+			if !item.IsObject() || !item.Get(openAIInputInternalMetadataField).Exists() {
+				continue
+			}
+			next, err := sjson.DeleteBytes(normalized, fmt.Sprintf("input.%d.%s", i, openAIInputInternalMetadataField))
+			if err != nil {
+				return body, false, fmt.Errorf("normalize passthrough input metadata: %w", err)
+			}
+			normalized = next
+			changed = true
+		}
 	}
 
 	if compact {

@@ -450,6 +450,9 @@ const defaultClientTab = computed(() => {
       return 'codex'
     case 'grok':
       return 'grok'
+    case 'devin':
+    case 'api_aggregation':
+      return 'openai-compat'
     case 'gemini':
       return 'gemini'
     case 'opencode':
@@ -583,6 +586,11 @@ const clientTabs = computed((): TabConfig[] => {
         { id: 'grok', label: t('keys.useKeyModal.cliTabs.grokCli'), icon: TerminalIcon },
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
       ]
+    case 'devin':
+      return [
+        { id: 'openai-compat', label: t('keys.useKeyModal.cliTabs.openaiCompat'), icon: TerminalIcon },
+        { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
+      ]
     case 'opencode':
       return [
         { id: 'opencode', label: t('keys.useKeyModal.cliTabs.opencode'), icon: TerminalIcon }
@@ -636,6 +644,8 @@ const platformDescription = computed(() => {
       return t('keys.useKeyModal.antigravity.description')
     case 'grok':
       return t('keys.useKeyModal.grok.description')
+    case 'devin':
+      return t('keys.useKeyModal.devin.description')
     case 'opencode':
       return t('keys.useKeyModal.opencode.description')
     default:
@@ -662,6 +672,8 @@ const platformNote = computed(() => {
       return activeTab.value === 'windows'
         ? t('keys.useKeyModal.grok.noteWindows')
         : t('keys.useKeyModal.grok.note')
+    case 'devin':
+      return t('keys.useKeyModal.devin.note')
     default:
       return t('keys.useKeyModal.note')
   }
@@ -746,6 +758,8 @@ const currentFiles = computed((): FileConfig[] => {
       return generateAnthropicFiles(`${baseUrl}/antigravity`, apiKey)
     case 'grok':
       return generateGrokFiles(apiBase, apiKey)
+    case 'devin':
+      return generateDevinFiles(apiBase, apiKey)
     default:
       return generateAnthropicFiles(baseUrl, apiKey)
   }
@@ -899,6 +913,37 @@ function generateCodexFiles(
       hint: t('keys.useKeyModal.openai.authJsonHint')
     }
   ]
+}
+
+function generateDevinFiles(baseUrl: string, apiKey: string): FileConfig[] {
+  let path: string
+  let content: string
+
+  switch (activeTab.value) {
+    case 'unix':
+      path = 'Terminal'
+      content = `export OPENAI_BASE_URL="${baseUrl}"
+export OPENAI_API_KEY="${apiKey}"
+export OPENAI_MODEL="swe-2-max"`
+      break
+    case 'cmd':
+      path = 'Command Prompt'
+      content = `set OPENAI_BASE_URL=${baseUrl}
+set OPENAI_API_KEY=${apiKey}
+set OPENAI_MODEL=swe-2-max`
+      break
+    case 'powershell':
+      path = 'PowerShell'
+      content = `$env:OPENAI_BASE_URL="${baseUrl}"
+$env:OPENAI_API_KEY="${apiKey}"
+$env:OPENAI_MODEL="swe-2-max"`
+      break
+    default:
+      path = 'Terminal'
+      content = ''
+  }
+
+  return [{ path, content }]
 }
 
 function generateGrokFiles(baseUrl: string, apiKey: string): FileConfig[] {

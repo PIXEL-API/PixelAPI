@@ -69,7 +69,7 @@
               </button>
               <div
                 v-if="showColumnDropdown"
-                class="absolute right-0 z-50 mt-2 w-48 origin-top-right rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800"
+                class="absolute right-0 z-[var(--ui-z-menu)] mt-2 w-48 origin-top-right rounded-lg border border-gray-200 bg-white shadow-lg dark:border-gray-700 dark:bg-gray-800"
               >
                 <div class="max-h-80 overflow-y-auto p-2">
                   <button
@@ -606,7 +606,7 @@
                 class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
               />
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -726,7 +726,7 @@
               />
               <!-- Tooltip Popover -->
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -1082,7 +1082,7 @@
                 class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
               />
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -1155,7 +1155,7 @@
                 class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
               />
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -1213,7 +1213,7 @@
                 class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
               />
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -1524,20 +1524,20 @@
           class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4 space-y-4"
         >
           <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-            账号过滤控制
+            {{ t('admin.groups.accountFilterControl') }}
           </h4>
 
           <!-- require_oauth_only toggle -->
           <div class="flex items-center justify-between">
             <div>
               <label class="text-sm text-gray-600 dark:text-gray-400"
-                >仅允许 OAuth 账号</label
+                >{{ t('admin.groups.oauthOnlyLabel') }}</label
               >
               <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                 {{
                   createForm.require_oauth_only
-                    ? "已启用 — 排除 API Key 类型账号"
-                    : "未启用"
+                    ? t('admin.groups.oauthOnlyEnabled')
+                    : t('admin.groups.filterDisabled')
                 }}
               </p>
             </div>
@@ -1568,13 +1568,13 @@
           <div class="flex items-center justify-between">
             <div>
               <label class="text-sm text-gray-600 dark:text-gray-400"
-                >仅允许隐私保护已设置的账号</label
+                >{{ t('admin.groups.privacySetOnlyLabel') }}</label
               >
               <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                 {{
                   createForm.require_privacy_set
-                    ? "已启用 — Privacy 未设置的账号将被排除"
-                    : "未启用"
+                    ? t('admin.groups.privacySetOnlyEnabled')
+                    : t('admin.groups.filterDisabled')
                 }}
               </p>
             </div>
@@ -1638,7 +1638,7 @@
                 class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
               />
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-80 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-80 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -1763,7 +1763,7 @@
                           accountSearchResults[getCreateRuleSearchKey(rule)]
                             ?.length > 0
                         "
-                        class="absolute z-50 mt-1 max-h-48 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
+                        class="absolute z-[var(--ui-z-menu)] mt-1 max-h-48 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
                       >
                         <button
                           v-for="account in accountSearchResults[
@@ -1927,7 +1927,7 @@
                 class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
               />
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -2045,7 +2045,7 @@
               />
               <!-- Tooltip Popover -->
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -2406,7 +2406,7 @@
                 class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
               />
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -2479,7 +2479,7 @@
                 class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
               />
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -2537,7 +2537,7 @@
                 class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
               />
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-72 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -2844,20 +2844,20 @@
           class="border-t border-gray-200 dark:border-dark-400 pt-4 mt-4 space-y-4"
         >
           <h4 class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">
-            账号过滤控制
+            {{ t('admin.groups.accountFilterControl') }}
           </h4>
 
           <!-- require_oauth_only toggle -->
           <div class="flex items-center justify-between">
             <div>
               <label class="text-sm text-gray-600 dark:text-gray-400"
-                >仅允许 OAuth 账号</label
+                >{{ t('admin.groups.oauthOnlyLabel') }}</label
               >
               <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                 {{
                   editForm.require_oauth_only
-                    ? "已启用 — 排除 API Key 类型账号"
-                    : "未启用"
+                    ? t('admin.groups.oauthOnlyEnabled')
+                    : t('admin.groups.filterDisabled')
                 }}
               </p>
             </div>
@@ -2888,13 +2888,13 @@
           <div class="flex items-center justify-between">
             <div>
               <label class="text-sm text-gray-600 dark:text-gray-400"
-                >仅允许隐私保护已设置的账号</label
+                >{{ t('admin.groups.privacySetOnlyLabel') }}</label
               >
               <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                 {{
                   editForm.require_privacy_set
-                    ? "已启用 — Privacy 未设置的账号将被排除"
-                    : "未启用"
+                    ? t('admin.groups.privacySetOnlyEnabled')
+                    : t('admin.groups.filterDisabled')
                 }}
               </p>
             </div>
@@ -2958,7 +2958,7 @@
                 class="cursor-help text-gray-400 transition-colors hover:text-primary-500 dark:text-gray-500 dark:hover:text-primary-400"
               />
               <div
-                class="pointer-events-none absolute bottom-full left-0 z-50 mb-2 w-80 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
+                class="pointer-events-none absolute bottom-full left-0 z-[var(--ui-z-tooltip)] mb-2 w-80 opacity-0 transition-all duration-200 group-hover:pointer-events-auto group-hover:opacity-100"
               >
                 <div
                   class="rounded-lg bg-gray-900 p-3 text-white shadow-lg dark:bg-gray-800"
@@ -3082,7 +3082,7 @@
                           accountSearchResults[getEditRuleSearchKey(rule)]
                             ?.length > 0
                         "
-                        class="absolute z-50 mt-1 max-h-48 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
+                        class="absolute z-[var(--ui-z-menu)] mt-1 max-h-48 w-full overflow-auto rounded-lg border bg-white shadow-lg dark:border-dark-600 dark:bg-dark-800"
                       >
                         <button
                           v-for="account in accountSearchResults[
@@ -3702,10 +3702,12 @@ const platformOptions = computed(() => [
   { value: "grok", label: "Grok" },
   { value: "opencode", label: "OpenCode" },
   { value: "kimi", label: "Kimi" },
-  { value: "zhipu", label: "智谱 GLM" },
+  { value: "zhipu", label: t('common.platforms.zhipu') },
   { value: "deepseek", label: "DeepSeek" },
   { value: "minimax", label: "MiniMax" },
-  { value: "qwen", label: "通义千问" },
+  { value: "qwen", label: t('common.platforms.qwen') },
+  { value: "devin", label: "Devin" },
+  { value: "api_aggregation", label: t('common.platforms.apiAggregation') },
 ]);
 
 const platformFilterOptions = computed(() => [
@@ -3717,10 +3719,12 @@ const platformFilterOptions = computed(() => [
   { value: "grok", label: "Grok" },
   { value: "opencode", label: "OpenCode" },
   { value: "kimi", label: "Kimi" },
-  { value: "zhipu", label: "智谱 GLM" },
+  { value: "zhipu", label: t('common.platforms.zhipu') },
   { value: "deepseek", label: "DeepSeek" },
   { value: "minimax", label: "MiniMax" },
-  { value: "qwen", label: "通义千问" },
+  { value: "qwen", label: t('common.platforms.qwen') },
+  { value: "devin", label: "Devin" },
+  { value: "api_aggregation", label: t('common.platforms.apiAggregation') },
 ]);
 
 const editStatusOptions = computed(() => [
@@ -3852,7 +3856,7 @@ const copyAccountsGroupOptions = computed(() => {
   );
   return eligibleGroups.map((g) => ({
     value: g.id,
-    label: `${displayText(g.name)} (${g.account_count || 0} 个账号)`,
+    label: t('admin.groups.withAccountCount', { name: displayText(g.name), accountCount: g.account_count || 0 }),
   }));
 });
 
@@ -3867,7 +3871,7 @@ const copyAccountsGroupOptionsForEdit = computed(() => {
   );
   return eligibleGroups.map((g) => ({
     value: g.id,
-    label: `${displayText(g.name)} (${g.account_count || 0} 个账号)`,
+    label: t('admin.groups.withAccountCount', { name: displayText(g.name), accountCount: g.account_count || 0 }),
   }));
 });
 

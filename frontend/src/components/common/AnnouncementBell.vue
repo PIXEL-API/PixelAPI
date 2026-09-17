@@ -19,16 +19,16 @@
     </button>
 
     <!-- 公告列表 Modal -->
-    <Teleport to="body">
-      <Transition name="modal-fade">
-        <div
-          v-if="isModalOpen"
-          class="fixed inset-0 z-[100] flex items-start justify-center overflow-y-auto bg-gradient-to-br from-black/70 via-black/60 to-black/70 p-4 pt-[8vh] backdrop-blur-md"
-          @click="closeModal"
-        >
+    <ModalShell
+      :show="isModalOpen"
+      :title="t('announcements.title')"
+      :z-index="100"
+      close-on-click-outside
+      overlay-class="items-start overflow-y-auto bg-gradient-to-br from-black/70 via-black/60 to-black/70 p-4 pt-[8vh] backdrop-blur-md"
+      @close="closeModal"
+    >
           <div
             class="w-full max-w-[620px] overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-black/5 dark:bg-dark-800 dark:ring-white/10"
-            @click.stop
           >
             <!-- Header with Gradient -->
             <div class="relative overflow-hidden border-b border-gray-100/80 bg-gradient-to-br from-blue-50/50 to-indigo-50/30 px-6 py-5 dark:border-dark-700/50 dark:from-blue-900/10 dark:to-indigo-900/5">
@@ -174,21 +174,20 @@
               </div>
             </div>
           </div>
-        </div>
-      </Transition>
-    </Teleport>
+    </ModalShell>
 
     <!-- 公告详情 Modal -->
-    <Teleport to="body">
-      <Transition name="modal-fade">
-        <div
-          v-if="detailModalOpen && selectedAnnouncement"
-          class="fixed inset-0 z-[110] flex items-start justify-center overflow-y-auto bg-gradient-to-br from-black/70 via-black/60 to-black/70 p-4 pt-[6vh] backdrop-blur-md"
-          @click="closeDetail"
-        >
+    <ModalShell
+      :show="detailModalOpen && !!selectedAnnouncement"
+      :title="selectedAnnouncement?.title ?? t('announcements.title')"
+      :z-index="110"
+      close-on-click-outside
+      overlay-class="items-start overflow-y-auto bg-gradient-to-br from-black/70 via-black/60 to-black/70 p-4 pt-[6vh] backdrop-blur-md"
+      @close="closeDetail"
+    >
           <div
+            v-if="selectedAnnouncement"
             class="w-full max-w-[780px] overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-black/5 dark:bg-dark-800 dark:ring-white/10"
-            @click.stop
           >
             <!-- Header with Decorative Elements -->
             <div class="relative overflow-hidden border-b border-gray-100 bg-gradient-to-br from-blue-50/80 via-indigo-50/50 to-purple-50/30 px-8 py-6 dark:border-dark-700 dark:from-blue-900/20 dark:via-indigo-900/10 dark:to-purple-900/5">
@@ -305,9 +304,7 @@
               </div>
             </div>
           </div>
-        </div>
-      </Transition>
-    </Teleport>
+    </ModalShell>
   </div>
 </template>
 
@@ -322,6 +319,7 @@ import { useAnnouncementStore } from '@/stores/announcements'
 import { formatRelativeTime, formatRelativeWithDateTime } from '@/utils/format'
 import type { UserAnnouncement } from '@/types'
 import Icon from '@/components/icons/Icon.vue'
+import ModalShell from '@/components/common/ModalShell.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()

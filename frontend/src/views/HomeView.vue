@@ -15,7 +15,7 @@
   <!-- Default Home Page -->
   <div v-else class="home-page">
     <header class="home-shell home-nav">
-      <router-link class="brand" to="/home" aria-label="Home">
+      <router-link class="brand" to="/home" :aria-label="t('home.brandAriaLabel')">
         <span class="brand-mark" aria-hidden="true">
           <img v-if="siteLogo" :src="siteLogo" alt="" />
           <svg v-else viewBox="0 0 100 100" fill="none">
@@ -41,9 +41,9 @@
         <span>{{ siteName }}</span>
       </router-link>
 
-      <nav class="home-nav-links" aria-label="Home navigation">
-        <router-link to="/home">首页</router-link>
-        <router-link to="/key-usage">用量</router-link>
+      <nav class="home-nav-links" :aria-label="t('home.navAriaLabel')">
+        <router-link to="/home">{{ t('home.navHome') }}</router-link>
+        <router-link to="/key-usage">{{ t('home.navUsage') }}</router-link>
       </nav>
 
       <div class="home-actions">
@@ -97,26 +97,26 @@
               stroke-linecap="round"
             />
           </svg>
-          开放式 AI 账号协作网络
+          {{ t('home.heroEyebrow') }}
         </span>
 
         <h1 class="home-title">
-          让账号能力在用户之间<span class="flow-text">自由流动</span>
+          {{ t('home.heroTitleA') }}<span class="flow-text">{{ t('home.heroTitleB') }}</span>
         </h1>
 
         <p class="lead">
-          {{ siteName }}不再只是平台向用户提供服务，而是让个人用户提供账号、其他用户消费额度，平台完成调度中转、收益结算、邀请分成。
+          {{ t('home.heroDesc', { siteName }) }}
         </p>
 
         <div class="hero-actions">
           <router-link :to="isAuthenticated ? dashboardPath : '/login'" class="button primary">
             {{ isAuthenticated ? t('home.goToDashboard') : t('home.getStarted') }}
           </router-link>
-          <router-link class="button secondary" to="/key-usage">查看用量</router-link>
+          <router-link class="button secondary" to="/key-usage">{{ t('home.viewUsage') }}</router-link>
         </div>
       </section>
 
-      <aside class="visual" aria-label="账号协作网络数据面板示意">
+      <aside class="visual" :aria-label="t('home.visualAriaLabel')">
         <div class="sphere sphere-one"></div>
         <div class="sphere sphere-two"></div>
         <div class="sphere sphere-three"></div>
@@ -193,7 +193,7 @@
                     </svg>
                   </span>
                   <b>{{ todayRequestsText }}</b>
-                  <span>今日请求</span>
+                  <span>{{ t('home.todayRequests') }}</span>
                 </article>
 
                 <article class="metric">
@@ -205,7 +205,7 @@
                     </svg>
                   </span>
                   <b>{{ todayTokensText }}</b>
-                  <span>今日 Token</span>
+                  <span>{{ t('home.todayTokens') }}</span>
                 </article>
 
                 <article class="metric">
@@ -216,7 +216,7 @@
                     </svg>
                   </span>
                   <b>98.2%</b>
-                  <span>成功率</span>
+                  <span>{{ t('home.successRate') }}</span>
                 </article>
 
                 <article class="metric center-align">
@@ -227,16 +227,16 @@
                     </svg>
                   </span>
                   <b>124ms</b>
-                  <span>平均响应</span>
+                  <span>{{ t('home.avgResponse') }}</span>
                 </article>
               </div>
 
               <div class="chart-card">
                 <div class="chart-head">
-                  <div class="chart-title">请求趋势</div>
+                  <div class="chart-title">{{ t('home.requestTrend') }}</div>
                   <div class="chart-legends">
-                    <span class="legend-one">请求数</span>
-                    <span class="legend-two">Token 数</span>
+                    <span class="legend-one">{{ t('home.requestsLabel') }}</span>
+                    <span class="legend-two">{{ t('home.tokensLabel') }}</span>
                   </div>
                 </div>
 
@@ -292,8 +292,11 @@
       </aside>
     </main>
 
-    <section class="home-shell step-strip" aria-label="接入步骤">
-      <h2><span class="flow-text">3</span> 步开始，<span class="flow-text">2</span> 分钟完成迁移</h2>
+    <section class="home-shell step-strip" :aria-label="t('home.stepsAriaLabel')">
+      <i18n-t keypath="home.stepsTitle" tag="h2">
+        <template #steps><span class="flow-text">3</span></template>
+        <template #minutes><span class="flow-text">2</span></template>
+      </i18n-t>
 
       <div class="steps">
         <article class="step-card">
@@ -306,8 +309,8 @@
             </svg>
           </span>
           <div>
-            <h3>注册账号</h3>
-            <p>免费注册，即刻获得体验额度</p>
+            <h3>{{ t('home.step1Title') }}</h3>
+            <p>{{ t('home.step1Desc') }}</p>
           </div>
         </article>
 
@@ -322,8 +325,8 @@
             </svg>
           </span>
           <div>
-            <h3>获取 API Key</h3>
-            <p>一键生成，支持多 Key 管理与权限控制</p>
+            <h3>{{ t('home.step2Title') }}</h3>
+            <p>{{ t('home.step2Desc') }}</p>
           </div>
         </article>
 
@@ -337,8 +340,8 @@
             </svg>
           </span>
           <div>
-            <h3>替换 Base URL</h3>
-            <p>接入即可使用，快速完成迁移</p>
+            <h3>{{ t('home.step3Title') }}</h3>
+            <p>{{ t('home.step3Desc') }}</p>
           </div>
         </article>
       </div>
@@ -355,6 +358,7 @@ import { ref, computed, onMounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAuthStore, useAppStore } from '@/stores'
 import LocaleSwitcher from '@/components/common/LocaleSwitcher.vue'
+import { useDarkMode, toggleDarkMode } from '@/composables/useDarkMode'
 import Icon from '@/components/icons/Icon.vue'
 import { getPublicTodayStats } from '@/api/usage'
 
@@ -376,7 +380,7 @@ const isHomeContentUrl = computed(() => {
 })
 
 // Theme
-const isDark = ref(document.documentElement.classList.contains('dark'))
+const isDark = useDarkMode()
 
 // Auth state
 const isAuthenticated = computed(() => authStore.isAuthenticated)
@@ -442,26 +446,10 @@ async function fetchPublicTodayStats() {
 
 // Toggle theme
 function toggleTheme() {
-  isDark.value = !isDark.value
-  document.documentElement.classList.toggle('dark', isDark.value)
-  localStorage.setItem('theme', isDark.value ? 'dark' : 'light')
-}
-
-// Initialize theme
-function initTheme() {
-  const savedTheme = localStorage.getItem('theme')
-  if (
-    savedTheme === 'dark' ||
-    (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)
-  ) {
-    isDark.value = true
-    document.documentElement.classList.add('dark')
-  }
+  toggleDarkMode()
 }
 
 onMounted(() => {
-  initTheme()
-
   // Ensure public settings are loaded (will use cache if already loaded from injected config)
   if (!appStore.publicSettingsLoaded) {
     appStore.fetchPublicSettings()

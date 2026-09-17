@@ -1289,6 +1289,27 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 	c *gin.Context,
 	startTime time.Time,
 ) (OpenAIUsage, int, *int, error) {
+	usage, imageCount, _, firstTokenMs, err := s.handleOpenAIImagesStreamingResponseInternal(ctx, resp, c, startTime, nil)
+	return usage, imageCount, firstTokenMs, err
+}
+
+func (s *OpenAIGatewayService) handleCodexDirectImagesStreamingResponse(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	startTime time.Time,
+	parsed *OpenAIImagesRequest,
+) (OpenAIUsage, int, []string, *int, error) {
+	return s.handleOpenAIImagesStreamingResponseInternal(ctx, resp, c, startTime, &codexDirectImagesStream{request: parsed})
+}
+
+func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponseInternal(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	startTime time.Time,
+	direct *codexDirectImagesStream,
+) (OpenAIUsage, int, []string, *int, error) {
 	contentType := strings.TrimSpace(resp.Header.Get("Content-Type"))
 	if contentType == "" {
 		contentType = "text/event-stream"
@@ -1297,11 +1318,12 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		return OpenAIUsage{}, 0, nil, fmt.Errorf("streaming is not supported by response writer")
+		return OpenAIUsage{}, 0, nil, nil, fmt.Errorf("streaming is not supported by response writer")
 	}
 
 	usage := OpenAIUsage{}
 	imageCount := 0
+	var imageOutputSizes []string
 	var firstTokenMs *int
 	sawTerminal := false
 	var billingUsageObservation openAIResponsesBillingUsageObservation
@@ -1322,16 +1344,44 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		trimmedData := strings.TrimSpace(string(data))
 		meaningfulData := hasData && trimmedData != "" && trimmedData != "[DONE]"
 		eventType := ""
+		outbound := event
 		if meaningfulData {
+			if direct != nil {
+				var transformErr error
+				eventName, data, transformErr = direct.transform(eventName, data)
+				if transformErr != nil {
+					return newOpenAIImagesStreamFailoverError(resp, http.StatusBadGateway, transformErr.Error(), pump.SafeToFailoverAfterWrite())
+				}
+				var rewritten bytes.Buffer
+				if eventName != "" {
+					_, _ = fmt.Fprintf(&rewritten, "event: %s\n", eventName)
+				}
+				_, _ = fmt.Fprintf(&rewritten, "data: %s\n\n", data)
+				outbound = rewritten.Bytes()
+			}
 			billingUsageObservation.observePayload(data)
 			if status, message, failed := openAIImagesDirectStreamFailure(eventName, data); failed {
 				if !pump.SemanticOutputWritten() && !pump.ClientDisconnected() {
 					return newOpenAIImagesStreamFailoverError(resp, status, message, pump.SafeToFailoverAfterWrite())
 				}
-				pump.write(event, false)
+				pump.write(outbound, false)
 				return fmt.Errorf("upstream image generation failed: %s", message)
 			}
 			mergeOpenAIUsage(&usage, data)
+			if direct != nil {
+				if directUsage, ok := codexDirectImagesUsage(data); ok {
+					mergeOpenAIUsageValue(&usage, directUsage)
+				}
+				if direct.count > imageCount {
+					imageCount = direct.count
+				}
+				if len(direct.sizes) > 0 {
+					imageOutputSizes = append([]string(nil), direct.sizes...)
+				}
+				if observer := upstreamResponseModelObserverFromContext(c); observer != nil {
+					observer.Observe(gjson.GetBytes(data, "model").String(), strings.HasSuffix(gjson.GetBytes(data, "type").String(), ".completed"))
+				}
+			}
 			if count := extractOpenAIImageCountFromJSONBytes(data); count > imageCount {
 				imageCount = count
 			}
@@ -1339,11 +1389,13 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		}
 		if trimmedData == "[DONE]" ||
 			eventType == "image_generation.completed" ||
+			eventType == "image_edit.completed" ||
 			eventType == "response.completed" ||
-			strings.EqualFold(strings.TrimSpace(eventName), "image_generation.completed") {
+			strings.EqualFold(strings.TrimSpace(eventName), "image_generation.completed") ||
+			strings.EqualFold(strings.TrimSpace(eventName), "image_edit.completed") {
 			sawTerminal = true
 		}
-		written := pump.write(event, meaningfulData)
+		written := pump.write(outbound, meaningfulData)
 		if written && meaningfulData && firstTokenMs == nil {
 			ms := int(time.Since(startTime).Milliseconds())
 			firstTokenMs = &ms
@@ -1357,7 +1409,7 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 			eventBuffer = append(eventBuffer, line...)
 			if len(bytes.TrimRight(line, "\r\n")) == 0 {
 				if processErr := processEvent(eventBuffer); processErr != nil {
-					return usage, imageCount, firstTokenMs, processErr
+					return usage, imageCount, imageOutputSizes, firstTokenMs, processErr
 				}
 				eventBuffer = eventBuffer[:0]
 			}
@@ -1365,43 +1417,43 @@ func (s *OpenAIGatewayService) handleOpenAIImagesStreamingResponse(
 		if err == io.EOF {
 			if len(eventBuffer) > 0 {
 				if processErr := processEvent(eventBuffer); processErr != nil {
-					return usage, imageCount, firstTokenMs, processErr
+					return usage, imageCount, imageOutputSizes, firstTokenMs, processErr
 				}
 			}
 			break
 		}
 		if err != nil {
 			if pump.ClientDisconnected() || (ctx != nil && ctx.Err() != nil) {
-				return usage, imageCount, firstTokenMs, fmt.Errorf("stream usage incomplete after disconnect: %w", err)
+				return usage, imageCount, imageOutputSizes, firstTokenMs, fmt.Errorf("stream usage incomplete after disconnect: %w", err)
 			}
 			if !pump.SemanticOutputWritten() {
-				return usage, imageCount, firstTokenMs, newOpenAIImagesStreamFailoverError(resp, http.StatusBadGateway, err.Error(), pump.SafeToFailoverAfterWrite())
+				return usage, imageCount, imageOutputSizes, firstTokenMs, newOpenAIImagesStreamFailoverError(resp, http.StatusBadGateway, err.Error(), pump.SafeToFailoverAfterWrite())
 			}
 			_ = pump.write(append([]byte("event: error\ndata: "), append(buildOpenAIImagesStreamErrorBody(err.Error()), []byte("\n\n")...)...), false)
-			return usage, imageCount, firstTokenMs, err
+			return usage, imageCount, imageOutputSizes, firstTokenMs, err
 		}
 	}
 	if pump.ClientDisconnected() {
 		if streamErr := s.clientDisconnectIncompleteUsageError(ctx); streamErr != nil {
-			return usage, imageCount, firstTokenMs, streamErr
+			return usage, imageCount, imageOutputSizes, firstTokenMs, streamErr
 		}
 		if !openAIImageStreamHasBillableResult(usage, imageCount) {
-			return usage, imageCount, firstTokenMs, errors.New("stream usage incomplete after disconnect: missing image usage")
+			return usage, imageCount, imageOutputSizes, firstTokenMs, errors.New("stream usage incomplete after disconnect: missing image usage")
 		}
 	}
 	if !sawTerminal {
 		err := errors.New("upstream image stream ended without a terminal event")
 		if !pump.SemanticOutputWritten() && !pump.ClientDisconnected() {
-			return usage, imageCount, firstTokenMs, newOpenAIImagesStreamFailoverError(
+			return usage, imageCount, imageOutputSizes, firstTokenMs, newOpenAIImagesStreamFailoverError(
 				resp,
 				http.StatusBadGateway,
 				err.Error(),
 				pump.SafeToFailoverAfterWrite(),
 			)
 		}
-		return usage, imageCount, firstTokenMs, err
+		return usage, imageCount, imageOutputSizes, firstTokenMs, err
 	}
-	return usage, imageCount, firstTokenMs, nil
+	return usage, imageCount, imageOutputSizes, firstTokenMs, nil
 }
 
 func openAIImageStreamHasBillableResult(usage OpenAIUsage, imageCount int) bool {
@@ -1410,37 +1462,47 @@ func openAIImageStreamHasBillableResult(usage OpenAIUsage, imageCount int) bool 
 }
 
 func mergeOpenAIUsage(dst *OpenAIUsage, body []byte) {
+	if parsed, ok := extractOpenAIUsageFromJSONBytes(body); ok {
+		mergeOpenAIUsageValue(dst, parsed)
+	}
+}
+
+func mergeOpenAIUsageValue(dst *OpenAIUsage, parsed OpenAIUsage) {
 	if dst == nil {
 		return
 	}
-	if parsed, ok := extractOpenAIUsageFromJSONBytes(body); ok {
-		if parsed.InputTokens > 0 {
-			dst.InputTokens = parsed.InputTokens
-		}
-		if parsed.TextInputTokens > 0 {
-			dst.TextInputTokens = parsed.TextInputTokens
-		}
-		if parsed.ImageInputTokens > 0 {
-			dst.ImageInputTokens = parsed.ImageInputTokens
-		}
-		if parsed.OutputTokens > 0 {
-			dst.OutputTokens = parsed.OutputTokens
-		}
-		if parsed.TextOutputTokens > 0 {
-			dst.TextOutputTokens = parsed.TextOutputTokens
-		}
-		if parsed.CacheReadInputTokens > 0 {
-			dst.CacheReadInputTokens = parsed.CacheReadInputTokens
-		}
-		if parsed.TextCacheReadInputTokens > 0 {
-			dst.TextCacheReadInputTokens = parsed.TextCacheReadInputTokens
-		}
-		if parsed.ImageCacheReadInputTokens > 0 {
-			dst.ImageCacheReadInputTokens = parsed.ImageCacheReadInputTokens
-		}
-		if parsed.ImageOutputTokens > 0 {
-			dst.ImageOutputTokens = parsed.ImageOutputTokens
-		}
+	if parsed.InputTokens > 0 {
+		dst.InputTokens = parsed.InputTokens
+	}
+	if parsed.TextInputTokens > 0 {
+		dst.TextInputTokens = parsed.TextInputTokens
+	}
+	if parsed.ImageInputTokens > 0 {
+		dst.ImageInputTokens = parsed.ImageInputTokens
+	}
+	if parsed.OutputTokens > 0 {
+		dst.OutputTokens = parsed.OutputTokens
+	}
+	if parsed.TextOutputTokens > 0 {
+		dst.TextOutputTokens = parsed.TextOutputTokens
+	}
+	if parsed.CacheCreationInputTokens > 0 {
+		dst.CacheCreationInputTokens = parsed.CacheCreationInputTokens
+	}
+	if parsed.CacheReadInputTokens > 0 {
+		dst.CacheReadInputTokens = parsed.CacheReadInputTokens
+	}
+	if parsed.TextCacheReadInputTokens > 0 {
+		dst.TextCacheReadInputTokens = parsed.TextCacheReadInputTokens
+	}
+	if parsed.ImageCacheReadInputTokens > 0 {
+		dst.ImageCacheReadInputTokens = parsed.ImageCacheReadInputTokens
+	}
+	if parsed.ImageOutputTokens > 0 {
+		dst.ImageOutputTokens = parsed.ImageOutputTokens
+	}
+	if parsed.ImageCount > 0 {
+		dst.ImageCount = parsed.ImageCount
 	}
 }
 

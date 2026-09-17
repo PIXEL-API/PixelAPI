@@ -986,6 +986,11 @@ func (s *AccountShareModeService) processRoomValidationOnce() {
 		s.taskExecutor == nil {
 		return
 	}
+	startedAt := time.Now().UTC()
+	var runErr error
+	defer func() {
+		s.recordShareJobHeartbeat(accountShareRoomValidationTaskName, startedAt, "", runErr)
+	}()
 	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), accountShareRoomValidationWorkerTimeout)
 	defer cancel()
 	_, err := s.taskExecutor.Run(ctx, accountShareRoomValidationTaskName, func(
@@ -996,6 +1001,7 @@ func (s *AccountShareModeService) processRoomValidationOnce() {
 	})
 	if err != nil {
 		log.Printf("account_share_mode: room validation lease failed: %v", err)
+		runErr = err
 	}
 }
 
@@ -1167,8 +1173,8 @@ func (s *AccountShareModeService) validateRoomActivation(
 	// OpenCode 房间的恢复校验只需要确认账号凭证和上游连通性，不应使用房间
 	// 白名单中的任意模型作为探针。白名单首项可能是区域、套餐或上游状态
 	// 不稳定的模型（例如 grok-4.5），会把模型级失败误判成账号不可用。
-	// OpenCode 账号测试服务的默认探针是 deepseek-v4.1-flash，这里显式固定
-	// 使用同一个模型，避免房间恢复流程传入首个白名单模型覆盖该默认值。
+	// 空模型由账号测试服务按账号模式选择 GO/Zen 默认探针，避免 Zen 账号
+	// 被强制套用到仅 GO 目录存在的默认模型。
 	validationCtx, validationCancel := context.WithTimeout(
 		ctx,
 		accountShareConnectivityTestTimeout(connectivityModel),

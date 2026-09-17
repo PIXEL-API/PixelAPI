@@ -46,7 +46,7 @@
             v-if="userDropdownOpen && userQuery.trim()"
             id="cyber-restriction-user-results"
             role="listbox"
-            class="absolute left-0 right-0 z-50 mt-1 max-h-64 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-700"
+            class="absolute left-0 right-0 z-[var(--ui-z-menu)] mt-1 max-h-64 overflow-auto rounded-lg border border-gray-200 bg-white shadow-lg dark:border-dark-600 dark:bg-dark-700"
           >
             <div v-if="userSearchLoading" class="flex min-h-11 items-center px-4 py-2 text-sm text-gray-500 dark:text-gray-400">
               {{ t('common.loading') }}

@@ -35,6 +35,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
 	resetOpenAIRequestIdentityState(c)
+	rememberOpencodeSession(c, account, body)
 	beginUpstreamResponseModelObservation(c)
 	var opencodeResolved *OpencodeGoResolvedModel
 	if account.IsOpencode() {
@@ -67,8 +68,10 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// CN providers configured for Anthropic or adaptive protocol use the raw
 	// Anthropic Messages path. The raw forwarder selects the provider's native
 	// /v1/messages endpoint and preserves the request/stream contract.
-	if account.IsCNProvider() && (account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol()) {
-		if account.IsAnthropicProtocol() {
+	if account.IsRelayUpstream() && (account.IsAnthropicProtocol() || account.IsAdaptiveAPIProtocol()) {
+		// 聚合渠道自适应账号显式配置了 Anthropic 专用上游时优先走原生
+		// /v1/messages，避免有损的 Anthropic→ChatCompletions 桥接。
+		if account.IsAnthropicProtocol() || (account.IsAPIAggregation() && account.HasProtocolBaseURL(APIProtocolAnthropic)) {
 			SetActualOpenAIUpstreamEndpoint(c, "/v1/messages")
 			return s.forwardAnthropicViaNativeAnthropicEndpoint(ctx, c, account, body, defaultMappedModel)
 		}

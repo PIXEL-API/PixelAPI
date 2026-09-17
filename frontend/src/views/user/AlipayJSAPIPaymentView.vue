@@ -9,7 +9,7 @@
             支
           </span>
           <div class="min-w-0">
-            <h1 class="text-base font-semibold leading-6">支付宝支付</h1>
+            <h1 class="text-base font-semibold leading-6">{{ t('payment.alipayJsapi.title') }}</h1>
             <p class="mt-0.5 text-sm text-gray-500 dark:text-gray-400">{{ statusText }}</p>
           </div>
         </div>
@@ -24,7 +24,7 @@
         </div>
 
         <p class="mt-4 rounded-lg bg-blue-50 px-3 py-2 text-sm leading-6 text-blue-700 dark:bg-blue-950/30 dark:text-blue-200">
-          请在支付宝内置浏览器完成支付。
+          {{ t('payment.alipayJsapi.hint') }}
         </p>
 
         <div class="mt-5 grid gap-2">
@@ -34,7 +34,7 @@
             class="btn btn-primary min-h-[44px] w-full justify-center"
             @click="restart"
           >
-            重试
+            {{ t('common.tryAgain') }}
           </button>
           <button
             v-if="canGoResult"
@@ -42,7 +42,7 @@
             class="btn btn-secondary min-h-[44px] w-full justify-center"
             @click="goResult"
           >
-            查看结果
+            {{ t('payment.alipayJsapi.viewResult') }}
           </button>
         </div>
       </section>
@@ -61,6 +61,9 @@ import {
   type PaymentRecoverySnapshot,
   writePaymentRecoverySnapshot,
 } from '@/components/payment/paymentFlow'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 type AlipayPhase = 'checking' | 'authorizing' | 'creating' | 'paying' | 'settled' | 'failed'
 
@@ -105,17 +108,17 @@ const canGoResult = computed(() => phase.value === 'settled' || (!!resumeToken.v
 const statusText = computed(() => {
   switch (phase.value) {
     case 'checking':
-      return '正在检查支付环境'
+      return t('payment.alipayJsapi.stepCheckEnv')
     case 'authorizing':
-      return '正在获取支付宝授权'
+      return t('payment.alipayJsapi.stepAuth')
     case 'creating':
-      return '正在创建支付交易'
+      return t('payment.alipayJsapi.stepCreateTrade')
     case 'paying':
-      return '正在打开支付宝收银台'
+      return t('payment.alipayJsapi.stepOpenCashier')
     case 'settled':
-      return '支付请求已提交'
+      return t('payment.alipayJsapi.stepSubmitted')
     case 'failed':
-      return '支付未能继续'
+      return t('payment.alipayJsapi.stepFailed')
     default:
       return ''
   }
@@ -209,7 +212,7 @@ function waitForAlipayJSBridge(timeoutMs = 5000): Promise<AlipayJSBridgeLike | n
 
 async function requestAuthCode(appId: string): Promise<string> {
   if (!appId) {
-    throw new Error('缺少支付宝 AppID')
+    throw new Error(t('payment.alipayJsapi.errMissingAppId'))
   }
   const authPayload = { appId, scopes: ['auth_base'], showErrorTip: false }
   const h5JSAPI = await ensureAlipayH5JSAPI()
@@ -243,21 +246,21 @@ function extractAuthCode(result: Record<string, unknown> | undefined): string {
 function alipayJSAPIErrorMessage(result: Record<string, unknown> | undefined, fallback: string, appId = ''): string {
   const callbackURL = `${window.location.origin}/payment/alipay-jsapi`
   if (!result) {
-    return `${fallback}：支付宝未返回授权码，请确认应用 ${appId || 'AppID'} 已配置授权回调地址 ${callbackURL}`
+    return t('payment.alipayJsapi.errNoAuthCodeWithHint', { fallback, appId: appId || 'AppID', callbackURL })
   }
 
   const errorCode = stringValue(result.error ?? result.errorCode ?? result.error_code)
   const description = stringValue(result.errorDesc ?? result.errorMessage ?? result.message)
   if (errorCode === '15') {
-    return `支付宝授权回调地址不合法：请在支付宝开放平台应用 ${appId || 'AppID'} 中配置授权回调地址 ${callbackURL}`
+    return t('payment.alipayJsapi.errInvalidCallback', { appId: appId || 'AppID', callbackURL })
   }
   if (errorCode === '11') {
-    return '你已取消支付宝授权，请重新发起支付'
+    return t('payment.alipayJsapi.errAuthCancelled')
   }
   if (description) {
-    return errorCode ? `支付宝授权失败（${errorCode}）：${description}` : description
+    return errorCode ? t('payment.alipayJsapi.errAuthFailedDesc', { errorCode, description }) : description
   }
-  return errorCode ? `支付宝授权失败（${errorCode}）` : `${fallback}：支付宝未返回授权码`
+  return errorCode ? t('payment.alipayJsapi.errAuthFailed', { errorCode }) : t('payment.alipayJsapi.errNoAuthCode', { fallback })
 }
 
 function stringValue(value: unknown): string {
@@ -290,10 +293,10 @@ async function startPayment() {
 
   try {
     if (!resumeToken.value) {
-      throw new Error('缺少支付恢复令牌')
+      throw new Error(t('payment.alipayJsapi.errMissingResumeToken'))
     }
     if (!isAlipayEnvironment()) {
-      throw new Error('请在支付宝 App 内继续支付')
+      throw new Error(t('payment.alipayJsapi.continueInApp'))
     }
 
     phase.value = 'authorizing'
@@ -310,7 +313,7 @@ async function startPayment() {
 
     const tradeNO = result.alipay_jsapi?.tradeNO?.trim()
     if (!tradeNO) {
-      throw new Error('支付宝交易号为空')
+      throw new Error(t('payment.alipayJsapi.errEmptyTradeNo'))
     }
 
     phase.value = 'paying'
@@ -318,7 +321,7 @@ async function startPayment() {
     handleTradePayResult(payResult)
   } catch (err: unknown) {
     phase.value = 'failed'
-    errorMessage.value = extractApiErrorMessage(err, err instanceof Error ? err.message : '支付宝支付启动失败')
+    errorMessage.value = extractApiErrorMessage(err, err instanceof Error ? err.message : t('payment.alipayJsapi.errStartFailed'))
   }
 }
 
@@ -327,12 +330,12 @@ function handleTradePayResult(result: Record<string, unknown>) {
   const memo = String(result.memo || result.err_msg || '')
   if (resultCode === '6001' || memo.toLowerCase().includes('cancel')) {
     phase.value = 'failed'
-    errorMessage.value = '你已取消支付宝支付'
+    errorMessage.value = t('payment.alipayJsapi.errPayCancelled')
     return
   }
   if (resultCode && resultCode !== '9000' && resultCode !== '8000') {
     phase.value = 'failed'
-    errorMessage.value = memo || `支付宝支付返回异常：${resultCode}`
+    errorMessage.value = memo || t('payment.alipayJsapi.errAbnormalResult', { resultCode })
     return
   }
   if (!resultCode) {

@@ -50,6 +50,7 @@ type accountShareOpenAIExchangeCodeRequest struct {
 	Codex5hLimitPercent    float64  `json:"codex_5h_limit_percent"`
 	Codex7dLimitPercent    float64  `json:"codex_7d_limit_percent"`
 	AutoPauseOnExpired     *bool    `json:"auto_pause_on_expired"`
+	JoinPassword           string   `json:"join_password"`
 }
 
 type accountShareAnthropicAuthURLRequest struct {
@@ -73,6 +74,7 @@ type accountShareAnthropicExchangeCodeRequest struct {
 	Anthropic5hLimitPercent float64  `json:"anthropic_5h_limit_percent"`
 	Anthropic7dLimitPercent float64  `json:"anthropic_7d_limit_percent"`
 	AutoPauseOnExpired      *bool    `json:"auto_pause_on_expired"`
+	JoinPassword            string   `json:"join_password"`
 }
 
 type accountShareListingUpdateRequest struct {
@@ -92,6 +94,7 @@ type accountShareListingUpdateRequest struct {
 	Anthropic5hLimitPercent *float64  `json:"anthropic_5h_limit_percent"`
 	Anthropic7dLimitPercent *float64  `json:"anthropic_7d_limit_percent"`
 	Concurrency             *int      `json:"concurrency"`
+	JoinPassword            *string   `json:"join_password"`
 	ForceActiveEdit         bool      `json:"force_active_edit"`
 	ExpectedVersion         *int64    `json:"expected_version"`
 	Reason                  string    `json:"reason"`
@@ -99,8 +102,9 @@ type accountShareListingUpdateRequest struct {
 }
 
 type accountShareJoinIntentRequest struct {
-	APIKeyID           int64 `json:"api_key_id" binding:"required"`
-	IdleTimeoutMinutes int   `json:"idle_timeout_minutes"`
+	APIKeyID           int64  `json:"api_key_id" binding:"required"`
+	IdleTimeoutMinutes int    `json:"idle_timeout_minutes"`
+	Password           string `json:"password"`
 }
 
 type accountShareJoinRequest struct {
@@ -109,6 +113,8 @@ type accountShareJoinRequest struct {
 	IntentToken        string `json:"intent_token" binding:"required"`
 	ExpectedVersion    int64  `json:"expected_version" binding:"required,min=1"`
 	ExpectedRevisionID int64  `json:"expected_revision_id" binding:"required,min=1"`
+	// AcknowledgedUnverified 为 API聚合（APIKEY）房间的「未验证渠道」风险确认。
+	AcknowledgedUnverified bool `json:"acknowledged_unverified"`
 }
 
 type accountShareReviewSubmitRequest struct {
@@ -136,6 +142,7 @@ type accountShareRoomCreateRequest struct {
 	Codex7dLimitPercent     float64  `json:"codex_7d_limit_percent"`
 	Anthropic5hLimitPercent float64  `json:"anthropic_5h_limit_percent"`
 	Anthropic7dLimitPercent float64  `json:"anthropic_7d_limit_percent"`
+	JoinPassword            string   `json:"join_password"`
 }
 
 type accountShareRoomAccountsBatchRequest struct {
@@ -217,6 +224,7 @@ func (h *AccountShareModeHandler) ExchangeOpenAICode(c *gin.Context) {
 					Codex5hLimitPercent:    req.Codex5hLimitPercent,
 					Codex7dLimitPercent:    req.Codex7dLimitPercent,
 					AutoPauseOnExpired:     req.AutoPauseOnExpired,
+					JoinPassword:           req.JoinPassword,
 				},
 			)
 		},
@@ -285,6 +293,7 @@ func (h *AccountShareModeHandler) ExchangeAnthropicCode(c *gin.Context) {
 					Anthropic5hLimitPercent: req.Anthropic5hLimitPercent,
 					Anthropic7dLimitPercent: req.Anthropic7dLimitPercent,
 					AutoPauseOnExpired:      req.AutoPauseOnExpired,
+					JoinPassword:            req.JoinPassword,
 				},
 			)
 		},
@@ -526,6 +535,7 @@ func (h *AccountShareModeHandler) CreateRoom(c *gin.Context) {
 		Codex7dLimitPercent:     req.Codex7dLimitPercent,
 		Anthropic5hLimitPercent: req.Anthropic5hLimitPercent,
 		Anthropic7dLimitPercent: req.Anthropic7dLimitPercent,
+		JoinPassword:            req.JoinPassword,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)
@@ -674,6 +684,7 @@ func (h *AccountShareModeHandler) UpdateListing(c *gin.Context) {
 		Anthropic5hLimitPercent: req.Anthropic5hLimitPercent,
 		Anthropic7dLimitPercent: req.Anthropic7dLimitPercent,
 		Concurrency:             req.Concurrency,
+		JoinPassword:            req.JoinPassword,
 		ForceActiveEdit:         req.ForceActiveEdit,
 		ExpectedVersion:         req.ExpectedVersion,
 		Reason:                  req.Reason,
@@ -708,11 +719,12 @@ func (h *AccountShareModeHandler) JoinListing(c *gin.Context) {
 		return
 	}
 	membership, err := h.service.CompleteJoinListing(c.Request.Context(), subject.UserID, listingID, service.CompleteAccountShareJoinInput{
-		APIKeyID:           req.APIKeyID,
-		IdleTimeoutMinutes: req.IdleTimeoutMinutes,
-		IntentToken:        req.IntentToken,
-		ExpectedVersion:    req.ExpectedVersion,
-		ExpectedRevisionID: req.ExpectedRevisionID,
+		APIKeyID:               req.APIKeyID,
+		IdleTimeoutMinutes:     req.IdleTimeoutMinutes,
+		IntentToken:            req.IntentToken,
+		ExpectedVersion:        req.ExpectedVersion,
+		ExpectedRevisionID:     req.ExpectedRevisionID,
+		AcknowledgedUnverified: req.AcknowledgedUnverified,
 	})
 	if err != nil {
 		logger.FromContext(c.Request.Context()).Warn("account share join failed",
@@ -746,9 +758,12 @@ func (h *AccountShareModeHandler) CreateJoinIntent(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	role, _ := middleware2.GetUserRoleFromContext(c)
 	intent, err := h.service.CreateJoinIntent(c.Request.Context(), subject.UserID, listingID, service.CreateAccountShareJoinIntentInput{
 		APIKeyID:           req.APIKeyID,
 		IdleTimeoutMinutes: req.IdleTimeoutMinutes,
+		Password:           req.Password,
+		ActorIsAdmin:       role == service.RoleAdmin,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

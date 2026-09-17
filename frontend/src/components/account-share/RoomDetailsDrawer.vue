@@ -10,7 +10,7 @@
   >
     <div v-if="listing" class="room-detail-shell" data-testid="room-details-drawer">
       <div class="room-detail-summary"><slot name="summary" :listing="listing" /></div>
-      <nav ref="tabBar" class="room-detail-tabs" role="tablist" aria-label="房间详情内容" @keydown="handleTabKeydown">
+      <nav ref="tabBar" class="room-detail-tabs" role="tablist" :aria-label="t('accountShare.roomDetails.contentLabel')" @keydown="handleTabKeydown">
         <button
           v-for="tab in tabs"
           :id="`room-detail-tab-${tab.key}`"
@@ -24,12 +24,12 @@
           @click="activeTab = tab.key"
         >{{ tab.label }}</button>
       </nav>
-      <div v-if="loading" class="room-detail-state" role="status"><Icon name="refresh" size="md" class="animate-spin" />正在读取房间详情…</div>
+      <div v-if="loading" class="room-detail-state" role="status"><Icon name="refresh" size="md" class="animate-spin" />{{ t('accountShare.roomDetails.loading') }}</div>
       <div v-else-if="error" class="room-detail-state room-detail-error" role="alert">
         <Icon name="exclamationCircle" size="lg" />
-        <strong>暂时无法读取详情</strong>
+        <strong>{{ t('accountShare.roomDetails.loadFailed') }}</strong>
         <p>{{ error }}</p>
-        <button type="button" class="btn-secondary min-h-11" @click="emit('refresh')">重新加载</button>
+        <button type="button" class="btn-secondary min-h-11" @click="emit('refresh')">{{ t('accountShare.roomDetails.reload') }}</button>
       </div>
       <section v-else id="room-detail-panel" ref="contentPanel" class="room-detail-panel" role="tabpanel" :aria-labelledby="`room-detail-tab-${activeTab}`" tabindex="0">
         <slot :name="activeTab" :listing="listing" />
@@ -39,7 +39,7 @@
       <div v-if="listing && !loading && !error" class="room-detail-action-area">
         <slot name="actions" :listing="listing" :show-usage="showUsage" />
       </div>
-      <span v-else class="room-detail-footer-note">详情加载完成后，可查看条款并选择使用。</span>
+      <span v-else class="room-detail-footer-note">{{ t('accountShare.roomDetails.hint') }}</span>
     </template>
   </BaseDialog>
 </template>
@@ -49,6 +49,9 @@ import { nextTick, ref, watch } from 'vue'
 import type { AccountShareListing } from '@/api/accountShare'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import Icon from '@/components/icons/Icon.vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   listing: AccountShareListing | null
@@ -58,10 +61,10 @@ const props = defineProps<{
 }>()
 const emit = defineEmits<{ (event: 'close'): void; (event: 'refresh'): void }>()
 const tabs = [
-  { key: 'overview', label: '概览' },
-  { key: 'models', label: '模型与限制' },
-  { key: 'reviews', label: '用户评价' },
-  { key: 'usage', label: '使用与管理' }
+  { key: 'overview', label: t('accountShare.roomDetails.tabOverview') },
+  { key: 'models', label: t('accountShare.roomDetails.tabModels') },
+  { key: 'reviews', label: t('accountShare.roomDetails.tabReviews') },
+  { key: 'usage', label: t('accountShare.roomDetails.tabUsage') }
 ] as const
 type DetailTab = typeof tabs[number]['key']
 const activeTab = ref<DetailTab>('overview')

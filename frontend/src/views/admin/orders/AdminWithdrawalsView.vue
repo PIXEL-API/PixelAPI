@@ -4,7 +4,7 @@
       <div class="card p-4">
         <div class="flex flex-wrap items-center gap-3">
           <div class="flex-1 sm:max-w-72">
-            <input v-model="keyword" type="text" placeholder="搜索邮箱或提现单号" class="input" @input="debounceLoad" />
+            <input v-model="keyword" type="text" :placeholder="t('admin.withdrawals.searchPlaceholder')" class="input" @input="debounceLoad" />
           </div>
           <Select v-model="filters.status" :options="statusOptions" class="w-36" @change="load" />
           <Select v-model="filters.payment_method" :options="methodOptions" class="w-36" @change="load" />
@@ -29,14 +29,14 @@
         <template #cell-amount="{ value, row }">
           <div class="text-sm">
             <p class="font-semibold text-gray-900 dark:text-white">${{ value.toFixed(2) }}</p>
-            <p class="text-xs text-gray-500 dark:text-gray-400">扣除 ${{ row.total_deducted.toFixed(2) }}</p>
+            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.withdrawals.deductedAmount', { toFixed: row.total_deducted.toFixed(2) }) }}</p>
           </div>
         </template>
         <template #cell-payment_method="{ value }">
           <span class="text-sm text-gray-700 dark:text-gray-300">{{ methodLabel(value) }}</span>
         </template>
         <template #cell-receipt_code_url="{ row }">
-          <button class="btn btn-secondary btn-sm" @click="openReceipt(row)">查看收款码</button>
+          <button class="btn btn-secondary btn-sm" @click="openReceipt(row)">{{ t('admin.withdrawals.viewQrCode') }}</button>
         </template>
         <template #cell-status="{ value }">
           <span class="rounded-full px-2 py-0.5 text-xs font-medium" :class="statusClass(value)">
@@ -48,21 +48,21 @@
         </template>
         <template #cell-last_withdrawal_at="{ value }">
           <span v-if="value" class="text-xs text-gray-500 dark:text-gray-400">{{ formatDateTime(value) }}</span>
-          <span v-else class="text-xs font-medium text-blue-600 dark:text-blue-400">首次提现</span>
+          <span v-else class="text-xs font-medium text-blue-600 dark:text-blue-400">{{ t('admin.withdrawals.firstWithdrawal') }}</span>
         </template>
         <template #cell-actions="{ row }">
           <div class="flex flex-wrap items-center gap-1">
             <button class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-dark-600" @click="openDetail(row)">
               <Icon name="eye" size="sm" />
-              查看
+              {{ t('common.view') }}
             </button>
             <button v-if="row.status === 'PENDING'" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-green-600 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20" @click="openProcess(row, 'settle')">
               <Icon name="check" size="sm" />
-              确认打款
+              {{ t('admin.withdrawals.confirmPaid') }}
             </button>
             <button v-if="row.status === 'PENDING'" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20" @click="openProcess(row, 'reject')">
               <Icon name="x" size="sm" />
-              拒绝
+              {{ t('admin.withdrawals.reject') }}
             </button>
           </div>
         </template>
@@ -78,89 +78,89 @@
       />
     </div>
 
-    <BaseDialog :show="!!receiptTarget" title="收款码快照" width="narrow" @close="closeReceipt">
+    <BaseDialog :show="!!receiptTarget" :title="t('admin.withdrawals.qrCodeSnapshot')" width="narrow" @close="closeReceipt">
       <template #title-extra>
         <span
           v-if="receiptTarget"
           class="inline-flex min-w-0 items-center rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300"
         >
-          待提现金额 ${{ receiptTarget.amount.toFixed(2) }}
+          {{ t('admin.withdrawals.pendingAmount', { toFixed: receiptTarget.amount.toFixed(2) }) }}
         </span>
       </template>
       <div v-if="receiptTarget" class="space-y-4">
         <div class="flex min-h-64 items-center justify-center overflow-hidden rounded-xl border border-gray-100 bg-gray-50 dark:border-dark-700 dark:bg-dark-900/50">
           <div v-if="receiptLoading" class="flex flex-col items-center gap-2 text-gray-400 dark:text-gray-500">
             <Icon name="refresh" size="lg" class="animate-spin" />
-            <span class="text-sm">图片加载中</span>
+            <span class="text-sm">{{ t('admin.withdrawals.imageLoading') }}</span>
           </div>
           <img
             v-else-if="receiptImageUrl && !receiptImageFailed"
             :src="receiptImageUrl"
             class="h-auto max-h-[70vh] w-full object-contain"
-            alt="收款码"
+            :alt="t('admin.withdrawals.colQrCode')"
             @error="receiptImageFailed = true"
           >
           <div v-else class="flex flex-col items-center gap-2 px-6 py-10 text-center text-gray-400 dark:text-gray-500">
             <Icon name="exclamationCircle" size="lg" />
-            <span class="text-sm">收款码图片暂不可访问</span>
+            <span class="text-sm">{{ t('admin.withdrawals.qrCodeUnavailable') }}</span>
           </div>
         </div>
         <div class="text-xs text-gray-500 dark:text-gray-400">
-          <p>方式：{{ methodLabel(receiptTarget.payment_method) }}</p>
+          <p>{{ t('admin.withdrawals.methodLabel', { paymentMethod: methodLabel(receiptTarget.payment_method) }) }}</p>
           <p class="break-all">SHA256：{{ receiptTarget.receipt_code_sha256 }}</p>
         </div>
       </div>
     </BaseDialog>
 
-    <BaseDialog :show="!!detailTarget" title="提现详情" width="wide" @close="detailTarget = null">
+    <BaseDialog :show="!!detailTarget" :title="t('admin.withdrawals.detailTitle')" width="wide" @close="detailTarget = null">
       <div v-if="detailTarget" class="grid gap-4 sm:grid-cols-2">
-        <InfoItem label="提现单号" :value="'#' + detailTarget.id" />
-        <InfoItem label="状态" :value="statusLabel(detailTarget.status)" />
-        <InfoItem label="用户邮箱" :value="detailTarget.user_email" />
-        <InfoItem label="用户ID" :value="String(detailTarget.user_id)" />
-        <InfoItem label="提现金额" :value="'$' + detailTarget.amount.toFixed(2)" />
-        <InfoItem label="手续费" :value="'$' + detailTarget.fee_amount.toFixed(2)" />
-        <InfoItem label="申请前余额" :value="'$' + detailTarget.balance_before.toFixed(2)" />
-        <InfoItem label="申请后余额" :value="'$' + detailTarget.balance_after.toFixed(2)" />
-        <InfoItem label="上次提现时间" :value="detailTarget.last_withdrawal_at ? formatDateTime(detailTarget.last_withdrawal_at) : '首次提现'" />
-        <InfoItem label="申请时间" :value="formatDateTime(detailTarget.created_at)" />
-        <InfoItem label="处理时间" :value="detailTarget.processed_at ? formatDateTime(detailTarget.processed_at) : '-'" />
+        <InfoItem :label="t('admin.withdrawals.colId')" :value="'#' + detailTarget.id" />
+        <InfoItem :label="t('admin.withdrawals.colStatus')" :value="statusLabel(detailTarget.status)" />
+        <InfoItem :label="t('admin.withdrawals.colUserEmail')" :value="detailTarget.user_email" />
+        <InfoItem :label="t('admin.withdrawals.colUserId')" :value="String(detailTarget.user_id)" />
+        <InfoItem :label="t('admin.withdrawals.colAmount')" :value="'$' + detailTarget.amount.toFixed(2)" />
+        <InfoItem :label="t('admin.withdrawals.colFee')" :value="'$' + detailTarget.fee_amount.toFixed(2)" />
+        <InfoItem :label="t('admin.withdrawals.colBalanceBefore')" :value="'$' + detailTarget.balance_before.toFixed(2)" />
+        <InfoItem :label="t('admin.withdrawals.colBalanceAfter')" :value="'$' + detailTarget.balance_after.toFixed(2)" />
+        <InfoItem :label="t('admin.withdrawals.colLastWithdrawal')" :value="detailTarget.last_withdrawal_at ? formatDateTime(detailTarget.last_withdrawal_at) : t('admin.withdrawals.firstWithdrawal')" />
+        <InfoItem :label="t('admin.withdrawals.colCreatedAt')" :value="formatDateTime(detailTarget.created_at)" />
+        <InfoItem :label="t('admin.withdrawals.colProcessedAt')" :value="detailTarget.processed_at ? formatDateTime(detailTarget.processed_at) : '-'" />
         <InfoItem
           class="sm:col-span-2"
-          :label="detailTarget.status === 'REJECTED' ? '驳回原因' : '备注'"
+          :label="detailTarget.status === 'REJECTED' ? t('admin.withdrawals.rejectReasonLabel') : t('admin.withdrawals.remarkLabel')"
           :value="detailTarget.admin_note || detailTarget.user_cancel_reason || '-'"
         />
       </div>
     </BaseDialog>
 
-    <BaseDialog :show="!!processTarget" :title="processAction === 'settle' ? '确认已打款' : '拒绝提现'" width="narrow" @close="processTarget = null">
+    <BaseDialog :show="!!processTarget" :title="processAction === 'settle' ? t('admin.withdrawals.confirmPaid') : t('admin.withdrawals.rejectWithdrawal')" width="narrow" @close="processTarget = null">
       <div v-if="processTarget" class="space-y-4">
         <p class="text-sm text-gray-600 dark:text-gray-300">
-          {{ processAction === 'settle' ? '确认已向用户收款码完成打款。' : '拒绝后会自动退回本次扣除金额。' }}
+          {{ processAction === 'settle' ? t('admin.withdrawals.confirmPaidDesc') : t('admin.withdrawals.rejectDesc') }}
         </p>
         <div>
           <label class="input-label">
-            {{ processAction === 'reject' ? '驳回原因（用户可见）' : '结算备注（仅管理员可见）' }}
+            {{ processAction === 'reject' ? t('admin.withdrawals.rejectReasonLabel') : t('admin.withdrawals.remarkLabel') }}
           </label>
           <textarea
             v-model="processNote"
             rows="3"
             class="input mt-1.5"
-            :placeholder="processAction === 'reject' ? '请填写具体驳回原因' : '可选，仅管理员可见'"
+            :placeholder="processAction === 'reject' ? t('admin.withdrawals.rejectReasonPlaceholder') : t('admin.withdrawals.remarkPlaceholder')"
           ></textarea>
           <p v-if="processAction === 'reject'" class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-            此原因会直接显示在用户的提现记录中。
+            {{ t('admin.withdrawals.rejectReasonNote') }}
           </p>
         </div>
         <div class="flex justify-end gap-2">
-          <button class="btn btn-secondary" @click="processTarget = null">取消</button>
+          <button class="btn btn-secondary" @click="processTarget = null">{{ t('common.cancel') }}</button>
           <button
             class="btn"
             :class="processAction === 'settle' ? 'btn-primary' : 'btn-danger'"
             :disabled="processing || (processAction === 'reject' && !processNote.trim())"
             @click="submitProcess"
           >
-            {{ processing ? '处理中' : '确认' }}
+            {{ processing ? t('common.processing') : t('common.confirm') }}
           </button>
         </div>
       </div>
@@ -182,6 +182,9 @@ import Pagination from '@/components/common/Pagination.vue'
 import Select from '@/components/common/Select.vue'
 import type { Column } from '@/components/common/types'
 import Icon from '@/components/icons/Icon.vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const InfoItem = defineComponent({
   props: { label: { type: String, required: true }, value: { type: String, required: true } },
@@ -211,29 +214,29 @@ let debounceTimer: ReturnType<typeof setTimeout> | null = null
 let receiptRequestSeq = 0
 
 const columns = computed<Column[]>(() => [
-  { key: 'id', label: '提现单号' },
-  { key: 'user_email', label: '用户' },
-  { key: 'amount', label: '金额' },
-  { key: 'payment_method', label: '收款方式' },
-  { key: 'receipt_code_url', label: '收款码' },
-  { key: 'status', label: '状态' },
-  { key: 'last_withdrawal_at', label: '上次提现时间' },
-  { key: 'created_at', label: '申请时间' },
-  { key: 'actions', label: '操作' },
+  { key: 'id', label: t('admin.withdrawals.colId') },
+  { key: 'user_email', label: t('admin.withdrawals.colUser') },
+  { key: 'amount', label: t('admin.withdrawals.colAmount') },
+  { key: 'payment_method', label: t('admin.withdrawals.colMethod') },
+  { key: 'receipt_code_url', label: t('admin.withdrawals.colQrCode') },
+  { key: 'status', label: t('admin.withdrawals.colStatus') },
+  { key: 'last_withdrawal_at', label: t('admin.withdrawals.colLastWithdrawal') },
+  { key: 'created_at', label: t('admin.withdrawals.colCreatedAt') },
+  { key: 'actions', label: t('admin.withdrawals.colActions') },
 ])
 
 const statusOptions = [
-  { value: '', label: '全部状态' },
-  { value: 'PENDING', label: '待结算' },
-  { value: 'SETTLED', label: '已结算' },
-  { value: 'CANCELLED', label: '已取消' },
-  { value: 'REJECTED', label: '已拒绝' },
+  { value: '', label: t('admin.withdrawals.filterAllStatus') },
+  { value: 'PENDING', label: t('admin.withdrawals.statusPending') },
+  { value: 'SETTLED', label: t('admin.withdrawals.statusSettled') },
+  { value: 'CANCELLED', label: t('admin.withdrawals.statusCancelled') },
+  { value: 'REJECTED', label: t('admin.withdrawals.statusRejected') },
 ]
 
 const methodOptions = [
-  { value: '', label: '全部方式' },
-  { value: 'alipay', label: '支付宝' },
-  { value: 'wechat', label: '微信' },
+  { value: '', label: t('admin.withdrawals.filterAllMethods') },
+  { value: 'alipay', label: t('admin.withdrawals.methodAlipay') },
+  { value: 'wechat', label: t('admin.withdrawals.methodWechat') },
 ]
 
 const receiptImageUrl = computed(() => receiptTarget.value?.receipt_code_url?.trim() || '')
@@ -256,7 +259,7 @@ async function load() {
     items.value = res.data.items || []
     pagination.total = res.data.total || 0
   } catch (error: unknown) {
-    appStore.showError(extractApiErrorMessage(error, '提现列表加载失败'))
+    appStore.showError(extractApiErrorMessage(error, t('admin.withdrawals.loadFailed')))
   } finally {
     loading.value = false
   }
@@ -290,7 +293,7 @@ async function openReceipt(row: WithdrawalRequest) {
     }
   } catch (error: unknown) {
     if (requestSeq === receiptRequestSeq) {
-      appStore.showError(extractApiErrorMessage(error, '收款码快照加载失败'))
+      appStore.showError(extractApiErrorMessage(error, t('admin.withdrawals.qrLoadFailed')))
     }
   } finally {
     if (requestSeq === receiptRequestSeq) {
@@ -319,22 +322,22 @@ function openProcess(row: WithdrawalRequest, action: 'settle' | 'reject') {
 async function submitProcess() {
   if (!processTarget.value) return
   if (processAction.value === 'reject' && !processNote.value.trim()) {
-    appStore.showError('请填写驳回原因')
+    appStore.showError(t('admin.withdrawals.rejectReasonRequired'))
     return
   }
   processing.value = true
   try {
     if (processAction.value === 'settle') {
       await adminPaymentAPI.settleWithdrawal(processTarget.value.id, { note: processNote.value })
-      appStore.showSuccess('提现已结算')
+      appStore.showSuccess(t('admin.withdrawals.settleSuccess'))
     } else {
       await adminPaymentAPI.rejectWithdrawal(processTarget.value.id, { note: processNote.value })
-      appStore.showSuccess('提现已拒绝并退回余额')
+      appStore.showSuccess(t('admin.withdrawals.rejectSuccess'))
     }
     processTarget.value = null
     await load()
   } catch (error: unknown) {
-    appStore.showError(extractApiErrorMessage(error, '提现处理失败'))
+    appStore.showError(extractApiErrorMessage(error, t('admin.withdrawals.actionFailed')))
   } finally {
     processing.value = false
   }
@@ -342,10 +345,10 @@ async function submitProcess() {
 
 function statusLabel(status: WithdrawalStatus): string {
   const map: Record<WithdrawalStatus, string> = {
-    PENDING: '待结算',
-    SETTLED: '已结算',
-    CANCELLED: '已取消',
-    REJECTED: '已拒绝',
+    PENDING: t('admin.withdrawals.statusPending'),
+    SETTLED: t('admin.withdrawals.statusSettled'),
+    CANCELLED: t('admin.withdrawals.statusCancelled'),
+    REJECTED: t('admin.withdrawals.statusRejected'),
   }
   return map[status]
 }
@@ -361,7 +364,7 @@ function statusClass(status: WithdrawalStatus): string {
 }
 
 function methodLabel(method: ReceiptCodePaymentMethod): string {
-  return method === 'alipay' ? '支付宝' : '微信'
+  return method === 'alipay' ? t('admin.withdrawals.methodAlipay') : t('admin.withdrawals.methodWechat')
 }
 
 void load()

@@ -25,6 +25,8 @@ export type AccountSharePlatform =
   | 'deepseek'
   | 'minimax'
   | 'qwen'
+  | 'devin'
+  | 'api_aggregation'
 
 export type AccountShareRoomLifecycleStatus =
   | 'active'
@@ -63,6 +65,8 @@ export interface AccountShareCapabilityBlocker {
 export interface AccountShareCapabilities {
   lifecycle_enabled?: boolean
   can_create_room: boolean
+  /** 评论审核是否已配置可用；为 false 时评论输入应禁用，仅允许纯评分 */
+  comment_review_enabled?: boolean
   live_rooms: AccountShareQuotaValue
   room_creates_24_hours: AccountShareQuotaValue
   owner_room_accounts: AccountShareQuotaValue
@@ -339,6 +343,7 @@ export interface AccountShareListing {
   queue_dispatch_cooldown_until?: string
   last_used_membership_id?: number
   last_used_at?: string
+  has_password?: boolean
   created_at: string
   updated_at: string
 }
@@ -486,6 +491,7 @@ export interface CreateAccountShareRoomRequest {
   codex_7d_limit_percent: number
   anthropic_5h_limit_percent: number
   anthropic_7d_limit_percent: number
+  join_password?: string
 }
 
 export interface AccountShareRecommendationRequest {
@@ -630,6 +636,8 @@ export interface AccountShareJoinIntent {
   expected_version: number
   expected_revision_id: number
   terms: AccountShareListingTermsSnapshot
+  /** API 聚合房间要求消费者在提交前显式确认未验证渠道风险提示 */
+  requires_unverified_ack?: boolean
 }
 
 export interface AccountShareMySpendParams {
@@ -747,6 +755,7 @@ export interface CreateAccountShareOpenAIRequest {
   codex_cli_only?: boolean
   codex_5h_limit_percent?: number
   codex_7d_limit_percent?: number
+  join_password?: string
 }
 
 export interface CreateAccountShareAnthropicRequest {
@@ -765,6 +774,7 @@ export interface CreateAccountShareAnthropicRequest {
   min_balance_required?: number
   anthropic_5h_limit_percent?: number
   anthropic_7d_limit_percent?: number
+  join_password?: string
 }
 
 export interface UpdateAccountShareListingRequest {
@@ -784,6 +794,7 @@ export interface UpdateAccountShareListingRequest {
   anthropic_5h_limit_percent?: number
   anthropic_7d_limit_percent?: number
   concurrency?: number
+  join_password?: string
   force_active_edit?: boolean
   reason?: string
   confirmed?: boolean
@@ -813,11 +824,14 @@ export interface JoinAccountShareListingRequest {
   intent_token: string
   expected_version: number
   expected_revision_id: number
+  /** 加入 API 聚合房间时服务端强制要求为 true */
+  acknowledged_unverified?: boolean
 }
 
 export interface CreateAccountShareJoinIntentRequest {
   api_key_id: number
   idle_timeout_minutes: number
+  password?: string
 }
 
 

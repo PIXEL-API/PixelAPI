@@ -293,7 +293,7 @@ func TestOpencodeAccountConnectionFallsBackOnRegionError(t *testing.T) {
 	t.Parallel()
 	upstream := &opencodeTestUpstream{responses: map[string]*http.Response{
 		"deepseek-v4.1-flash": newOpencodeErrorResponse(http.StatusForbidden, `{"type":"error","error":{"type":"RegionError","message":"only available hosted in China"}}`),
-		"gpt-5.6-luna":      newOpencodeResponsesOKResponse(),
+		"gpt-5.6-luna":        newOpencodeResponsesOKResponse(),
 	}}
 	svc := newOpencodeTestService(upstream)
 	account := &Account{
@@ -331,4 +331,65 @@ func TestOpencodeAccountConnectionNoFallbackOnAuthError(t *testing.T) {
 	require.Contains(t, err.Error(), "401")
 	require.Equal(t, []string{"deepseek-v4.1-flash"}, upstream.calls,
 		"auth error is account-level and must not trigger model fallback")
+}
+
+func TestOpencodeZenAccountConnectionUsesZenCatalogAndEndpoint(t *testing.T) {
+	t.Parallel()
+	upstream := &opencodeTestUpstream{responses: map[string]*http.Response{
+		"minimax-m3": newOpencodeChatOKResponse(),
+	}}
+	account := &Account{
+		Platform: PlatformOpencode,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":      "opencode-secret",
+			"account_mode": OpencodeAccountModeZen,
+		},
+	}
+
+	err := newOpencodeTestService(upstream).testOpencodeAccountConnection(opencodeTestGinContext(t), account, "minimax-m3")
+	require.NoError(t, err)
+	require.Len(t, upstream.requests, 1)
+	require.Equal(t, "/zen/v1/chat/completions", upstream.requests[0].path)
+	require.Equal(t, "minimax-m3", upstream.requests[0].model)
+	require.Equal(t, "Bearer opencode-secret", upstream.requests[0].header.Get("Authorization"))
+	require.Empty(t, upstream.requests[0].header.Get("x-api-key"))
+}
+
+func TestOpencodeZenAccountConnectionUsesZenDefaultWithoutGoFallback(t *testing.T) {
+	t.Parallel()
+	upstream := &opencodeTestUpstream{responses: map[string]*http.Response{
+		defaultOpencodeZenTestModel: newOpencodeChatOKResponse(),
+	}}
+	account := &Account{
+		Platform: PlatformOpencode,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":      "opencode-secret",
+			"account_mode": OpencodeAccountModeZen,
+		},
+	}
+
+	err := newOpencodeTestService(upstream).testOpencodeAccountConnection(opencodeTestGinContext(t), account, "")
+	require.NoError(t, err)
+	require.Equal(t, []string{defaultOpencodeZenTestModel}, upstream.calls)
+	require.Equal(t, "/zen/v1/chat/completions", upstream.requests[0].path)
+}
+
+func TestOpencodeZenAccountConnectionRejectsGoOnlyModelBeforeRequest(t *testing.T) {
+	t.Parallel()
+	upstream := &opencodeTestUpstream{responses: map[string]*http.Response{}}
+	account := &Account{
+		Platform: PlatformOpencode,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":      "opencode-secret",
+			"account_mode": OpencodeAccountModeZen,
+		},
+	}
+
+	err := newOpencodeTestService(upstream).testOpencodeAccountConnection(opencodeTestGinContext(t), account, "deepseek-v4.1-flash")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), `unknown upstream model "deepseek-v4.1-flash"`)
+	require.Empty(t, upstream.requests)
 }

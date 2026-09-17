@@ -89,7 +89,7 @@
           'relative z-0 inline-flex -space-x-px rounded-md shadow-sm',
           compact && 'self-center'
         ]"
-        aria-label="Pagination"
+        :aria-label="t('pagination.ariaLabel')"
       >
         <!-- Previous button -->
         <button

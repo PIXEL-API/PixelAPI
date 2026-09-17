@@ -382,7 +382,7 @@
 
   <BaseDialog
     :show="pendingRemoveAccountIDs.length > 0"
-    title="确认移出房间账号"
+    :title="t('accountShare.roomAccounts.removeConfirmTitle')"
     width="narrow"
     :z-index="65"
     :close-disabled="operating"
@@ -393,15 +393,15 @@
     <div class="room-account-remove-confirmation" data-testid="room-account-remove-confirmation">
       <div class="remove-impact-summary">
         <div>
-          <span>本次移出</span>
+          <span>{{ t('accountShare.roomAccounts.removeCount') }}</span>
           <strong>{{ pendingRemoveAccountIDs.length }}</strong>
         </div>
         <div>
-          <span>当前账号</span>
+          <span>{{ t('accountShare.roomAccounts.currentAccounts') }}</span>
           <strong>{{ accounts.length }}</strong>
         </div>
         <div>
-          <span>预计剩余</span>
+          <span>{{ t('accountShare.roomAccounts.expectedRemaining') }}</span>
           <strong>{{ remainingAccountCountAfterRemove }}</strong>
         </div>
       </div>
@@ -418,25 +418,25 @@
         <div>
           <strong>
             {{ removingLastRoomAccounts
-              ? '这会移出房间的最后一个账号'
-              : '成员请求可能需要切换到剩余账号' }}
+              ? t('accountShare.roomAccounts.removeLastWarn')
+              : t('accountShare.roomAccounts.removeNormalWarn') }}
           </strong>
           <p>
             {{ removingLastRoomAccounts
-              ? '操作成功后，房间将没有可调度账号，消费者请求无法继续；请随后暂停房间或立即补充兼容账号。'
-              : '若所选账号正在承载成员，服务端会在同一操作中处理重新绑定或必要结算；提交结果以服务端最新状态为准。' }}
+              ? t('accountShare.roomAccounts.removeLastDesc')
+              : t('accountShare.roomAccounts.removeNormalDesc') }}
           </p>
         </div>
       </div>
 
       <div class="remove-impact-runtime">
-        <span>当前占用/收口席位</span>
+        <span>{{ t('accountShare.roomAccounts.occupiedSeats') }}</span>
         <strong>{{ Number(listing?.active_seats || 0) }}</strong>
-        <small>当前接口未返回预约与正在退出的拆分人数，因此这里不做估算。</small>
+        <small>{{ t('accountShare.roomAccounts.noSeatEstimate') }}</small>
       </div>
 
       <div class="remove-account-list">
-        <span>将移出的账号</span>
+        <span>{{ t('accountShare.roomAccounts.accountsToRemove') }}</span>
         <ul>
           <li v-for="account in pendingRemoveAccounts" :key="account.account_id">
             <strong>{{ account.account_name }}</strong>
@@ -455,7 +455,7 @@
           data-testid="cancel-remove-room-accounts"
           @click="cancelRemoveConfirmation"
         >
-          返回检查
+          {{ t('accountShare.roomAccounts.backToCheck') }}
         </button>
         <button
           type="button"
@@ -508,37 +508,37 @@ import CreateRoomAccountFlow from '@/components/account-share/CreateRoomAccountF
 type RoomAccountsTab = 'members' | 'add'
 type RoomAccountOperation = 'add' | 'remove'
 
-const ROOM_ACCOUNT_ERROR_MESSAGES: Record<string, string> = {
-  ACCOUNT_SHARE_ROOM_LIMIT_EXCEEDED: '未删除房间数量已达到配额上限',
-  ACCOUNT_SHARE_ROOM_CREATE_RATE_EXCEEDED: '最近 24 小时创建房间次数已达到配额上限',
-  ACCOUNT_SHARE_ROOM_ACCOUNT_LIMIT_EXCEEDED: '该房间的账号数量已达到上限，请先移出不再使用的账号',
-  ACCOUNT_SHARE_OWNER_ROOM_ACCOUNT_LIMIT_EXCEEDED: '房主管理的房间账号总数已达到上限，请先整理其他房间',
-  ACCOUNT_SHARE_ROOM_OWNER_MISMATCH: '该账号不属于当前房主，不能加入此房间',
-  ACCOUNT_SHARE_ROOM_PLATFORM_MISMATCH: '该账号与房间平台不一致',
-  ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH: '该账号等级与房间要求不一致',
-  ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL: '该账号等级尚未识别，请先完成账号检测',
-  ACCOUNT_SHARE_ROOM_MODE_REQUIRED: '该账号尚未处于可加入房间的账号模式',
-  ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE: '该账号当前不可用，请处理账号状态后重试',
-  ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL: '该账号不支持房间要求的全部模型，请先在"我的账号"中补齐该账号的模型白名单',
-  OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED: '该账号处于共享投放中，需先切换账号模式后再修改',
-  ACCOUNT_SHARE_ROOM_ACCOUNT_CONFLICT: '该账号已加入其他房间或正在切换归属',
-  ACCOUNT_SHARE_LISTING_NOT_FOUND: '房间不存在、已删除或当前无权管理',
-  ACCOUNT_SHARE_ROOM_DELETED: '房间已经删除，不能再调整房间账号',
-  IDEMPOTENCY_KEY_REQUIRED: '请求缺少安全幂等标识，请刷新页面后重试'
-}
+const roomAccountErrorMessages = (): Record<string, string> => ({
+  ACCOUNT_SHARE_ROOM_LIMIT_EXCEEDED: t('accountShare.roomAccounts.errors.roomLimit'),
+  ACCOUNT_SHARE_ROOM_CREATE_RATE_EXCEEDED: t('accountShare.roomAccounts.errors.createRate'),
+  ACCOUNT_SHARE_ROOM_ACCOUNT_LIMIT_EXCEEDED: t('accountShare.roomAccounts.errors.roomAccountLimit'),
+  ACCOUNT_SHARE_OWNER_ROOM_ACCOUNT_LIMIT_EXCEEDED: t('accountShare.roomAccounts.errors.ownerAccountLimit'),
+  ACCOUNT_SHARE_ROOM_OWNER_MISMATCH: t('accountShare.roomAccounts.errors.ownerMismatch'),
+  ACCOUNT_SHARE_ROOM_PLATFORM_MISMATCH: t('accountShare.roomAccounts.errors.platformMismatch'),
+  ACCOUNT_SHARE_ROOM_LEVEL_MISMATCH: t('accountShare.roomAccounts.errors.levelMismatch'),
+  ACCOUNT_SHARE_ROOM_UNKNOWN_LEVEL: t('accountShare.roomAccounts.errors.unknownLevel'),
+  ACCOUNT_SHARE_ROOM_MODE_REQUIRED: t('accountShare.roomAccounts.errors.modeRequired'),
+  ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE: t('accountShare.roomAccounts.errors.accountUnavailable'),
+  ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL: t('accountShare.roomAccounts.errors.unsupportedModel'),
+  OWNED_ACCOUNT_PLACEMENT_CONVERSION_REQUIRED: t('accountShare.roomAccounts.errors.placementConversion'),
+  ACCOUNT_SHARE_ROOM_ACCOUNT_CONFLICT: t('accountShare.roomAccounts.errors.accountConflict'),
+  ACCOUNT_SHARE_LISTING_NOT_FOUND: t('accountShare.roomAccounts.errors.listingNotFound'),
+  ACCOUNT_SHARE_ROOM_DELETED: t('accountShare.roomAccounts.errors.roomDeleted'),
+  IDEMPOTENCY_KEY_REQUIRED: t('accountShare.roomAccounts.errors.idempotencyRequired')
+})
 
-const ROOM_ACCOUNT_UNAVAILABLE_BLOCKER_MESSAGES: Record<string, string> = {
-  status_not_active: '账号状态不是正常状态，请先恢复账号',
-  scheduling_disabled: '账号调度已停用，请先开启账号调度',
-  non_positive_concurrency: '账号并发数必须大于 0',
-  expired: '账号凭据已过期，请先更新账号凭据',
-  overloaded: '账号正处于过载保护期，请稍后重试',
-  rate_limited: '账号正处于速率限制期，请等待限制解除后重试',
-  temporarily_unschedulable: '账号当前被临时暂停调度，请稍后重试',
-  codex_quota_protected: '账号正处于 Codex 额度保护期，请等待保护解除后重试',
-  anthropic_quota_protected: '账号正处于 Anthropic 额度保护期，请等待保护解除后重试',
-  opencode_quota_protected: '账号正处于 Opencode 额度保护期，请等待保护解除后重试'
-}
+const roomAccountBlockerMessages = (): Record<string, string> => ({
+  status_not_active: t('accountShare.roomAccounts.blockers.statusNotActive'),
+  scheduling_disabled: t('accountShare.roomAccounts.blockers.schedulingDisabled'),
+  non_positive_concurrency: t('accountShare.roomAccounts.blockers.nonPositiveConcurrency'),
+  expired: t('accountShare.roomAccounts.blockers.expired'),
+  overloaded: t('accountShare.roomAccounts.blockers.overloaded'),
+  rate_limited: t('accountShare.roomAccounts.blockers.rateLimited'),
+  temporarily_unschedulable: t('accountShare.roomAccounts.blockers.temporarilyUnschedulable'),
+  codex_quota_protected: t('accountShare.roomAccounts.blockers.codexQuotaProtected'),
+  anthropic_quota_protected: t('accountShare.roomAccounts.blockers.anthropicQuotaProtected'),
+  opencode_quota_protected: t('accountShare.roomAccounts.blockers.opencodeQuotaProtected')
+})
 
 interface OperationSummary {
   tone: 'success' | 'warning' | 'error'
@@ -642,7 +642,7 @@ const addableCandidateCount = computed(() => (
 
 const canCreateCompatibleAccount = computed(() => {
   const platform = normalizeComparableValue(props.listing?.platform)
-  const allowsUnknownLevel = platform === 'opencode' || platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' || platform === 'minimax' || platform === 'qwen'
+  const allowsUnknownLevel = platform === 'opencode' || platform === 'kimi' || platform === 'zhipu' || platform === 'deepseek' || platform === 'minimax' || platform === 'qwen' || platform === 'devin' || platform === 'api_aggregation'
   return (platform === 'openai' || platform === 'anthropic' || allowsUnknownLevel)
     && (allowsUnknownLevel || isKnownLevel(props.listing?.account_level))
 })
@@ -804,8 +804,8 @@ function candidateDisabledReason(account: Account): string {
     })
   }
 
-  // opencode 账号没有等级概念（account_level 恒为 unknown），跳过等级校验。
-  if (!isOpencodePlatform(listing.platform)) {
+  // opencode/api_aggregation 账号没有等级概念（account_level 恒为 unknown），跳过等级校验。
+  if (!isOpencodePlatform(listing.platform) && normalizeComparableValue(listing.platform) !== 'api_aggregation') {
     if (!isKnownLevel(listing.account_level)) {
       return t('accountShare.roomAccounts.roomLevelUnknown')
     }
@@ -849,7 +849,9 @@ function platformModeLabel(platform: unknown): string {
       ? 'Anthropic'
       : normalized === 'opencode'
         ? 'Opencode'
-        : String(platform || '')
+        : normalized === 'api_aggregation'
+          ? 'APIKEY'
+          : String(platform || '')
   return t('accountShare.roomAccounts.modePlatform', { platform: displayName })
 }
 
@@ -1037,15 +1039,15 @@ function describeRoomAccountOperationError(error: unknown, operation: RoomAccoun
     operation === 'add'
       ? t('accountShare.roomAccounts.addRequestFailed')
       : t('accountShare.roomAccounts.removeRequestFailed'),
-    ROOM_ACCOUNT_ERROR_MESSAGES
+    roomAccountErrorMessages()
   )
   if (extractApiErrorCode(error) !== 'ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL') return base
   const metadata = extractApiErrorMetadata(error) || {}
   const model = typeof metadata.model === 'string' ? metadata.model.trim() : ''
   const accountID = typeof metadata.account_id === 'string' ? metadata.account_id.trim() : ''
   if (!model) return base
-  const who = accountID ? `账号 #${accountID}` : '该账号'
-  return `${who}缺少房间要求的模型「${model}」。请在"我的账号"中为该账号补上这个模型，或把它从房间允许模型中移除后再试。`
+  const who = accountID ? t('accountShare.roomAccounts.accountRef', { id: accountID }) : t('accountShare.roomAccounts.thisAccount')
+  return t('accountShare.roomAccounts.missingModelFor', { who, model })
 }
 
 function roomAccountOperationFailureMessage(item: AccountShareRoomAccountsBatchResult): string {
@@ -1055,29 +1057,30 @@ function roomAccountOperationFailureMessage(item: AccountShareRoomAccountsBatchR
   if (reason === 'ACCOUNT_SHARE_MODE_UNSUPPORTED_MODEL') {
     const model = metadata.model?.trim()
     if (model) {
-      return `缺少房间要求的模型「${model}」。请在"我的账号"中补上该模型，或将其从房间模型白名单移除后重试。`
+      return t('accountShare.roomAccounts.missingModel', { model })
     }
   }
 
   if (reason === 'ACCOUNT_SHARE_ACCOUNT_UNAVAILABLE') {
     const blocker = metadata.blocker?.trim()
     if (blocker) {
-      return ROOM_ACCOUNT_UNAVAILABLE_BLOCKER_MESSAGES[blocker]
-        || `账号当前不可用（阻塞原因：${blocker}）`
+      return roomAccountBlockerMessages()[blocker]
+        || t('accountShare.roomAccounts.blockerFallback', { blocker })
     }
   }
 
-  if (reason && ROOM_ACCOUNT_ERROR_MESSAGES[reason]) {
-    return ROOM_ACCOUNT_ERROR_MESSAGES[reason]
+  const errorMessages = roomAccountErrorMessages()
+  if (reason && errorMessages[reason]) {
+    return errorMessages[reason]
   }
 
   const detail = item.message?.trim() || item.error?.trim() || ''
-  if (detail && ROOM_ACCOUNT_ERROR_MESSAGES[detail]) {
-    return ROOM_ACCOUNT_ERROR_MESSAGES[detail]
+  if (detail && errorMessages[detail]) {
+    return errorMessages[detail]
   }
-  if (reason && detail) return `操作失败（错误码：${reason}）：${detail}`
-  if (reason) return `操作失败（错误码：${reason}）`
-  if (detail) return `操作失败：${detail}`
+  if (reason && detail) return t('accountShare.roomAccounts.opFailedWithCodeDetail', { reason, detail })
+  if (reason) return t('accountShare.roomAccounts.opFailedWithCode', { reason })
+  if (detail) return t('accountShare.roomAccounts.opFailedWithDetail', { detail })
   return t('accountShare.roomAccounts.unknownFailure')
 }
 
@@ -1178,7 +1181,7 @@ async function loadAccounts(): Promise<void> {
     accountsErrorMessage.value = extractApiErrorMessage(
       error,
       t('accountShare.roomAccounts.loadFailed'),
-      ROOM_ACCOUNT_ERROR_MESSAGES
+      roomAccountErrorMessages()
     )
   } finally {
     if (currentVersion === accountsRequestVersion) {
@@ -1221,7 +1224,7 @@ async function loadCandidates(): Promise<void> {
     candidatesErrorMessage.value = extractApiErrorMessage(
       error,
       t('accountShare.roomAccounts.candidateLoadFailed'),
-      ROOM_ACCOUNT_ERROR_MESSAGES
+      roomAccountErrorMessages()
     )
   } finally {
     if (currentVersion === candidatesRequestVersion) {

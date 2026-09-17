@@ -651,10 +651,11 @@ const PlatformSelector = defineComponent({
       { value: 'grok', label: 'Grok', desc: t('userAccounts.importPlatformGrok') },
       { value: 'opencode', label: 'OpenCode', desc: t('userAccounts.importPlatformOpencode') },
       { value: 'kimi', label: 'Kimi', desc: 'Kimi API Key' },
-      { value: 'zhipu', label: '智谱 GLM', desc: '智谱 API Key' },
+      { value: 'zhipu', label: t('common.platforms.zhipu'), desc: t('common.platforms.zhipuApiKey') },
       { value: 'deepseek', label: 'DeepSeek', desc: 'DeepSeek API Key' },
       { value: 'minimax', label: 'MiniMax', desc: 'MiniMax API Key' },
-      { value: 'qwen', label: '通义千问', desc: 'Qwen API Key' }
+      { value: 'qwen', label: t('common.platforms.qwen'), desc: 'Qwen API Key' },
+      { value: 'devin', label: 'Devin', desc: 'Devin Session Token' }
     ]
     return () => h('div', { class: 'space-y-2' }, [
       h('label', { class: 'input-label' }, t('userAccounts.importPlatform')),

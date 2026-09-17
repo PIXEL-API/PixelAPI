@@ -403,7 +403,12 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		clientIP := ip.GetSecurityClientIP(c)
 		inboundEndpoint := GetInboundEndpoint(c)
 		upstreamAttemptID := h.beginOpenAIUpstreamAttempt(c, currentAPIKey, account)
-		result, err := h.gatewayService.ForwardAsChatCompletions(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
+		var result *service.OpenAIForwardResult
+		if account.IsDevin() {
+			result, err = h.forwardDevinChatCompletions(forwardCtx, c, account, forwardBody, sessionHash, &streamStarted)
+		} else {
+			result, err = h.gatewayService.ForwardAsChatCompletions(forwardCtx, c, account, forwardBody, promptCacheKey, defaultMappedModel)
+		}
 		cancelForward()
 		cyberPolicyHit, _ := h.recordCyberPolicyHitForAttempt(selectionCtx, c, currentAPIKey, upstreamAttemptID)
 		upstreamEndpoint := resolveOpenAIUpstreamEndpoint(c, account, result)

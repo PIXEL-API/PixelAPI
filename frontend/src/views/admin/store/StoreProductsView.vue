@@ -37,11 +37,14 @@
       </template>
     </TablePageLayout>
 
-    <Teleport to="body">
-      <div v-if="dialogOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="dialogOpen = false">
-        <form class="w-full max-w-2xl rounded-lg bg-white p-5 shadow-xl dark:bg-dark-900" @submit.prevent="submitForm">
-          <h2 class="text-lg font-semibold text-gray-900 dark:text-white">{{ editingProduct ? t('admin.store.editProduct') : t('admin.store.createProduct') }}</h2>
-          <div class="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <BaseDialog
+      :show="dialogOpen"
+      :title="editingProduct ? t('admin.store.editProduct') : t('admin.store.createProduct')"
+      width="medium"
+      @close="dialogOpen = false"
+    >
+      <form id="store-product-form" @submit.prevent="submitForm">
+        <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div class="sm:col-span-2">
               <label class="input-label">{{ t('common.name') }}</label>
               <input v-model.trim="form.name" class="input" required />
@@ -130,13 +133,12 @@
               <textarea v-model.trim="form.description" class="input min-h-24"></textarea>
             </div>
           </div>
-          <div class="mt-5 flex justify-end gap-2">
-            <button type="button" class="btn btn-secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</button>
-            <button type="submit" class="btn btn-primary" :disabled="saving">{{ saving ? t('common.saving') : t('common.save') }}</button>
-          </div>
-        </form>
-      </div>
-    </Teleport>
+      </form>
+      <template #footer>
+        <button type="button" class="btn btn-secondary" @click="dialogOpen = false">{{ t('common.cancel') }}</button>
+        <button type="submit" form="store-product-form" class="btn btn-primary" :disabled="saving">{{ saving ? t('common.saving') : t('common.save') }}</button>
+      </template>
+    </BaseDialog>
   </AppLayout>
 </template>
 
@@ -154,6 +156,7 @@ import DataTable from '@/components/common/DataTable.vue'
 import Pagination from '@/components/common/Pagination.vue'
 import Select from '@/components/common/Select.vue'
 import Toggle from '@/components/common/Toggle.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
 
 const { t } = useI18n()
 const appStore = useAppStore()

@@ -64,7 +64,8 @@ func (s *AccountShareModeService) modelsForRequest(ctx context.Context, apiKey *
 	if s.pricedModelCatalog == nil {
 		return nil, ErrOwnedAccountModelCatalogUnavailable
 	}
-	candidates, err := s.pricedModelCatalog.ListSelectablePricedModelIDs(ctx, PricedModelQuery{Platform: platform})
+	query := s.pricedModelQueryForPlatform(ctx, platform)
+	candidates, err := s.pricedModelCatalog.ListSelectablePricedModelIDs(ctx, query)
 	if err != nil {
 		return nil, ErrOwnedAccountModelCatalogUnavailable.WithCause(err)
 	}
@@ -86,7 +87,7 @@ func (s *AccountShareModeService) modelsForRequest(ctx context.Context, apiKey *
 		if !accountShareListingAllowsModel(listing, selectionModel) || !account.IsModelSupportedByMapping(selectionModel) {
 			continue
 		}
-		priced, err := s.pricedModelCatalog.IsModelPriced(ctx, PricedModelQuery{Platform: platform}, model)
+		priced, err := s.pricedModelCatalog.IsModelPriced(ctx, query, model)
 		if err != nil {
 			return nil, ErrOwnedAccountModelCatalogUnavailable.WithCause(err)
 		}
@@ -94,7 +95,7 @@ func (s *AccountShareModeService) modelsForRequest(ctx context.Context, apiKey *
 			continue
 		}
 		if selectionModel != model {
-			priced, err = s.pricedModelCatalog.IsModelPriced(ctx, PricedModelQuery{Platform: platform}, selectionModel)
+			priced, err = s.pricedModelCatalog.IsModelPriced(ctx, query, selectionModel)
 			if err != nil {
 				return nil, ErrOwnedAccountModelCatalogUnavailable.WithCause(err)
 			}

@@ -15,13 +15,20 @@ import (
 func TestResolveAccountShareRoomDefaultModels(t *testing.T) {
 	ctx := context.Background()
 
-	// 显式模型：归一化去空白去重，不触碰目录。
-	svc := &AccountShareModeService{}
+	// 显式模型：归一化去空白去重，并逐个过定价目录校验。
+	svc := &AccountShareModeService{pricedModelCatalog: &catalogStub{priced: func(_ context.Context, _ PricedModelQuery, modelID string) (bool, error) {
+		return modelID == "gpt-5.5", nil
+	}}}
 	got, err := svc.resolveAccountShareRoomDefaultModels(ctx, PlatformOpenAI, []string{" gpt-5.5 ", "gpt-5.5", ""})
 	require.NoError(t, err)
 	require.Equal(t, []string{"gpt-5.5"}, got)
 
+	// 显式模型未定价：拒绝，防止房间白名单绕过平台定价。
+	_, err = svc.resolveAccountShareRoomDefaultModels(ctx, PlatformOpenAI, []string{"gpt-4"})
+	require.ErrorIs(t, err, ErrAccountShareModeUnsupportedModel)
+
 	// 目录未注入：视为服务不可用，绝不回退静态默认列表。
+	svc = &AccountShareModeService{}
 	_, err = svc.resolveAccountShareRoomDefaultModels(ctx, PlatformOpenAI, nil)
 	require.ErrorIs(t, err, ErrServiceUnavailable)
 
@@ -130,7 +137,7 @@ func TestEnrichListingsSupportedModels_UnmappedAccountsUseCatalog(t *testing.T) 
 func TestEnrichListingsSupportedModels_NoAccountsKeepsNil(t *testing.T) {
 	ctx := context.Background()
 	svc := &AccountShareModeService{
-		repo:             &roomModelInfoRepoStub{infos: map[int64][]AccountShareRoomModelInfo{}},
+		repo: &roomModelInfoRepoStub{infos: map[int64][]AccountShareRoomModelInfo{}},
 		pricedModelCatalog: &catalogStub{
 			selectable: func(_ context.Context, _ PricedModelQuery) ([]string, error) {
 				return []string{"gpt-5.4", "gpt-5.5"}, nil
@@ -167,4 +174,3 @@ func TestEnrichListingsSupportedModels_MappedIntersectionFilteredByCatalog(t *te
 
 	require.Equal(t, []string{"gpt-5.5"}, listings[0].SupportedModels)
 }
-

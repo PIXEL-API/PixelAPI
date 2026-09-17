@@ -30,13 +30,20 @@ vi.mock('@/api/accounts', () => ({
   },
 }))
 
-vi.mock('vue-i18n', async () => {
-  const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
+vi.mock('vue-i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vue-i18n')>()
+  const { default: zh } = await import('@/i18n/locales/zh')
+  const resolve = (key: string): unknown =>
+    key.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), zh)
+  const t = (key: string, params?: Record<string, unknown>): string => {
+    const v = resolve(key)
+    if (typeof v !== 'string') return key
+    if (!params) return v
+    return Object.entries(params).reduce((s, [k, val]) => s.replaceAll(`{${k}}`, String(val)), v)
+  }
   return {
     ...actual,
-    useI18n: () => ({
-      t: (key: string) => key,
-    }),
+    useI18n: () => ({ t }),
   }
 })
 
@@ -214,8 +221,8 @@ describe('RoomAccountsDialog', () => {
     expect(wrapper.text()).toContain('健康账号')
     expect(wrapper.text()).toContain('暂停账号')
     expect(wrapper.text()).toContain('1/2')
-    expect(wrapper.text()).toContain('accountShare.roomAccounts.healthy')
-    expect(wrapper.text()).toContain('accountShare.roomAccounts.unavailable')
+    expect(wrapper.text()).toContain('健康')
+    expect(wrapper.text()).toContain('暂不可用')
   })
 
   it('does not count draining, zero-concurrency, or inactive-placement members as healthy', async () => {
@@ -230,8 +237,8 @@ describe('RoomAccountsDialog', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('1/4')
-    expect(wrapper.text().match(/accountShare\.roomAccounts\.healthy/g)).toHaveLength(1)
-    expect(wrapper.text().match(/accountShare\.roomAccounts\.unavailable/g)).toHaveLength(3)
+    expect(wrapper.text().match(/健康(?!账号)/g)).toHaveLength(1)
+    expect(wrapper.text().match(/暂不可用/g)).toHaveLength(3)
     wrapper.unmount()
   })
 
@@ -312,7 +319,7 @@ describe('RoomAccountsDialog', () => {
     expect(wrapper.text()).toContain('未知等级')
     expect(wrapper.text()).toContain('仅本人账号')
     expect(wrapper.text()).toContain('号主信息缺失')
-    expect(wrapper.text()).not.toContain('房间内账号')
+    expect(wrapper.text()).not.toContain('退出房间只会解除账号')
 
     const candidateCheckboxes = wrapper.findAll('input[type="checkbox"]')
     expect(candidateCheckboxes).toHaveLength(5)
@@ -405,7 +412,7 @@ describe('RoomAccountsDialog', () => {
       { operation: 'add', success: 1, failed: 0 },
     ]])
     expect(wrapper.get('[data-testid="room-accounts-operation-summary"]').text())
-      .toContain('accountShare.roomAccounts.addSuccess')
+      .toContain('已成功将 1 个账号加入房间')
   })
 
   it('reports every structured attach failure and keeps only failed accounts selected', async () => {
@@ -454,7 +461,7 @@ describe('RoomAccountsDialog', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="room-accounts-operation-summary"]').text())
-      .toContain('accountShare.roomAccounts.addPartial')
+      .toContain('部分账号加入房间成功：成功 1 个，失败 2 个')
     expect(wrapper.text()).toContain('缺模型账号')
     expect(wrapper.text()).toContain('缺少房间要求的模型「glm-5.3」')
     expect(wrapper.text()).toContain('限流账号')
@@ -610,7 +617,7 @@ describe('RoomAccountsDialog', () => {
     expect(wrapper.emitted('changed')).toEqual([[
       { operation: 'remove', success: 1, failed: 0 },
     ]])
-    expect(wrapper.text()).toContain('accountShare.roomAccounts.removeHint')
+    expect(wrapper.text()).toContain('退出房间只会解除账号')
   })
 
   it('reports item-level failures after a partial removal and refreshes real state', async () => {
@@ -643,7 +650,7 @@ describe('RoomAccountsDialog', () => {
     await flushPromises()
 
     expect(wrapper.get('[data-testid="room-accounts-operation-summary"]').text())
-      .toContain('accountShare.roomAccounts.removePartial')
+      .toContain('部分账号退出房间成功：成功 1 个，失败 1 个')
     expect(wrapper.text()).toContain('忙碌账号')
     expect(wrapper.text()).toContain('账号仍有运行中请求')
     expect(listRoomAccounts).toHaveBeenCalledTimes(2)

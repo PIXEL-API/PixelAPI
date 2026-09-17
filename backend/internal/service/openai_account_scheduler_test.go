@@ -3042,6 +3042,55 @@ func TestDefaultOpenAIAccountScheduler_IsAccountTransportCompatible_Branches(t *
 	require.True(t, scheduler.isAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2))
 }
 
+func TestSelectGrokMediaVideoRequestAccount_WaitsForBoundOwner(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(10420)
+	owner := openAITestAccountWithGroupIfUnset(Account{
+		ID:          36401,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+	}, groupID)
+	other := openAITestAccountWithGroupIfUnset(Account{
+		ID:          36402,
+		Platform:    PlatformGrok,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+	}, groupID)
+	concurrencyCache := schedulerTestConcurrencyCache{
+		acquireResults: map[int64]bool{
+			owner.ID: false,
+			other.ID: true,
+		},
+	}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: []Account{owner, other}},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                &config.Config{},
+		concurrencyService: NewConcurrencyService(concurrencyCache),
+	}
+
+	selection, decision, err := svc.SelectGrokMediaVideoRequestAccount(
+		ctx,
+		&groupID,
+		"video-owner-session",
+		owner.ID,
+		"grok-imagine-video",
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.Equal(t, owner.ID, selection.Account.ID)
+	require.False(t, selection.Acquired)
+	require.NotNil(t, selection.WaitPlan)
+	require.Equal(t, owner.ID, selection.WaitPlan.AccountID)
+	require.Equal(t, openAIAccountScheduleLayerSessionSticky, decision.Layer)
+	require.True(t, decision.StickySessionHit)
+}
+
 func int64PtrForTest(v int64) *int64 {
 	return &v
 }

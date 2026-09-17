@@ -86,6 +86,7 @@ type GeminiThinkingConfig struct {
 type GeminiToolDeclaration struct {
 	FunctionDeclarations []GeminiFunctionDecl `json:"functionDeclarations,omitempty"`
 	GoogleSearch         *GeminiGoogleSearch  `json:"googleSearch,omitempty"`
+	CodeExecution        *GeminiCodeExecution `json:"codeExecution,omitempty"`
 }
 
 // GeminiFunctionDecl Gemini 函数声明
@@ -109,6 +110,9 @@ type GeminiEnhancedContent struct {
 type GeminiImageSearch struct {
 	MaxResultCount int `json:"maxResultCount,omitempty"`
 }
+
+// GeminiCodeExecution Gemini 内置代码执行工具
+type GeminiCodeExecution struct{}
 
 // GeminiToolConfig Gemini 工具配置
 type GeminiToolConfig struct {

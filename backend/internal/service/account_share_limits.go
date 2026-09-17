@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"log"
 	"time"
 )
 
@@ -54,21 +55,24 @@ type AccountShareCapabilityBlocker struct {
 }
 
 type AccountShareCapabilities struct {
-	LifecycleEnabled   bool                            `json:"lifecycle_enabled"`
-	CanCreateRoom      bool                            `json:"can_create_room"`
-	LiveRooms          AccountShareQuotaValue          `json:"live_rooms"`
-	RoomCreates24Hours AccountShareQuotaValue          `json:"room_creates_24_hours"`
-	OwnerRoomAccounts  AccountShareQuotaValue          `json:"owner_room_accounts"`
-	MaxAccountsPerRoom int                             `json:"max_accounts_per_room"`
-	SeatLimitMinimum   int                             `json:"seat_limit_minimum"`
-	SeatLimitMaximum   int                             `json:"seat_limit_maximum"`
-	QuotaSource        string                          `json:"quota_source"`
-	QuotaPolicyID      int64                           `json:"quota_policy_id"`
-	QuotaPolicyVersion int64                           `json:"quota_policy_version"`
-	QuotaOverrideKind  string                          `json:"quota_override_kind"`
-	QuotaExpiresAt     *time.Time                      `json:"quota_expires_at,omitempty"`
-	QuotaGrowthBlocked bool                            `json:"quota_growth_blocked"`
-	CapabilityBlockers []AccountShareCapabilityBlocker `json:"capability_blockers"`
+	LifecycleEnabled bool `json:"lifecycle_enabled"`
+	CanCreateRoom    bool `json:"can_create_room"`
+	// CommentReviewEnabled 告知前端评论审核是否已配置可用；为 false 时前端
+	// 应禁用评论输入，只允许提交纯评分，避免用户输入后才被服务端拒绝。
+	CommentReviewEnabled bool                            `json:"comment_review_enabled"`
+	LiveRooms            AccountShareQuotaValue          `json:"live_rooms"`
+	RoomCreates24Hours   AccountShareQuotaValue          `json:"room_creates_24_hours"`
+	OwnerRoomAccounts    AccountShareQuotaValue          `json:"owner_room_accounts"`
+	MaxAccountsPerRoom   int                             `json:"max_accounts_per_room"`
+	SeatLimitMinimum     int                             `json:"seat_limit_minimum"`
+	SeatLimitMaximum     int                             `json:"seat_limit_maximum"`
+	QuotaSource          string                          `json:"quota_source"`
+	QuotaPolicyID        int64                           `json:"quota_policy_id"`
+	QuotaPolicyVersion   int64                           `json:"quota_policy_version"`
+	QuotaOverrideKind    string                          `json:"quota_override_kind"`
+	QuotaExpiresAt       *time.Time                      `json:"quota_expires_at,omitempty"`
+	QuotaGrowthBlocked   bool                            `json:"quota_growth_blocked"`
+	CapabilityBlockers   []AccountShareCapabilityBlocker `json:"capability_blockers"`
 }
 
 type AccountShareQuotaUsage struct {
@@ -201,6 +205,13 @@ func (s *AccountShareModeService) GetCapabilities(ctx context.Context, ownerUser
 		})
 	}
 	result.CanCreateRoom = len(result.CapabilityBlockers) == 0
+	// 评论审核可用性读取失败时保守按未启用处理：前端提示后用户仍可提交
+	// 纯评分，服务端 SubmitReview 的 fail-closed 检查保持兜底。
+	if _, ready, reviewErr := s.loadAccountShareCommentReviewConfig(ctx); reviewErr != nil {
+		log.Printf("account_share_mode: load comment review config for capabilities failed: %v", reviewErr)
+	} else {
+		result.CommentReviewEnabled = ready
+	}
 	return result, nil
 }
 

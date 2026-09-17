@@ -4,9 +4,12 @@
       <!-- Left: Mobile Menu Toggle + Page Title -->
       <div class="flex flex-none items-center gap-2 lg:min-w-0 lg:flex-1 lg:gap-4">
         <button
+          id="app-header-menu-toggle"
           @click="toggleMobileSidebar"
           class="btn-ghost btn-icon header-icon-button flex-none lg:hidden"
-          aria-label="Toggle Menu"
+          :aria-label="t('nav.toggleMenu')"
+          :aria-expanded="appStore.mobileOpen"
+          aria-controls="app-sidebar"
         >
           <Icon name="menu" size="md" />
         </button>
@@ -109,9 +112,14 @@
         <!-- User Dropdown -->
         <div v-if="user" class="relative min-w-0 flex-none" ref="dropdownRef">
           <button
+            ref="userMenuTriggerRef"
             @click="toggleDropdown"
+            @keydown="onTriggerKeydown"
             class="header-user-button min-w-0"
-            aria-label="User Menu"
+            :aria-label="t('nav.userMenu')"
+            aria-haspopup="menu"
+            :aria-expanded="dropdownOpen"
+            :aria-controls="dropdownOpen ? USER_MENU_ID : undefined"
           >
             <div class="header-avatar">
               <img
@@ -135,7 +143,15 @@
 
           <!-- Dropdown Menu -->
           <transition name="dropdown">
-            <div v-if="dropdownOpen" class="dropdown right-0 mt-2 w-56">
+            <div
+              v-if="dropdownOpen"
+              :id="USER_MENU_ID"
+              class="dropdown right-0 mt-2 w-56"
+              role="menu"
+              :aria-label="t('nav.userMenu')"
+              @keydown="onMenuKeydown"
+              @focusout="onMenuFocusout"
+            >
               <!-- User Info -->
               <div class="border-b border-gray-100 px-4 py-3 dark:border-dark-700">
                 <div class="text-sm font-medium text-gray-900 dark:text-white">
@@ -162,17 +178,20 @@
                   rel="noopener noreferrer"
                   @click="closeDropdown"
                   class="dropdown-item sm:hidden"
+                  role="menuitem"
+                  tabindex="-1"
+                  data-menu-item
                 >
                   <Icon name="book" size="sm" />
                   {{ t('nav.docs') }}
                 </a>
 
-                <router-link to="/profile" @click="closeDropdown" class="dropdown-item">
+                <router-link to="/profile" @click="closeDropdown" class="dropdown-item" role="menuitem" tabindex="-1" data-menu-item>
                   <Icon name="user" size="sm" />
                   {{ t('nav.profile') }}
                 </router-link>
 
-                <router-link to="/keys" @click="closeDropdown" class="dropdown-item">
+                <router-link to="/keys" @click="closeDropdown" class="dropdown-item" role="menuitem" tabindex="-1" data-menu-item>
                   <Icon name="key" size="sm" />
                   {{ t('nav.apiKeys') }}
                 </router-link>
@@ -184,6 +203,9 @@
                   rel="noopener noreferrer"
                   @click="closeDropdown"
                   class="dropdown-item"
+                  role="menuitem"
+                  tabindex="-1"
+                  data-menu-item
                 >
                   <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
                     <path
@@ -224,7 +246,7 @@
               </div>
 
               <div v-if="showOnboardingButton" class="border-t border-gray-100 py-1 dark:border-dark-700">
-                <button @click="handleReplayGuide" class="dropdown-item w-full">
+                <button @click="handleReplayGuide" class="dropdown-item w-full" role="menuitem" tabindex="-1" data-menu-item>
                   <svg class="h-4 w-4" fill="currentColor" viewBox="0 0 24 24">
                     <path
                       d="M12 2a10 10 0 100 20 10 10 0 000-20zm0 14a1 1 0 110 2 1 1 0 010-2zm1.07-7.75c0-.6-.49-1.25-1.32-1.25-.7 0-1.22.4-1.43 1.02a1 1 0 11-1.9-.62A3.41 3.41 0 0111.8 5c2.02 0 3.25 1.4 3.25 2.9 0 2-1.83 2.55-2.43 3.12-.43.4-.47.75-.47 1.23a1 1 0 01-2 0c0-1 .16-1.82 1.1-2.7.69-.64 1.82-1.05 1.82-2.06z"
@@ -238,6 +260,9 @@
                 <button
                   @click="handleLogout"
                   class="dropdown-item w-full text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
+                  role="menuitem"
+                  tabindex="-1"
+                  data-menu-item
                 >
                   <svg
                     class="h-4 w-4"
@@ -264,7 +289,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useAppStore, useAuthStore, useOnboardingStore } from '@/stores'
@@ -275,6 +300,7 @@ import AnnouncementBell from '@/components/common/AnnouncementBell.vue'
 import HeaderInviteLink from '@/components/layout/HeaderInviteLink.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { FeatureFlags, isFeatureFlagEnabled } from '@/utils/featureFlags'
+import { useDropdownMenu } from '@/composables/useDropdownMenu'
 
 const router = useRouter()
 const route = useRoute()
@@ -344,12 +370,26 @@ function toggleMobileSidebar() {
   appStore.toggleMobileSidebar()
 }
 
+const USER_MENU_ID = 'app-header-user-menu'
+const userMenuTriggerRef = ref<HTMLButtonElement | null>(null)
+const {
+  toggleMenu,
+  closeMenu,
+  onTriggerKeydown,
+  onMenuKeydown,
+  onMenuFocusout
+} = useDropdownMenu({
+  open: dropdownOpen,
+  container: dropdownRef,
+  trigger: userMenuTriggerRef
+})
+
 function toggleDropdown() {
-  dropdownOpen.value = !dropdownOpen.value
+  toggleMenu()
 }
 
 function closeDropdown() {
-  dropdownOpen.value = false
+  closeMenu(false)
 }
 
 async function handleLogout() {
@@ -368,19 +408,6 @@ function handleReplayGuide() {
   onboardingStore.replay()
 }
 
-function handleClickOutside(event: MouseEvent) {
-  if (dropdownRef.value && !dropdownRef.value.contains(event.target as Node)) {
-    closeDropdown()
-  }
-}
-
-onMounted(() => {
-  document.addEventListener('click', handleClickOutside)
-})
-
-onBeforeUnmount(() => {
-  document.removeEventListener('click', handleClickOutside)
-})
 </script>
 
 <style scoped>

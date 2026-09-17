@@ -479,6 +479,109 @@ func TestOpencodeTLSFingerprintAndUserAgent(t *testing.T) {
 	}
 }
 
+func TestOpencodeAccountModes(t *testing.T) {
+	legacy := &Account{
+		Platform: PlatformOpencode,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key": "opencode-secret",
+		},
+	}
+	if got := legacy.GetOpencodeAccountMode(); got != OpencodeAccountModeGo {
+		t.Fatalf("legacy mode = %q, want %q", got, OpencodeAccountModeGo)
+	}
+	if !legacy.IsOpencodeGoPlan() || legacy.IsOpencodeZen() {
+		t.Fatal("legacy OpenCode account must remain a GO account")
+	}
+	if got := legacy.GetOpencodeBaseURL(); got != OpencodeDefaultBaseURL {
+		t.Fatalf("legacy base url = %q, want %q", got, OpencodeDefaultBaseURL)
+	}
+
+	zen := &Account{
+		Platform: PlatformOpencode,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":      "opencode-secret",
+			"account_mode": OpencodeAccountModeZen,
+		},
+	}
+	if got := zen.GetOpencodeAccountMode(); got != OpencodeAccountModeZen {
+		t.Fatalf("zen mode = %q, want %q", got, OpencodeAccountModeZen)
+	}
+	if !zen.IsOpencodeZen() || zen.IsOpencodeGoPlan() {
+		t.Fatal("explicit account_mode=zen must select the Zen account plan")
+	}
+	if got := zen.GetOpencodeBaseURL(); got != OpencodeZenBaseURL {
+		t.Fatalf("zen base url = %q, want %q", got, OpencodeZenBaseURL)
+	}
+
+	nonAPIKey := &Account{Platform: PlatformOpencode, Type: AccountTypeOAuth}
+	if got := nonAPIKey.GetOpencodeAccountMode(); got != "" {
+		t.Fatalf("non-apikey mode = %q, want empty", got)
+	}
+	if got := nonAPIKey.GetOpencodeBaseURL(); got != "" {
+		t.Fatalf("non-apikey base url = %q, want empty", got)
+	}
+}
+
+func TestValidateOpencodeAccountConfiguration(t *testing.T) {
+	if err := validateOpencodeAccountConfiguration(PlatformOpencode, AccountTypeAPIKey, map[string]any{
+		"api_key":      "opencode-secret",
+		"account_mode": OpencodeAccountModeZen,
+	}); err != nil {
+		t.Fatalf("zen account configuration was rejected: %v", err)
+	}
+	if err := validateOpencodeAccountConfiguration(PlatformOpencode, AccountTypeOAuth, map[string]any{
+		"api_key": "opencode-secret",
+	}); err == nil {
+		t.Fatal("OpenCode OAuth account must be rejected")
+	}
+	for _, mode := range []any{"invalid", " zen ", 1} {
+		if err := validateOpencodeAccountConfiguration(PlatformOpencode, AccountTypeAPIKey, map[string]any{
+			"api_key":      "opencode-secret",
+			"account_mode": mode,
+		}); err == nil {
+			t.Fatalf("invalid account_mode %#v was accepted", mode)
+		}
+	}
+}
+
+func TestOpencodeOwnedAccountAllowsAccountMode(t *testing.T) {
+	if err := validateOwnedAccountSourceForPlatform(PlatformOpencode, AccountTypeAPIKey, map[string]any{
+		"api_key":      "opencode-secret",
+		"account_mode": OpencodeAccountModeZen,
+	}, nil); err != nil {
+		t.Fatalf("owned OpenCode account_mode was rejected: %v", err)
+	}
+}
+
+func TestOpencodeModelSpecUsesAccountModeCatalog(t *testing.T) {
+	goAccount := &Account{Platform: PlatformOpencode, Type: AccountTypeAPIKey}
+	zenAccount := &Account{
+		Platform: PlatformOpencode,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"account_mode": OpencodeAccountModeZen,
+		},
+	}
+
+	goSpec, ok := opencodeModelSpec(goAccount, "minimax-m3")
+	if !ok || goSpec.Protocol != OpencodeGoProtocolMessages {
+		t.Fatalf("GO minimax spec = %+v, found=%v; want Messages", goSpec, ok)
+	}
+	zenSpec, ok := opencodeModelSpec(zenAccount, "minimax-m3")
+	if !ok || zenSpec.Protocol != OpencodeGoProtocolChat {
+		t.Fatalf("Zen minimax spec = %+v, found=%v; want Chat", zenSpec, ok)
+	}
+	if _, ok := opencodeModelSpec(goAccount, "gpt-5.5"); ok {
+		t.Fatal("GO catalog unexpectedly contains Zen-only gpt-5.5")
+	}
+	zenResponses, ok := opencodeModelSpec(zenAccount, "gpt-5.5")
+	if !ok || zenResponses.Protocol != OpencodeGoProtocolResponses {
+		t.Fatalf("Zen gpt-5.5 spec = %+v, found=%v; want Responses", zenResponses, ok)
+	}
+}
+
 func floatPtr(v float64) *float64 { return &v }
 
 func TestDeriveOpencodeAPIKeyImportName(t *testing.T) {

@@ -824,7 +824,7 @@ func (s *AccountUsageService) refreshOpencodeUsageIfStale(ctx context.Context, a
 // probeOpencodeUsage 主动拉取 opencode 的 GET /zen/go/v1/usage 端点，
 // 解析三个用量窗口并回写账号 extra。端点格式未文档化，解析失败仅跳过更新。
 func (s *AccountUsageService) probeOpencodeUsage(ctx context.Context, account *Account) (map[string]any, error) {
-	if account == nil || !account.IsOpencodeApiKey() {
+	if !account.IsOpencodeGoPlan() {
 		return nil, nil
 	}
 	apiKey := account.GetOpencodeApiKey()

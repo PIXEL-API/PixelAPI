@@ -168,7 +168,7 @@
             </button>
             <div
               v-if="showColumnDropdown"
-              class="absolute right-0 top-full z-50 mt-1 max-h-80 w-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800"
+              class="absolute right-0 top-full z-[var(--ui-z-menu)] mt-1 max-h-80 w-48 overflow-y-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800"
             >
               <button
                 v-for="col in toggleableColumns"
@@ -305,14 +305,14 @@
                   v-if="ledgerFilters.user_id"
                   type="button"
                   class="absolute right-2 top-9 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
-                  aria-label="Clear user filter"
+                  :aria-label="t('common.clearFilter')"
                   @click="clearLedgerUser"
                 >
                   ×
                 </button>
                 <div
                   v-if="showLedgerUserDropdown && (ledgerUserResults.length > 0 || ledgerUserKeyword)"
-                  class="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800"
+                  class="absolute z-[var(--ui-z-menu)] mt-1 max-h-60 w-full overflow-auto rounded-lg border border-gray-200 bg-white py-1 shadow-lg dark:border-dark-600 dark:bg-dark-800"
                 >
                   <button
                     v-for="u in ledgerUserResults"

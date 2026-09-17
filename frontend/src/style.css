@@ -28,6 +28,25 @@
     --ui-focus: 37 99 235;
     --ui-shadow-card: 0 1px 2px rgb(15 23 42 / 0.04);
     --ui-shadow-elevated: 0 12px 32px rgb(15 23 42 / 0.10);
+
+    /* 统一层级表 —— 新代码必须使用变量，禁止再写裸数字。
+       页面骨架层在此定义；全局浮层（menu/dialog/tooltip/select）的语义变量
+       由 theme-kit/primitives.css 在 :root 统一定义：
+         --ui-z-menu    (100000030)  传送菜单/下拉
+         --ui-z-dialog  (100000000)  玻璃主题弹窗遮罩
+         --ui-z-tooltip (100000040)  fixed tooltip
+         --ui-z-select  (100000020)  传送到 body 的列表框（glass-flow 主题域内定义，
+                                    使用时须带 fallback：var(--ui-z-select, 100000020)） */
+    --ui-z-header: 30;              /* 吸顶头部 */
+    --ui-z-toolbar: 20;             /* 次级吸顶工具栏（须低于 header） */
+    --ui-z-drawer-backdrop: 30;     /* 移动端抽屉遮罩（低于抽屉） */
+    --ui-z-sidebar: 40;             /* 侧边栏/移动抽屉 */
+    --ui-z-modal: 50;               /* BaseDialog 默认层 */
+    --ui-z-modal-stacked: 60;       /* 叠加在弹窗之上的轻量层（如图片预览） */
+    --ui-z-overlay: 100;            /* 全屏遮罩/弹窗内浮层 */
+    --ui-z-overlay-raised: 110;     /* 叠在全屏遮罩上的二级面板 */
+    --ui-z-modal-priority: 140;     /* 最高优先级的阻塞式弹窗（如协议确认） */
+    --ui-z-toast: 100000050;        /* Toast 通知，须高于 tooltip */
   }
 
   .dark {
@@ -419,7 +438,7 @@
 
   /* ============ 下拉菜单 ============ */
   .dropdown {
-    @apply absolute z-50;
+    @apply absolute z-[var(--ui-z-menu)];
     @apply bg-white dark:bg-dark-800;
     @apply rounded-xl;
     @apply border border-gray-200 dark:border-dark-700;
@@ -438,7 +457,7 @@
 
   /* ============ 模态框 ============ */
   .modal-overlay {
-    @apply fixed inset-0 z-50;
+    @apply fixed inset-0 z-[var(--ui-z-modal)];
     @apply bg-black/50 backdrop-blur-sm;
     @apply flex items-center justify-center p-2 sm:p-4;
   }
@@ -477,7 +496,8 @@
   }
 
   /* 防止body滚动的工具类 */
-  body.modal-open {
+  body.modal-open,
+  body.sidebar-drawer-open {
     overflow: hidden;
   }
 
@@ -494,22 +514,28 @@
     opacity: 0;
   }
 
-  .modal-enter-active .modal-content {
+  .modal-enter-active .modal-content,
+  .modal-enter-active .modal-shell-panel {
     transition: transform 250ms ease-out, opacity 250ms ease-out;
   }
 
-  .modal-leave-active .modal-content {
+  .modal-leave-active .modal-content,
+  .modal-leave-active .modal-shell-panel {
     transition: transform 200ms ease-in, opacity 200ms ease-in;
   }
 
   .modal-enter-from .modal-content,
-  .modal-leave-to .modal-content {
+  .modal-leave-to .modal-content,
+  .modal-enter-from .modal-shell-panel,
+  .modal-leave-to .modal-shell-panel {
     transform: scale(0.95);
     opacity: 0;
   }
 
   .modal-enter-to .modal-content,
-  .modal-leave-from .modal-content {
+  .modal-leave-from .modal-content,
+  .modal-enter-to .modal-shell-panel,
+  .modal-leave-from .modal-shell-panel {
     transform: scale(1);
     opacity: 1;
   }
@@ -518,20 +544,24 @@
     .modal-enter-active,
     .modal-leave-active,
     .modal-enter-active .modal-content,
-    .modal-leave-active .modal-content {
+    .modal-leave-active .modal-content,
+    .modal-enter-active .modal-shell-panel,
+    .modal-leave-active .modal-shell-panel {
       transition-duration: 1ms;
       transition-delay: 0ms;
     }
 
     .modal-enter-from .modal-content,
-    .modal-leave-to .modal-content {
+    .modal-leave-to .modal-content,
+    .modal-enter-from .modal-shell-panel,
+    .modal-leave-to .modal-shell-panel {
       transform: none;
     }
   }
 
   /* ============ Dialog ============ */
   .dialog-overlay {
-    @apply fixed inset-0 z-50;
+    @apply fixed inset-0 z-[var(--ui-z-modal)];
     @apply bg-black/40 dark:bg-black/60;
     @apply flex items-center justify-center p-4;
   }
@@ -721,7 +751,7 @@
 
   /* ============ Toast 通知 ============ */
   .toast {
-    @apply fixed right-4 top-4 z-[100];
+    @apply fixed right-4 top-4 z-[var(--ui-z-toast)];
     @apply min-w-[320px] max-w-md;
     @apply bg-white dark:bg-dark-800;
     @apply rounded-xl shadow-lg;
@@ -748,7 +778,7 @@
 
   /* ============ 侧边栏 ============ */
   .sidebar {
-    @apply fixed inset-y-0 left-0 z-40;
+    @apply fixed inset-y-0 left-0 z-[var(--ui-z-sidebar)];
     @apply w-64 border-r border-line bg-surface;
     @apply flex flex-col;
     @apply transition-transform duration-200;
@@ -816,7 +846,7 @@
   }
 
   .app-header {
-    @apply sticky top-0 z-30 border-b border-line backdrop-blur-xl;
+    @apply sticky top-0 z-[var(--ui-z-header)] border-b border-line backdrop-blur-xl;
     background-color: rgb(var(--ui-surface) / 0.92);
   }
 

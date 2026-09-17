@@ -1,5 +1,10 @@
 <template>
   <div class="app-shell" :class="{ 'app-shell-viewport': contentLayout === 'viewport' }">
+    <!-- 键盘用户跳转主内容的快捷链接 -->
+    <a href="#main-content" class="skip-to-content">
+      {{ t('common.skipToContent') }}
+    </a>
+
     <!-- Sidebar -->
     <AppSidebar />
 
@@ -16,6 +21,8 @@
 
       <!-- Main Content -->
       <main
+        id="main-content"
+        tabindex="-1"
         class="app-content"
         :class="{ 'app-content-viewport': contentLayout === 'viewport' }"
         :data-ui-skin="uiSkin"
@@ -29,6 +36,7 @@
 <script setup lang="ts">
 import '@/styles/onboarding.css'
 import { computed, onMounted } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores'
 import { useAuthStore } from '@/stores/auth'
 import { useOnboardingTour } from '@/composables/useOnboardingTour'
@@ -43,6 +51,7 @@ withDefaults(defineProps<{
   contentLayout: 'default'
 })
 
+const { t } = useI18n()
 const appStore = useAppStore()
 const authStore = useAuthStore()
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed)
@@ -64,6 +73,27 @@ defineExpose({ replayTour })
 </script>
 
 <style scoped>
+.skip-to-content {
+  position: fixed;
+  top: -100%;
+  left: 1rem;
+  z-index: var(--ui-z-toast);
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  background: rgb(var(--ui-brand));
+  color: #fff;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-decoration: none;
+  transition: top 0.15s ease;
+}
+
+.skip-to-content:focus-visible {
+  top: 1rem;
+  outline: 2px solid rgb(var(--ui-focus));
+  outline-offset: 2px;
+}
+
 .app-shell.app-shell-viewport {
   height: 100dvh;
   min-height: 0;

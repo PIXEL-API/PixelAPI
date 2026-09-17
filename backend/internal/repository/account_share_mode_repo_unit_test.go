@@ -2323,6 +2323,7 @@ func TestAccountShareModeRepositoryJoinListingOwnerSelfUseHasNoSeatPrepay(t *tes
 			sqlmock.AnyArg(),
 			service.AccountShareSnapshotQualityExact,
 			sqlmock.AnyArg(),
+			nil,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id",
@@ -2817,6 +2818,7 @@ func TestAccountShareModeRepositoryJoinListingDirectlyCreatesActiveBinding(t *te
 			sqlmock.AnyArg(),
 			service.AccountShareSnapshotQualityExact,
 			sqlmock.AnyArg(),
+			nil,
 		).
 		WillReturnRows(sqlmock.NewRows([]string{
 			"id",
@@ -9324,6 +9326,7 @@ type accountShareListingRowData struct {
 	QueueDispatchCooldownUntil              any
 	LastUsedMembershipID                    any
 	LastUsedAt                              any
+	JoinPasswordHash                        any
 }
 
 func accountShareListingRows(listingID, accountID, ownerUserID int64, configure ...func(*accountShareListingRowData)) *sqlmock.Rows {
@@ -9377,6 +9380,7 @@ func accountShareListingRows(listingID, accountID, ownerUserID int64, configure 
 		"codex_cli_only",
 		"codex_5h_limit_percent",
 		"codex_7d_limit_percent",
+		"join_password_hash",
 		"platform",
 		"type",
 		"account_level",
@@ -9455,6 +9459,7 @@ func accountShareListingRows(listingID, accountID, ownerUserID int64, configure 
 		false,
 		99.0,
 		99.0,
+		row.JoinPasswordHash,
 		service.PlatformOpenAI,
 		service.AccountTypeOAuth,
 		"pro",

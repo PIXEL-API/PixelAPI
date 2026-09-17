@@ -141,6 +141,11 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 			return EndpointGeminiModels
 		}
 		return EndpointMessages
+
+	case service.PlatformDevin:
+		// Devin forwards to the internal Chat Completions-compatible RPC; the
+		// inbound endpoint already reflects the effective upstream surface.
+		return inbound
 	}
 
 	// Unknown platform — fall back to inbound.

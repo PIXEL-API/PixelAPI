@@ -419,6 +419,48 @@ func TestResponsesToChatCompletionsRequest_PromptCacheControls(t *testing.T) {
 	require.Equal(t, req.PromptCacheOptions, chatReq.PromptCacheOptions)
 }
 
+func TestResponsesToChatCompletionsRequest_LeadingSystemAndDeveloperMerge(t *testing.T) {
+	req := &ResponsesRequest{
+		Model:        "gpt-4o",
+		Instructions: "Use concise answers.",
+		Input: json.RawMessage(`[
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"Prefer JSON."}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}
+		]`),
+	}
+
+	chatReq, err := ResponsesToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	require.Len(t, chatReq.Messages, 2)
+	assert.Equal(t, "system", chatReq.Messages[0].Role)
+	assert.JSONEq(t, `"Use concise answers.\n\nPrefer JSON."`, string(chatReq.Messages[0].Content))
+	assert.Equal(t, "user", chatReq.Messages[1].Role)
+}
+
+func TestResponsesToChatCompletionsRequest_MidConversationSystemBecomesUser(t *testing.T) {
+	req := &ResponsesRequest{
+		Model: "gpt-4o",
+		Input: json.RawMessage(`[
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"hi"}]},
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"<model_switch> switched model"}]},
+			{"type":"message","role":"system","content":[{"type":"input_text","text":"be terse"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}
+		]`),
+	}
+
+	chatReq, err := ResponsesToChatCompletionsRequest(req)
+	require.NoError(t, err)
+	require.Len(t, chatReq.Messages, 5)
+	assert.Equal(t, []string{"user", "assistant", "user", "user", "user"}, []string{
+		chatReq.Messages[0].Role,
+		chatReq.Messages[1].Role,
+		chatReq.Messages[2].Role,
+		chatReq.Messages[3].Role,
+		chatReq.Messages[4].Role,
+	})
+}
+
 func TestChatCompletionsToResponses_AssistantWithTextAndToolCalls(t *testing.T) {
 	req := &ChatCompletionsRequest{
 		Model: "gpt-4o",

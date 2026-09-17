@@ -6,10 +6,10 @@
       >
         <div>
           <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-            发票管理
+            {{ t('admin.invoices.title') }}
           </h1>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            处理用户提交的发票申请
+            {{ t('admin.invoices.subtitle') }}
           </p>
         </div>
         <div class="flex w-full flex-wrap gap-2 lg:w-auto">
@@ -18,17 +18,17 @@
             class="input w-full sm:w-36"
             @change="handleFilterChange"
           >
-            <option value="">全部状态</option>
-            <option value="pending">待处理</option>
-            <option value="issued">已开票</option>
-            <option value="rejected">已驳回</option>
-            <option value="cancelled">已取消</option>
+            <option value="">{{ t('admin.invoices.filterAll') }}</option>
+            <option value="pending">{{ t('admin.invoices.statusPending') }}</option>
+            <option value="issued">{{ t('admin.invoices.statusIssued') }}</option>
+            <option value="rejected">{{ t('admin.invoices.statusRejected') }}</option>
+            <option value="cancelled">{{ t('admin.invoices.statusCancelled') }}</option>
           </select>
           <input
             v-model.trim="filters.keyword"
             class="input w-full sm:w-56"
             type="search"
-            placeholder="申请号 / 用户 / 抬头"
+            :placeholder="t('admin.invoices.searchPlaceholder')"
             @keyup.enter="handleSearch"
           />
           <button
@@ -37,7 +37,7 @@
             @click="handleSearch"
             :disabled="loading"
           >
-            查询
+            {{ t('admin.invoices.search') }}
           </button>
           <button
             class="btn btn-primary min-h-11 flex-1 sm:flex-none"
@@ -57,14 +57,14 @@
             class="flex flex-col gap-2 border-b border-gray-100 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between dark:border-dark-700"
           >
             <span class="text-gray-600 dark:text-gray-300">
-              已选择 {{ selectedCount }} 条待处理申请
+              {{ t('admin.invoices.selectedCount', { selectedCount }) }}
             </span>
             <button
               class="btn btn-sm btn-secondary min-h-11 self-start sm:self-auto"
               type="button"
               @click="clearSelection"
             >
-              清除选择
+              {{ t('admin.invoices.clearSelection') }}
             </button>
           </div>
           <div class="overflow-x-auto">
@@ -87,16 +87,16 @@
                         :disabled="selectableRequests.length === 0"
                         @change="toggleVisibleSelection"
                       />
-                      <span class="sr-only">选择当前待处理申请</span>
+                      <span class="sr-only">{{ t('admin.invoices.selectPending') }}</span>
                     </label>
                   </th>
-                  <th class="px-4 py-3">申请号</th>
-                  <th class="px-4 py-3">用户</th>
-                  <th class="px-4 py-3">抬头</th>
-                  <th class="px-4 py-3">类型</th>
-                  <th class="px-4 py-3 text-right">金额</th>
-                  <th class="px-4 py-3">状态</th>
-                  <th class="px-4 py-3">申请时间</th>
+                  <th class="px-4 py-3">{{ t('admin.invoices.colRequestNo') }}</th>
+                  <th class="px-4 py-3">{{ t('admin.invoices.colUser') }}</th>
+                  <th class="px-4 py-3">{{ t('admin.invoices.colTitle') }}</th>
+                  <th class="px-4 py-3">{{ t('admin.invoices.colType') }}</th>
+                  <th class="px-4 py-3 text-right">{{ t('admin.invoices.colAmount') }}</th>
+                  <th class="px-4 py-3">{{ t('admin.invoices.colStatus') }}</th>
+                  <th class="px-4 py-3">{{ t('admin.invoices.colCreatedAt') }}</th>
                 </tr>
               </thead>
               <tbody class="divide-y divide-gray-100 dark:divide-dark-700">
@@ -121,7 +121,7 @@
                         :checked="isSelected(request.id)"
                         @change="toggleSelection(request.id)"
                       />
-                      <span class="sr-only">选择 {{ request.request_no }}</span>
+                      <span class="sr-only">{{ t('admin.invoices.selectRow', { requestNo: request.request_no }) }}</span>
                     </label>
                     <span v-else class="text-gray-300 dark:text-dark-600">-</span>
                   </td>
@@ -148,7 +148,7 @@
                     colspan="8"
                     class="px-4 py-8 text-center text-sm text-gray-500 dark:text-gray-400"
                   >
-                    暂无发票申请
+                    {{ t('admin.invoices.empty') }}
                   </td>
                 </tr>
               </tbody>
@@ -187,25 +187,25 @@
 
             <dl class="grid gap-3 text-sm">
               <div class="flex justify-between gap-4">
-                <dt class="text-gray-500 dark:text-gray-400">类型</dt>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.invoices.colType') }}</dt>
                 <dd class="text-right text-gray-900 dark:text-white">
                   {{ invoiceTypeLabel(selected.invoice_type) }}
                 </dd>
               </div>
               <div class="flex justify-between gap-4">
-                <dt class="text-gray-500 dark:text-gray-400">税号</dt>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.invoices.taxId') }}</dt>
                 <dd class="text-right text-gray-900 dark:text-white">
                   {{ selected.tax_id || "-" }}
                 </dd>
               </div>
               <div class="flex justify-between gap-4">
-                <dt class="text-gray-500 dark:text-gray-400">邮箱</dt>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.invoices.email') }}</dt>
                 <dd class="text-right text-gray-900 dark:text-white">
                   {{ selected.recipient_email }}
                 </dd>
               </div>
               <div class="flex justify-between gap-4">
-                <dt class="text-gray-500 dark:text-gray-400">金额</dt>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.invoices.colAmount') }}</dt>
                 <dd
                   class="text-right font-semibold text-gray-900 dark:text-white"
                 >
@@ -213,7 +213,7 @@
                 </dd>
               </div>
               <div class="flex justify-between gap-4">
-                <dt class="text-gray-500 dark:text-gray-400">发票备注</dt>
+                <dt class="text-gray-500 dark:text-gray-400">{{ t('admin.invoices.remark') }}</dt>
                 <dd
                   class="max-w-[70%] whitespace-pre-wrap break-words text-right text-gray-900 dark:text-white"
                 >
@@ -229,21 +229,21 @@
               <div class="grid gap-2">
                 <p>
                   <span class="text-gray-500 dark:text-gray-400"
-                    >注册地址：</span
+                    >{{ t('admin.invoices.registeredAddress') }}</span
                   >{{ selected.registered_address }}
                 </p>
                 <p>
                   <span class="text-gray-500 dark:text-gray-400"
-                    >注册电话：</span
+                    >{{ t('admin.invoices.registeredPhone') }}</span
                   >{{ selected.registered_phone }}
                 </p>
                 <p>
-                  <span class="text-gray-500 dark:text-gray-400">开户行：</span
+                  <span class="text-gray-500 dark:text-gray-400">{{ t('admin.invoices.bankNameLabel') }}</span
                   >{{ selected.bank_name }}
                 </p>
                 <p>
                   <span class="text-gray-500 dark:text-gray-400"
-                    >银行账号：</span
+                    >{{ t('admin.invoices.bankAccountLabel') }}</span
                   >{{ selected.bank_account }}
                 </p>
               </div>
@@ -253,7 +253,7 @@
               <h3
                 class="mb-2 text-sm font-semibold text-gray-900 dark:text-white"
               >
-                来源明细
+                {{ t('admin.invoices.sourceDetails') }}
               </h3>
               <div class="space-y-2">
                 <div
@@ -280,11 +280,11 @@
 
             <div v-if="selected.status === 'pending'" class="mt-5 space-y-4">
               <div>
-                <label class="input-label">处理备注</label>
+                <label class="input-label">{{ t('admin.invoices.processRemark') }}</label>
                 <textarea
                   v-model.trim="issueForm.admin_note"
                   class="input min-h-20"
-                  placeholder="可选，仅管理员可见"
+                  :placeholder="t('admin.invoices.remarkPlaceholder')"
                 ></textarea>
               </div>
               <div class="flex gap-2">
@@ -294,7 +294,7 @@
                   @click="issueSelected"
                   :disabled="processing"
                 >
-                  标记已开票
+                  {{ t('admin.invoices.markIssued') }}
                 </button>
                 <button
                   class="btn btn-danger flex-1"
@@ -302,7 +302,7 @@
                   @click="openRejectDialog"
                   :disabled="processing"
                 >
-                  驳回
+                  {{ t('admin.invoices.reject') }}
                 </button>
               </div>
             </div>
@@ -312,14 +312,14 @@
               class="mt-5 rounded border border-gray-100 p-3 text-sm dark:border-dark-700"
             >
               <p v-if="selected.status === 'issued'">
-                该申请已标记为已开票。
+                {{ t('admin.invoices.alreadyIssued') }}
               </p>
               <p v-if="selected.rejected_reason">
-                <span class="text-gray-500 dark:text-gray-400">驳回原因：</span
+                <span class="text-gray-500 dark:text-gray-400">{{ t('admin.invoices.rejectReasonLabel') }}</span
                 >{{ selected.rejected_reason }}
               </p>
               <p v-if="selected.admin_note">
-                <span class="text-gray-500 dark:text-gray-400">处理备注：</span
+                <span class="text-gray-500 dark:text-gray-400">{{ t('admin.invoices.processRemarkLabel') }}</span
                 >{{ selected.admin_note }}
               </p>
             </div>
@@ -328,32 +328,32 @@
             v-else
             class="py-12 text-center text-sm text-gray-500 dark:text-gray-400"
           >
-            请选择一条发票申请
+            {{ t('admin.invoices.selectOnePrompt') }}
           </div>
         </aside>
       </div>
 
       <BaseDialog
         :show="!!rejectTarget"
-        title="驳回发票申请"
+        :title="t('admin.invoices.rejectTitle')"
         width="narrow"
         :close-disabled="processing"
         @close="closeRejectDialog"
       >
         <div v-if="rejectTarget" class="space-y-4">
           <p class="text-sm text-gray-600 dark:text-gray-300">
-            正在驳回申请 {{ rejectTarget.request_no }}。驳回后会释放对应开票来源。
+            {{ t('admin.invoices.rejectingPrompt', { requestNo: rejectTarget.request_no }) }}
           </p>
           <div>
-            <label class="input-label">驳回原因（用户可见）</label>
+            <label class="input-label">{{ t('admin.invoices.rejectReasonLabel') }}</label>
             <textarea
               v-model="rejectReason"
               class="input mt-1.5 min-h-24"
-              placeholder="请填写具体驳回原因"
+              :placeholder="t('admin.invoices.rejectReasonPlaceholder')"
               required
             ></textarea>
             <p class="mt-1.5 text-xs text-gray-500 dark:text-gray-400">
-              此原因会直接显示在用户的开票申请中。
+              {{ t('admin.invoices.rejectReasonNote') }}
             </p>
           </div>
           <div class="flex justify-end gap-2">
@@ -363,7 +363,7 @@
               :disabled="processing"
               @click="closeRejectDialog"
             >
-              取消
+              {{ t('common.cancel') }}
             </button>
             <button
               class="btn btn-danger min-h-11"
@@ -371,7 +371,7 @@
               :disabled="processing || !rejectReason.trim()"
               @click="rejectSelected"
             >
-              {{ processing ? "处理中" : "确认驳回" }}
+              {{ processing ? t('common.processing') : t('admin.invoices.confirmReject') }}
             </button>
           </div>
         </div>
@@ -394,20 +394,23 @@ import { getPersistedPageSize } from "@/composables/usePersistedPageSize";
 import { useTableSelection } from "@/composables/useTableSelection";
 import { extractApiErrorMessage } from "@/utils/apiError";
 import { formatCurrency, formatDateTime } from "@/utils/format";
+import { useI18n } from 'vue-i18n'
 
-const invoiceExportHeaders = [
-  "序号",
-  "发票类型",
-  "公司名称",
-  "税号",
-  "开票 名称",
-  "总金额",
-  "邮箱号",
-  "开户行",
-  "银行账号",
-  "发票备注",
+const { t } = useI18n()
+
+const invoiceExportHeaders = () => [
+  t('admin.invoices.exportColNo'),
+  t('admin.invoices.exportColType'),
+  t('admin.invoices.exportColCompany'),
+  t('admin.invoices.taxId'),
+  t('admin.invoices.exportColItem'),
+  t('admin.invoices.exportColTotal'),
+  t('admin.invoices.exportColEmail'),
+  t('admin.invoices.exportColBank'),
+  t('admin.invoices.exportColBankAccount'),
+  t('admin.invoices.remark'),
 ] as const;
-const invoiceExportItemName = "信息服务费";
+const invoiceExportItemName = () => t('admin.invoices.exportItemName');
 
 const appStore = useAppStore();
 const loading = ref(false);
@@ -483,7 +486,7 @@ async function loadRequests(): Promise<void> {
     }
   } catch (error) {
     if (currentLoadSequence !== loadSequence) return;
-    appStore.showError(extractApiErrorMessage(error, "发票申请加载失败"));
+    appStore.showError(extractApiErrorMessage(error, t('admin.invoices.loadFailed')));
   } finally {
     if (currentLoadSequence === loadSequence) {
       loading.value = false;
@@ -531,7 +534,7 @@ async function selectRequest(request: InvoiceRequest): Promise<void> {
     selected.value = data;
     issueForm.admin_note = data.admin_note || "";
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, "发票详情加载失败"));
+    appStore.showError(extractApiErrorMessage(error, t('admin.invoices.detailLoadFailed')));
   }
 }
 
@@ -543,10 +546,10 @@ async function issueSelected(): Promise<void> {
       ...issueForm,
     });
     selected.value = data;
-    appStore.showSuccess("发票状态已更新");
+    appStore.showSuccess(t('admin.invoices.statusUpdated'));
     await loadRequests();
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, "开票处理失败"));
+    appStore.showError(extractApiErrorMessage(error, t('admin.invoices.issueFailed')));
   } finally {
     processing.value = false;
   }
@@ -557,7 +560,7 @@ async function rejectSelected(): Promise<void> {
   const reason = rejectReason.value.trim();
   if (!target) return;
   if (!reason) {
-    appStore.showError("请填写驳回原因");
+    appStore.showError(t('admin.invoices.rejectReasonRequired'));
     return;
   }
   processing.value = true;
@@ -569,10 +572,10 @@ async function rejectSelected(): Promise<void> {
     if (selected.value?.id === target.id) selected.value = data;
     rejectTarget.value = null;
     rejectReason.value = "";
-    appStore.showSuccess("发票申请已驳回");
+    appStore.showSuccess(t('admin.invoices.rejectSuccess'));
     await loadRequests();
   } catch (error) {
-    appStore.showError(extractApiErrorMessage(error, "驳回发票失败"));
+    appStore.showError(extractApiErrorMessage(error, t('admin.invoices.rejectFailed')));
   } finally {
     processing.value = false;
   }
@@ -608,14 +611,14 @@ function exportFileName(now: Date = new Date()): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   const date = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
   const time = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  return `批量开票-${date}-${time}.xls`;
+  return t('admin.invoices.exportFilename', { date, time });
 }
 
 async function exportSelected(): Promise<void> {
   if (exporting.value) return;
   const exportItems = selectedRequests.value;
   if (exportItems.length === 0) {
-    appStore.showError("请选择待处理的发票申请");
+    appStore.showError(t('admin.invoices.selectPendingRequired'));
     return;
   }
 
@@ -623,15 +626,15 @@ async function exportSelected(): Promise<void> {
   try {
     const XLSX = await import("xlsx");
     const rows: CellObject[][] = [
-      invoiceExportHeaders.map((header) => textCell(header)),
+      invoiceExportHeaders().map((header) => textCell(header)),
       ...exportItems.map((request, index) => [
         numberCell(index + 1),
         textCell(
-          request.invoice_type === "enterprise_special" ? "专票" : "普票",
+          request.invoice_type === "enterprise_special" ? t('admin.invoices.typeSpecial') : t('admin.invoices.typeNormal'),
         ),
         textCell(request.title_name),
         textCell(request.tax_id),
-        textCell(invoiceExportItemName),
+        textCell(invoiceExportItemName()),
         numberCell(request.amount),
         textCell(request.recipient_email),
         textCell(request.bank_name),
@@ -664,9 +667,9 @@ async function exportSelected(): Promise<void> {
       new Blob([output], { type: "application/vnd.ms-excel" }),
       exportFileName(),
     );
-    appStore.showSuccess(`已导出 ${exportItems.length} 条发票申请`);
+    appStore.showSuccess(t('admin.invoices.exportDone', { count: exportItems.length }));
   } catch (error) {
-    const message = error instanceof Error ? error.message : "批量导出失败";
+    const message = error instanceof Error ? error.message : t('admin.invoices.exportFailed');
     appStore.showError(message);
   } finally {
     exporting.value = false;
@@ -674,17 +677,17 @@ async function exportSelected(): Promise<void> {
 }
 
 function invoiceTypeLabel(type: InvoiceType): string {
-  if (type === "enterprise_special") return "企业专票";
-  if (type === "enterprise_normal") return "企业普票";
-  return "个人普票";
+  if (type === "enterprise_special") return t('admin.invoices.typeEntSpecial');
+  if (type === "enterprise_normal") return t('admin.invoices.typeEntNormal');
+  return t('admin.invoices.typePersonal');
 }
 
 function statusLabel(status: string): string {
   const labels: Record<string, string> = {
-    pending: "待处理",
-    issued: "已开票",
-    rejected: "已驳回",
-    cancelled: "已取消",
+    pending: t('admin.invoices.statusPending'),
+    issued: t('admin.invoices.statusIssued'),
+    rejected: t('admin.invoices.statusRejected'),
+    cancelled: t('admin.invoices.statusCancelled'),
   };
   return labels[status] || status;
 }

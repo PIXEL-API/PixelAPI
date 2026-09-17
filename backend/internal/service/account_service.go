@@ -1566,11 +1566,14 @@ func (s *AccountService) createOwned(ctx context.Context, ownerUserID int64, req
 
 func isAllowedOwnedAccountType(platform, accountType string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(accountType))
-	if platform == PlatformOpencode {
-		// opencode 是用户自有 apikey 账号，其余平台仅允许官方 OAuth。
+	if platform == PlatformOpencode || platform == PlatformDevin {
+		// opencode/devin 是用户自有 apikey 账号，其余平台仅允许官方 OAuth。
 		return normalized == AccountTypeAPIKey
 	}
 	if IsCNProvider(platform) {
+		return normalized == AccountTypeAPIKey
+	}
+	if IsAPIAggregationProvider(platform) {
 		return normalized == AccountTypeAPIKey
 	}
 	return normalized == AccountTypeOAuth
@@ -1625,19 +1628,26 @@ func validateOwnedAccountSourceScoped(
 	credentials, extra map[string]any,
 	scope ownedAccountSourceScope,
 ) error {
+	if err := validateOpencodeAccountConfiguration(platform, accountType, credentials); err != nil {
+		return err
+	}
 	if err := validateQwenAccountConfiguration(platform, accountType, credentials); err != nil {
+		return err
+	}
+	if err := validateDevinAccountConfiguration(platform, accountType, credentials); err != nil {
 		return err
 	}
 	if !isAllowedOwnedAccountType(platform, accountType) {
 		return ErrOwnedAccountTypeNotAllowed
 	}
-	if platform == PlatformOpencode && strings.EqualFold(strings.TrimSpace(accountType), AccountTypeAPIKey) {
+	if platform == PlatformDevin && strings.EqualFold(strings.TrimSpace(accountType), AccountTypeAPIKey) {
 		if !hasNonEmptyStringField(credentials, "api_key") {
 			return ErrOwnedAccountCredentialsInvalid.WithMetadata(map[string]string{"field": "api_key"})
 		}
-		// 仅允许 api_key 字段，禁止夹带 base_url 等其他上游凭证。
+		// 仅允许 api_key/base_url 字段（自有账号可指向自建中转），禁止夹带其他上游凭证。
 		safetyCredentials := mergeAccountMap(scope.credentialsToScan(credentials), nil)
 		removeImportMapField(safetyCredentials, "api_key")
+		removeImportMapField(safetyCredentials, "base_url")
 		if field, ok := findDisallowedOwnedAccountField(safetyCredentials); ok {
 			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
 				"section": "credentials",
@@ -1649,6 +1659,52 @@ func validateOwnedAccountSourceScoped(
 				"section": "extra",
 				"field":   field,
 			})
+		}
+		return nil
+	}
+	if platform == PlatformOpencode && strings.EqualFold(strings.TrimSpace(accountType), AccountTypeAPIKey) {
+		if !hasNonEmptyStringField(credentials, "api_key") {
+			return ErrOwnedAccountCredentialsInvalid.WithMetadata(map[string]string{"field": "api_key"})
+		}
+		// 仅允许 api_key/account_mode 字段，禁止夹带 base_url 等其他上游凭证。
+		safetyCredentials := mergeAccountMap(scope.credentialsToScan(credentials), nil)
+		removeImportMapField(safetyCredentials, "api_key")
+		removeImportMapField(safetyCredentials, "account_mode")
+		if field, ok := findDisallowedOwnedAccountField(safetyCredentials); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
+				"section": "credentials",
+				"field":   field,
+			})
+		}
+		if field, ok := findDisallowedOwnedAccountField(scope.extraToScan(extra)); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{
+				"section": "extra",
+				"field":   field,
+			})
+		}
+		return nil
+	}
+	if IsAPIAggregationProvider(platform) && strings.EqualFold(strings.TrimSpace(accountType), AccountTypeAPIKey) {
+		if !hasNonEmptyStringField(credentials, "api_key") {
+			return ErrOwnedAccountCredentialsInvalid.WithMetadata(map[string]string{"field": "api_key"})
+		}
+		if !hasNonEmptyStringField(credentials, "base_url") {
+			return ErrOwnedAccountCredentialsInvalid.WithMetadata(map[string]string{"field": "base_url"})
+		}
+		// 聚合渠道是用户自填的第三方上游，必须强制 https + 公网地址，
+		// 不能跟随全局 allowlist 的 allow_private_hosts 默认值。
+		if err := validateAPIAggregationUpstreamURLs(credentials); err != nil {
+			return err
+		}
+		safetyCredentials := mergeAccountMap(scope.credentialsToScan(credentials), nil)
+		for _, key := range []string{"api_key", "base_url", "api_base_urls", "api_protocol", "model_mapping", "compact_model_mapping"} {
+			delete(safetyCredentials, key)
+		}
+		if field, ok := findDisallowedOwnedAccountField(safetyCredentials); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{"section": "credentials", "field": field})
+		}
+		if field, ok := findDisallowedOwnedAccountField(scope.extraToScan(extra)); ok {
+			return ErrOwnedAccountCredentialsNotAllowed.WithMetadata(map[string]string{"section": "extra", "field": field})
 		}
 		return nil
 	}
@@ -3859,7 +3915,7 @@ func (s *AccountService) ConvertOwnedExternalPlacement(ctx context.Context, owne
 		if err != nil {
 			return nil, err
 		}
-		if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode && !IsCNProvider(account.Platform) {
+		if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode && !IsCNProvider(account.Platform) && !IsAPIAggregationProvider(account.Platform) {
 			return nil, ErrAccountShareRoomUnknownLevel
 		}
 		modeGroup, err := s.accountShareModeRepo.GetModeGroup(ctx, account.Platform)

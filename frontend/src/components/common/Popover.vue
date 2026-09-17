@@ -3,12 +3,12 @@
     <div v-if="show && position" class="ui-popover-root" data-ui-overlay="popover">
       <div
         v-if="closeOnBackdrop"
-        class="ui-popover-backdrop ui-action-menu-backdrop fixed inset-0 z-[9998]"
+        class="ui-popover-backdrop ui-action-menu-backdrop fixed inset-0 z-[calc(var(--ui-z-menu)-1)]"
         aria-hidden="true"
         @click="emit('close')"
       />
       <div
-        class="ui-popover-panel fixed z-[9999]"
+        class="ui-popover-panel fixed z-[var(--ui-z-menu)]"
         :class="panelClass"
         :style="{ top: `${position.top}px`, left: `${position.left}px` }"
         :role="role"

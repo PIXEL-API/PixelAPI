@@ -55,7 +55,7 @@
             <div
               v-if="showColumnDropdown"
               :id="COLUMN_SETTINGS_MENU_ID"
-              class="data-popover-panel absolute left-0 right-auto z-50 mt-2 w-52 origin-top-left p-2 sm:left-auto sm:right-0 sm:origin-top-right"
+              class="data-popover-panel absolute left-0 right-auto z-[var(--ui-z-menu)] mt-2 w-52 origin-top-left p-2 sm:left-auto sm:right-0 sm:origin-top-right"
               role="menu"
               :aria-label="t('keys.columnSettings')"
               @keydown="handleColumnSettingsKeydown"
@@ -2257,7 +2257,9 @@ const canonicalGroupPlatforms: GroupPlatform[] = [
   'zhipu',
   'deepseek',
   'minimax',
-  'qwen'
+  'qwen',
+  'devin',
+  'api_aggregation'
 ]
 
 const groupPlatforms = computed(() => {

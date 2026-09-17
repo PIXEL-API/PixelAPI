@@ -4,6 +4,22 @@
       <div v-if="loading" class="flex items-center justify-center py-12">
         <LoadingSpinner />
       </div>
+      <div
+        v-else-if="loadError && !stats"
+        class="rounded-xl border border-red-200 bg-red-50 px-6 py-10 text-center dark:border-red-900/60 dark:bg-red-950/30"
+        role="alert"
+      >
+        <Icon name="exclamationCircle" size="lg" class="mx-auto text-red-500 dark:text-red-400" />
+        <p class="mt-3 text-sm font-medium text-red-800 dark:text-red-200">
+          {{ t('dashboard.loadFailed') }}
+        </p>
+        <p class="mt-1 text-sm text-red-600 dark:text-red-300/80">
+          {{ loadError }}
+        </p>
+        <button type="button" class="btn btn-primary mt-5" @click="refreshAll">
+          {{ t('common.tryAgain') }}
+        </button>
+      </div>
       <template v-else-if="stats">
         <UserDashboardStats :stats="stats" :balance="user?.balance || 0" :is-simple="authStore.isSimpleMode" />
         <UserDashboardCharts
@@ -37,7 +53,11 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useAuthStore } from '@/stores/auth'
+import { useAppStore } from '@/stores/app'
+import { extractApiErrorMessage } from '@/utils/apiError'
+import Icon from '@/components/icons/Icon.vue'
 import {
   usageAPI,
   type AccountSharingDashboardStats,
@@ -54,10 +74,14 @@ import UserAccountSharingStats from '@/components/user/dashboard/UserAccountShar
 import type { ModelStat, TrendDataPoint, UsageLog } from '@/types'
 
 const authStore = useAuthStore()
+const appStore = useAppStore()
 const user = computed(() => authStore.user)
+
+const { t } = useI18n()
 
 const stats = ref<UserStatsType | null>(null)
 const loading = ref(false)
+const loadError = ref('')
 const loadingUsage = ref(false)
 const loadingCharts = ref(false)
 const loadingAccountSharing = ref(false)
@@ -114,6 +138,7 @@ const loadStats = async () => {
   if (isUnmounted) return
 
   loading.value = true
+  loadError.value = ''
   try {
     await authStore.refreshUser()
     if (isUnmounted) return
@@ -125,6 +150,12 @@ const loadStats = async () => {
   } catch (error) {
     if (isUnmounted) return
     console.error('Failed to load dashboard stats:', error)
+    const message = extractApiErrorMessage(error, t('dashboard.loadFailed'))
+    if (stats.value) {
+      appStore.showError(message)
+    } else {
+      loadError.value = message
+    }
   } finally {
     if (!isUnmounted) {
       loading.value = false

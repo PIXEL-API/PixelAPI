@@ -738,10 +738,12 @@ const platformOptions = computed<Array<{ value: AccountPlatform; label: string }
   { value: 'grok', label: 'Grok' },
   { value: 'opencode', label: 'OpenCode' },
   { value: 'kimi', label: 'Kimi' },
-  { value: 'zhipu', label: '智谱 GLM' },
+  { value: 'zhipu', label: t('common.platforms.zhipu') },
   { value: 'deepseek', label: 'DeepSeek' },
   { value: 'minimax', label: 'MiniMax' },
-  { value: 'qwen', label: '通义千问' }
+  { value: 'qwen', label: t('common.platforms.qwen') },
+  { value: 'devin', label: 'Devin' },
+  { value: 'api_aggregation', label: 'APIKEY' }
 ])
 
 const typeOptions = computed<Array<{ value: AccountType; label: string }>>(() => [
@@ -1111,10 +1113,12 @@ function platformDisplayName(platform: Account['platform']): string {
   if (platform === 'anthropic') return 'Anthropic'
   if (platform === 'opencode') return 'OpenCode'
   if (platform === 'kimi') return 'Kimi'
-  if (platform === 'zhipu') return '智谱 GLM'
+  if (platform === 'zhipu') return t('common.platforms.zhipu')
   if (platform === 'deepseek') return 'DeepSeek'
   if (platform === 'minimax') return 'MiniMax'
-  if (platform === 'qwen') return '通义千问'
+  if (platform === 'qwen') return t('common.platforms.qwen')
+  if (platform === 'devin') return 'Devin'
+  if (platform === 'api_aggregation') return 'APIKEY'
   return String(platform)
 }
 

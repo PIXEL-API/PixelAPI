@@ -1,5 +1,7 @@
 <template>
   <aside
+    id="app-sidebar"
+    ref="sidebarRef"
     class="sidebar"
     data-ui-skin="v2"
     :class="[
@@ -281,14 +283,15 @@
   <transition name="fade">
     <div
       v-if="mobileOpen"
-      class="fixed inset-0 z-30 bg-slate-950/45 backdrop-blur-[1px] lg:hidden"
+      class="fixed inset-0 z-[var(--ui-z-drawer-backdrop)] bg-slate-950/45 backdrop-blur-[1px] lg:hidden"
+      aria-hidden="true"
       @click="closeMobile"
     ></div>
   </transition>
 </template>
 
 <script setup lang="ts">
-import { computed, h, onBeforeUnmount, ref, watch } from "vue";
+import { computed, h, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import {
@@ -302,6 +305,7 @@ import VersionBadge from "@/components/common/VersionBadge.vue";
 import { sanitizeSvg } from "@/utils/sanitize";
 import { FeatureFlags, makeSidebarFlag } from "@/utils/featureFlags";
 import { buildEmbeddedUrl, detectTheme } from "@/utils/embedded-url";
+import { useDarkMode, toggleDarkMode } from "@/composables/useDarkMode";
 
 interface NavItem {
   path: string;
@@ -354,7 +358,7 @@ const conversationNotificationStore = useConversationNotificationStore();
 const sidebarCollapsed = computed(() => appStore.sidebarCollapsed);
 const mobileOpen = computed(() => appStore.mobileOpen);
 const isAdmin = computed(() => authStore.isAdmin);
-const isDark = ref(document.documentElement.classList.contains("dark"));
+const isDark = useDarkMode();
 // Track which parent nav groups are expanded
 const expandedGroups = ref<Set<string>>(new Set());
 
@@ -1299,14 +1303,45 @@ function toggleSidebar() {
 }
 
 function toggleTheme() {
-  isDark.value = !isDark.value;
-  document.documentElement.classList.toggle("dark", isDark.value);
-  localStorage.setItem("theme", isDark.value ? "dark" : "light");
+  toggleDarkMode();
 }
 
 function closeMobile() {
   appStore.setMobileOpen(false);
 }
+
+// 移动端抽屉：Esc 关闭 + body 滚动锁 + 焦点进出管理
+const sidebarRef = ref<HTMLElement | null>(null);
+
+function handleMobileKeydown(event: KeyboardEvent) {
+  if (event.key === "Escape") {
+    event.preventDefault();
+    event.stopPropagation();
+    closeMobile();
+  }
+}
+
+watch(mobileOpen, async (open) => {
+  if (open) {
+    document.body.classList.add("sidebar-drawer-open");
+    document.addEventListener("keydown", handleMobileKeydown);
+    await nextTick();
+    // 打开时把焦点移入抽屉，避免键盘焦点留在被遮挡的背景上
+    const firstNav = sidebarRef.value?.querySelector<HTMLElement>(
+      ".sidebar-nav a, .sidebar-nav button, a, button",
+    );
+    firstNav?.focus();
+    return;
+  }
+
+  document.body.classList.remove("sidebar-drawer-open");
+  document.removeEventListener("keydown", handleMobileKeydown);
+  // 焦点若还在抽屉内（Esc/遮罩关闭），恢复到汉堡按钮
+  const active = document.activeElement;
+  if (active instanceof Node && sidebarRef.value?.contains(active)) {
+    document.getElementById("app-header-menu-toggle")?.focus();
+  }
+});
 
 function navLinkTo(item: NavItem): string {
   return item.openInNewWindow ? route.fullPath : item.path;
@@ -1400,16 +1435,6 @@ function handleGroupClick(item: NavItem) {
   }
 }
 
-// Initialize theme
-const savedTheme = localStorage.getItem("theme");
-if (
-  savedTheme === "dark" ||
-  (!savedTheme && window.matchMedia("(prefers-color-scheme: dark)").matches)
-) {
-  isDark.value = true;
-  document.documentElement.classList.add("dark");
-}
-
 // Fetch admin settings (for feature-gated nav items like Ops).
 watch(
   isAdmin,
@@ -1447,6 +1472,8 @@ watch(
 
 onBeforeUnmount(() => {
   conversationNotificationStore.stopPolling();
+  document.body.classList.remove("sidebar-drawer-open");
+  document.removeEventListener("keydown", handleMobileKeydown);
 });
 </script>
 

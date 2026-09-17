@@ -41,6 +41,20 @@ const flushPromises = async () => {
   await Promise.resolve()
 }
 
+// BaseDialog 的内容 teleport 到 #dialog-root，wrapper 查询无法覆盖。
+// 本 spec 只验证 TOTP 定时器与错误处理，dialog 行为由 BaseDialog.spec 覆盖。
+const mountOptions = {
+  global: {
+    stubs: {
+      BaseDialog: {
+        props: ['show', 'title'],
+        emits: ['close'],
+        template: '<section v-if="show"><slot /><slot name="footer" /></section>'
+      }
+    }
+  }
+}
+
 describe('TOTP 弹窗定时器清理', () => {
   let intervalSeed = 1000
   let setIntervalSpy: ReturnType<typeof vi.spyOn>
@@ -80,7 +94,7 @@ describe('TOTP 弹窗定时器清理', () => {
   })
 
   it('TotpSetupModal 卸载时清理倒计时定时器', async () => {
-    const wrapper = mount(TotpSetupModal)
+    const wrapper = mount(TotpSetupModal, mountOptions)
     await flushPromises()
 
     const sendButton = wrapper
@@ -100,7 +114,7 @@ describe('TOTP 弹窗定时器清理', () => {
   })
 
   it('TotpDisableDialog 卸载时清理倒计时定时器', async () => {
-    const wrapper = mount(TotpDisableDialog)
+    const wrapper = mount(TotpDisableDialog, mountOptions)
     await flushPromises()
 
     const sendButton = wrapper
@@ -125,7 +139,7 @@ describe('TOTP 弹窗定时器清理', () => {
       response: { data: { message: 'setup failed' } }
     })
 
-    const wrapper = mount(TotpSetupModal)
+    const wrapper = mount(TotpSetupModal, mountOptions)
     await flushPromises()
 
     await wrapper.get('input[type="password"]').setValue('correct horse battery staple')
@@ -143,7 +157,7 @@ describe('TOTP 弹窗定时器清理', () => {
       response: { data: { message: 'disable failed' } }
     })
 
-    const wrapper = mount(TotpDisableDialog)
+    const wrapper = mount(TotpDisableDialog, mountOptions)
     await flushPromises()
 
     await wrapper.get('input[type="password"]').setValue('correct horse battery staple')

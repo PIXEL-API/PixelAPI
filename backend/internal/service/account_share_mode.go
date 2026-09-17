@@ -23,17 +23,20 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
-	AccountShareModeGroupPlatformOpenAI    = PlatformOpenAI
-	AccountShareModeGroupPlatformAnthropic = PlatformAnthropic
-	AccountShareModeGroupPlatformOpencode  = PlatformOpencode
-	AccountShareModeGroupPlatformKimi      = PlatformKimi
-	AccountShareModeGroupPlatformZhipu     = PlatformZhipu
-	AccountShareModeGroupPlatformDeepseek  = PlatformDeepseek
-	AccountShareModeGroupPlatformMiniMax   = PlatformMiniMax
-	AccountShareModeGroupPlatformQwen      = PlatformQwen
+	AccountShareModeGroupPlatformOpenAI         = PlatformOpenAI
+	AccountShareModeGroupPlatformAnthropic      = PlatformAnthropic
+	AccountShareModeGroupPlatformOpencode       = PlatformOpencode
+	AccountShareModeGroupPlatformKimi           = PlatformKimi
+	AccountShareModeGroupPlatformZhipu          = PlatformZhipu
+	AccountShareModeGroupPlatformDeepseek       = PlatformDeepseek
+	AccountShareModeGroupPlatformMiniMax        = PlatformMiniMax
+	AccountShareModeGroupPlatformQwen           = PlatformQwen
+	AccountShareModeGroupPlatformDevin          = PlatformDevin
+	AccountShareModeGroupPlatformAPIAggregation = PlatformAPIAggregation
 
 	AccountShareListingStatusActive = "active"
 	AccountShareListingStatusPaused = "paused"
@@ -50,10 +53,13 @@ const (
 	AccountShareSnapshotQualityBackfilledCurrent = "backfilled_current"
 	AccountShareSnapshotQualityUnknown           = "unknown"
 
-	AccountShareModeDefaultMinBalance               = 1.0
-	AccountShareModeDefaultCodexLimitPercent        = CodexQuotaDefaultLimitPercent
-	AccountShareModeMinSeats                        = 1
-	AccountShareModeMaxSeats                        = 30
+	AccountShareModeDefaultMinBalance        = 1.0
+	AccountShareModeDefaultCodexLimitPercent = CodexQuotaDefaultLimitPercent
+	AccountShareModeMinSeats                 = 1
+	AccountShareModeMaxSeats                 = 30
+	// 房间加入密码按字节计长:上限 64 同时低于 bcrypt 72 字节硬限制。
+	AccountShareJoinPasswordMinLength               = 4
+	AccountShareJoinPasswordMaxLength               = 64
 	AccountShareModeDefaultPerUserConcurrency       = 5
 	AccountShareModeMaxPerUserConcurrency           = 50
 	AccountShareModeDefaultAccountConcurrency       = 20
@@ -81,6 +87,9 @@ const (
 	AccountShareModeMembershipEndAttemptTimeout = 10 * time.Second
 	// 孤儿 binding 清扫频率：低优先兜底 worker，处理历史遗留脏数据即可，不必高频。
 	AccountShareModeOrphanBindingCleanupInterval = 10 * time.Minute
+	// ending membership 的多余 open binding 清扫宽限：必须覆盖在途 slot 的 TTL
+	//（默认 30 分钟），保证只有 finalize 反复失败的存量脏数据才会被收口。
+	AccountShareModeEndingOrphanBindingGrace = 45 * time.Minute
 	// 比在途 slot 的 TTL（默认 30 分钟）短，用户不必等满 slot 回收。
 	AccountShareModeJoinIntentTTL            = 2 * time.Minute
 	AccountShareModeMaxIdleTimeoutMinutes    = 10080
@@ -192,6 +201,9 @@ var (
 	ErrAccountShareAlreadyUsing                 = infraerrors.Conflict("ACCOUNT_SHARE_ALREADY_USING", "user is already using an account share listing")
 	ErrAccountShareAPIKeyAlreadyBound           = infraerrors.Conflict("ACCOUNT_SHARE_API_KEY_ALREADY_BOUND", "api key is already bound to an account share listing")
 	ErrAccountShareRoomFull                     = infraerrors.Conflict("ACCOUNT_SHARE_ROOM_FULL", "account share room is full")
+	ErrAccountShareRoomPasswordRequired         = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_PASSWORD_REQUIRED", "account share room requires a join password")
+	ErrAccountShareRoomPasswordInvalid          = infraerrors.Forbidden("ACCOUNT_SHARE_ROOM_PASSWORD_INVALID", "account share room join password is incorrect")
+	ErrAccountShareRoomPasswordInvalidLength    = infraerrors.BadRequest("ACCOUNT_SHARE_ROOM_PASSWORD_INVALID_LENGTH", "join password must be between 4 and 64 characters")
 	ErrAccountShareAPIKeyMustUseModeGroup       = infraerrors.BadRequest("ACCOUNT_SHARE_API_KEY_MUST_USE_MODE_GROUP", "api key must use account mode group")
 	ErrAccountShareBalanceBelowMinimum          = infraerrors.Forbidden("ACCOUNT_SHARE_BALANCE_BELOW_MINIMUM", "user balance is below account share minimum")
 	ErrAccountSharePerUserConcurrencyExceeded   = infraerrors.TooManyRequests("ACCOUNT_SHARE_PER_USER_CONCURRENCY_EXCEEDED", "account share per-user concurrency exceeded")
@@ -216,6 +228,7 @@ var (
 	ErrAccountShareJoinIntentInvalid            = infraerrors.Forbidden("ACCOUNT_SHARE_JOIN_INTENT_INVALID", "account share join intent is invalid or expired")
 	ErrAccountShareJoinIntentConsumed           = infraerrors.Conflict("ACCOUNT_SHARE_JOIN_INTENT_CONSUMED", "account share join intent has already been consumed")
 	ErrAccountShareJoinTermsChanged             = infraerrors.Conflict("ACCOUNT_SHARE_JOIN_TERMS_CHANGED", "account share room terms changed; review the latest terms and try again")
+	ErrAccountShareUnverifiedAckRequired        = infraerrors.BadRequest("ACCOUNT_SHARE_UNVERIFIED_ACK_REQUIRED", "joining an API aggregation room requires acknowledging the unverified channel risk notice")
 	ErrAccountShareMembershipEnding             = infraerrors.Conflict("ACCOUNT_SHARE_MEMBERSHIP_ENDING", "the previous room membership is still completing exit settlement")
 	ErrAccountShareEndTokenRequired             = infraerrors.BadRequest("ACCOUNT_SHARE_END_TOKEN_REQUIRED", "account share end confirmation token is required")
 	ErrAccountShareEndTokenInvalid              = infraerrors.Forbidden("ACCOUNT_SHARE_END_TOKEN_INVALID", "account share end confirmation token is invalid or expired")
@@ -497,8 +510,11 @@ type AccountShareListing struct {
 	LastUsedMembershipID                    *int64                      `json:"last_used_membership_id,omitempty"`
 	LastUsedAt                              *time.Time                  `json:"last_used_at,omitempty"`
 	HistorySnapshotQuality                  string                      `json:"history_snapshot_quality,omitempty"`
-	CreatedAt                               time.Time                   `json:"created_at"`
-	UpdatedAt                               time.Time                   `json:"updated_at"`
+	// JoinPasswordHash 仅供服务端验密使用，永不序列化返回。
+	JoinPasswordHash string    `json:"-"`
+	HasJoinPassword  bool      `json:"has_password"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type AccountShareQuotaSummary struct {
@@ -587,6 +603,8 @@ type CreateAccountShareRoomInput struct {
 	Codex7dLimitPercent     float64
 	Anthropic5hLimitPercent float64
 	Anthropic7dLimitPercent float64
+	// JoinPassword 为房间加入密码明文，留空表示无密码公开加入。
+	JoinPassword string
 }
 
 type AccountShareWaiverProgress struct {
@@ -974,6 +992,10 @@ type AccountShareReviewModerationResult struct {
 type CreateAccountShareJoinIntentInput struct {
 	APIKeyID           int64
 	IdleTimeoutMinutes int
+	// Password 为房间加入密码明文，仅在创建 intent 时校验一次；
+	// 号主自用与管理员免密。密码不进入签名 claims，不落库。
+	Password     string
+	ActorIsAdmin bool
 }
 
 type CompleteAccountShareJoinInput struct {
@@ -982,6 +1004,9 @@ type CompleteAccountShareJoinInput struct {
 	IntentToken        string
 	ExpectedVersion    int64
 	ExpectedRevisionID int64
+	// AcknowledgedUnverified 为消费者对「聚合 API 渠道未经过 PIXEL 验证」
+	// 风险提示的主动确认。api_aggregation 房间缺省 false 即拒绝加入。
+	AcknowledgedUnverified bool
 }
 
 type AccountShareJoinIntent struct {
@@ -992,6 +1017,8 @@ type AccountShareJoinIntent struct {
 	ExpectedVersion    int64                             `json:"expected_version"`
 	ExpectedRevisionID int64                             `json:"expected_revision_id,omitempty"`
 	Terms              *AccountShareListingTermsSnapshot `json:"terms"`
+	// RequiresUnverifiedAck 告诉前端本次加入需要「已知晓未验证渠道」确认。
+	RequiresUnverifiedAck bool `json:"requires_unverified_ack"`
 }
 
 type AccountShareJoinRepositoryInput struct {
@@ -1004,6 +1031,8 @@ type AccountShareJoinRepositoryInput struct {
 	IntentIssuedAt     time.Time
 	IntentNonce        string
 	AcceptedTerms      *AccountShareListingTermsSnapshot
+	// AcknowledgedUnverifiedAt 非空时落库到 unverified_upstream_ack_at。
+	AcknowledgedUnverifiedAt *time.Time
 }
 
 type accountShareJoinIntentTokenClaims struct {
@@ -1039,6 +1068,25 @@ type AccountShareSeatBillingResult struct {
 	DebitUserIDs         []int64
 	CreditUserIDs        []int64
 	EndedConsumerUserIDs []int64
+	// ItemFailures 收集批处理中逐条失败的明细；单行失败不再中断整轮，
+	// 由调用方决定聚合上报（worker）或直接透出（请求路径）。
+	ItemFailures []AccountShareItemFailure
+	// SkippedBackoff 记录本轮因内存退避被跳过的候选数。
+	SkippedBackoff int
+}
+
+// AccountShareItemFailure 是批处理单行失败明细。ItemID 的语义随管线变化：
+// 席位计费/unavailable/idle 为 membership id，waiver 补偿为 settlement id。
+type AccountShareItemFailure struct {
+	ItemID int64
+	Err    error
+}
+
+// Unresolved 报告本批是否没有一行被成功处理（全部退避跳过或失败）。
+// 调用方据此提前终止轮内循环，避免反复选中同一批到期行空转。
+func (r *AccountShareSeatBillingResult) Unresolved() bool {
+	return r != nil && r.Processed > 0 &&
+		r.SkippedBackoff+len(r.ItemFailures) >= r.Processed
 }
 
 // AccountShareSeatWaiverBatch 是 waiver 补偿单批的结果。
@@ -1137,6 +1185,8 @@ type CreateAccountShareListingInput struct {
 	AnthropicTokenInfo      *TokenInfo
 	AutoPauseOnExpired      *bool
 	ExpiresAt               *time.Time
+	// JoinPassword 为房间加入密码明文，留空表示无密码公开加入。
+	JoinPassword string
 }
 
 type UpdateAccountShareListingInput struct {
@@ -1156,10 +1206,14 @@ type UpdateAccountShareListingInput struct {
 	Anthropic5hLimitPercent *float64
 	Anthropic7dLimitPercent *float64
 	Concurrency             *int
-	ForceActiveEdit         bool
-	ExpectedVersion         *int64
-	Reason                  string
-	Confirmed               bool
+	// JoinPassword 三态:nil=保持不变;指向空串=清除密码;其它=新密码。
+	// service 层负责校验并就地替换为 bcrypt 哈希后再传给仓储层,
+	// 密码变更只约束后续加入,不回溯影响已加入成员,故不算合同变更。
+	JoinPassword    *string
+	ForceActiveEdit bool
+	ExpectedVersion *int64
+	Reason          string
+	Confirmed       bool
 }
 
 type AccountShareModeRepository interface {
@@ -1338,6 +1392,11 @@ type AccountShareModeService struct {
 	reviewStopOnce         sync.Once
 	reviewStartOnce        sync.Once
 	reviewWG               sync.WaitGroup
+	jobHeartbeatSink       accountShareJobHeartbeatSink
+	// itemBackoff 为 service 侧批处理循环（idle 结束、可恢复 suspend）的
+	// 单行失败退避；repo 侧管线（席位计费、unavailable 结束、waiver 补偿）
+	// 持有自己的实例。
+	itemBackoff *AccountShareItemBackoff
 }
 
 func NewAccountShareModeService(
@@ -1369,6 +1428,7 @@ func NewAccountShareModeService(
 		reviewCtx:          reviewCtx,
 		reviewCancel:       reviewCancel,
 		reviewStopCh:       make(chan struct{}),
+		itemBackoff:        NewAccountShareItemBackoff(),
 	}
 }
 
@@ -1582,6 +1642,12 @@ func (s *AccountShareModeService) processOrphanBindingCleanupOnce() {
 	if _, ok := s.repo.(accountShareOrphanBindingCleanupRepository); !ok {
 		return
 	}
+	startedAt := time.Now().UTC()
+	round := &accountShareWorkerRound{}
+	var runErr error
+	defer func() {
+		s.recordShareJobHeartbeat(accountShareOrphanBindingCleanupTaskName, startedAt, round.summary(), runErr)
+	}()
 	// 孤儿清扫与其它周期性 worker 一致，走集群 lease 避免多实例重复执行。
 	// CleanupOrphanMembershipBindings 本身幂等（FOR UPDATE + 二次 0 行），但复用
 	// taskExecutor 统一多实例协调与可观测性。taskExecutor 为 nil 时退化为单实例直跑，
@@ -1593,36 +1659,48 @@ func (s *AccountShareModeService) processOrphanBindingCleanupOnce() {
 			if err := guard.Check(taskCtx); err != nil {
 				return err
 			}
-			s.processOrphanBindingCleanupBatch(taskCtx)
+			if err := s.processOrphanBindingCleanupBatch(taskCtx, round); err != nil {
+				return err
+			}
 			return guard.Check(taskCtx)
 		})
 		if err != nil {
 			log.Printf("account_share_mode: orphan binding cleanup lease failed: %v", err)
+			runErr = err
 		}
 		return
 	}
-	s.processOrphanBindingCleanupBatch(s.seatBillingWorkerContext())
+	if err := s.processOrphanBindingCleanupBatch(s.seatBillingWorkerContext(), round); err != nil {
+		log.Printf("account_share_mode: orphan binding cleanup failed: %v", err)
+		runErr = err
+	}
 }
 
-func (s *AccountShareModeService) processOrphanBindingCleanupBatch(ctx context.Context) {
+func (s *AccountShareModeService) processOrphanBindingCleanupBatch(ctx context.Context, round *accountShareWorkerRound) error {
 	cleanupRepo, ok := s.repo.(accountShareOrphanBindingCleanupRepository)
 	if !ok {
-		return
+		return nil
 	}
 	cleaned, err := cleanupRepo.CleanupOrphanMembershipBindings(ctx, time.Now().UTC(), AccountShareModeSeatBillingBatchSize)
 	if err != nil {
-		log.Printf("account_share_mode: orphan binding cleanup failed: %v", err)
-		return
+		return err
 	}
+	round.add(cleaned, 0)
 	if cleaned > 0 {
 		log.Printf("account_share_mode: cleaned %d orphan membership bindings", cleaned)
 	}
+	return nil
 }
 
 func (s *AccountShareModeService) processRoomLifecycleFinalizationOnce() error {
 	if s == nil || s.repo == nil {
 		return nil
 	}
+	startedAt := time.Now().UTC()
+	var runErr error
+	defer func() {
+		s.recordShareJobHeartbeat(accountShareRoomLifecycleFinalizerTaskName, startedAt, "", runErr)
+	}()
 	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), 2*time.Minute)
 	defer cancel()
 	_, err := s.taskExecutor.Run(ctx, accountShareRoomLifecycleFinalizerTaskName, func(
@@ -1639,6 +1717,7 @@ func (s *AccountShareModeService) processRoomLifecycleFinalizationOnce() error {
 	})
 	if err != nil {
 		log.Printf("account_share_mode: room lifecycle finalizer lease failed: %v", err)
+		runErr = err
 	}
 	return err
 }
@@ -1647,33 +1726,40 @@ func (s *AccountShareModeService) processSeatBillingOnce() {
 	if s == nil || s.repo == nil {
 		return
 	}
+	startedAt := time.Now().UTC()
+	round := &accountShareWorkerRound{}
+	var runErr error
+	defer func() {
+		s.recordShareJobHeartbeat(accountShareSeatBillingTaskName, startedAt, round.summary(), runErr)
+	}()
 	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), 5*time.Minute)
 	defer cancel()
 	_, err := s.taskExecutor.Run(ctx, accountShareSeatBillingTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
-		return s.processSeatBillingOnceLeased(taskCtx, guard)
+		return s.processSeatBillingOnceLeased(taskCtx, guard, round)
 	})
 	if err != nil {
 		log.Printf("account_share_mode: seat billing lease failed: %v", err)
+		runErr = err
 	}
 }
 
-func (s *AccountShareModeService) processSeatBillingOnceLeased(ctx context.Context, guard *ClusterLeaseGuard) error {
+func (s *AccountShareModeService) processSeatBillingOnceLeased(ctx context.Context, guard *ClusterLeaseGuard, round *accountShareWorkerRound) error {
 	if err := guard.Check(ctx); err != nil {
 		return err
 	}
-	s.processUnavailableMembershipsOnce(ctx)
+	s.processUnavailableMembershipsOnce(ctx, round)
 	if err := guard.Check(ctx); err != nil {
 		return err
 	}
-	s.processPermanentlyUnavailableListingsOnce(ctx)
+	s.processPermanentlyUnavailableListingsOnce(ctx, round)
 	if err := guard.Check(ctx); err != nil {
 		return err
 	}
-	s.processRecoverableUnavailableMembershipsOnce(ctx)
+	s.processRecoverableUnavailableMembershipsOnce(ctx, round)
 	if err := guard.Check(ctx); err != nil {
 		return err
 	}
-	s.processIdleMembershipsOnce(ctx)
+	s.processIdleMembershipsOnce(ctx, round)
 	for {
 		if err := guard.Check(ctx); err != nil {
 			return err
@@ -1684,8 +1770,12 @@ func (s *AccountShareModeService) processSeatBillingOnceLeased(ctx context.Conte
 		if err != nil {
 			return fmt.Errorf("process prepaid seat billing: %w", err)
 		}
+		round.observe(result)
 		s.invalidateSeatBillingCaches(result)
-		if result == nil || result.Processed < AccountShareModeSeatBillingBatchSize {
+		// 全部候选都被退避/失败占满时立即退出：它们仍满足查询条件，
+		// 继续循环只会反复选中同一批行空转到整轮超时。
+		if result == nil || result.Processed < AccountShareModeSeatBillingBatchSize ||
+			result.Unresolved() {
 			break
 		}
 	}
@@ -1699,23 +1789,30 @@ func (s *AccountShareModeService) processMembershipEndingOnce() {
 	if s == nil || s.repo == nil {
 		return
 	}
+	startedAt := time.Now().UTC()
+	round := &accountShareWorkerRound{}
+	var runErr error
+	defer func() {
+		s.recordShareJobHeartbeat(accountShareMembershipEndingTaskName, startedAt, round.summary(), runErr)
+	}()
 	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), 5*time.Minute)
 	defer cancel()
 	_, err := s.taskExecutor.Run(ctx, accountShareMembershipEndingTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
-		return s.processEndingMembershipsOnceLeased(taskCtx, guard)
+		return s.processEndingMembershipsOnceLeased(taskCtx, guard, round)
 	})
 	if err != nil {
 		log.Printf("account_share_mode: membership ending lease failed: %v", err)
+		runErr = err
 	}
 }
 
 func (s *AccountShareModeService) processEndingMembershipsOnce(ctx context.Context) {
-	if err := s.processEndingMembershipsOnceLeased(ctx, nil); err != nil {
+	if err := s.processEndingMembershipsOnceLeased(ctx, nil, nil); err != nil {
 		log.Printf("account_share_mode: process ending memberships failed: %v", err)
 	}
 }
 
-func (s *AccountShareModeService) processEndingMembershipsOnceLeased(ctx context.Context, guard *ClusterLeaseGuard) error {
+func (s *AccountShareModeService) processEndingMembershipsOnceLeased(ctx context.Context, guard *ClusterLeaseGuard, round *accountShareWorkerRound) error {
 	if s == nil || s.repo == nil {
 		return nil
 	}
@@ -1743,6 +1840,12 @@ func (s *AccountShareModeService) processEndingMembershipsOnceLeased(ctx context
 		if candidate.MembershipID <= 0 || strings.TrimSpace(candidate.OperationID) == "" {
 			continue
 		}
+		// tryFinalizeMembershipEnd 返回 nil 既可能是失败也可能是"在途请求
+		// 未排空、留待下轮"的正常等待——不计入 failures，其重试原因已持久化
+		// 在 room_operations.blocker 供排查。
+		if round != nil {
+			round.scanned++
+		}
 		s.tryFinalizeMembershipEnd(ctx, candidate.MembershipID, candidate.OperationID)
 	}
 	return guard.Check(ctx)
@@ -1752,13 +1855,20 @@ func (s *AccountShareModeService) processSeatWaiverCompensationsOnce() {
 	if s == nil || s.repo == nil {
 		return
 	}
+	startedAt := time.Now().UTC()
+	round := &accountShareWorkerRound{}
+	var runErr error
+	defer func() {
+		s.recordShareJobHeartbeat(accountShareSeatWaiverCompensationTaskName, startedAt, round.summary(), runErr)
+	}()
 	ctx, cancel := context.WithTimeout(s.seatBillingWorkerContext(), AccountShareModeSeatWaiverCompensationTimeout)
 	defer cancel()
 	_, err := s.taskExecutor.Run(ctx, accountShareSeatWaiverCompensationTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
-		return s.runSeatWaiverCompensationRound(taskCtx, guard)
+		return s.runSeatWaiverCompensationRound(taskCtx, guard, round)
 	})
 	if err != nil {
 		log.Printf("account_share_mode: process seat waiver compensations failed: %v", err)
+		runErr = err
 	}
 }
 
@@ -1766,7 +1876,7 @@ func (s *AccountShareModeService) processSeatWaiverCompensationsOnce() {
 // 阶段1 排干未评估积压(迁移 203 回炉的历史行),阶段2 反查迟到 usage 触发的重评。
 // 两阶段共用轮内软预算与 keyset 游标;阶段2 的高水位仅在该阶段排干时推进,
 // 截断时冻结,保证不漏。
-func (s *AccountShareModeService) runSeatWaiverCompensationRound(taskCtx context.Context, guard *ClusterLeaseGuard) error {
+func (s *AccountShareModeService) runSeatWaiverCompensationRound(taskCtx context.Context, guard *ClusterLeaseGuard, round *accountShareWorkerRound) error {
 	roundStart := time.Now().UTC()
 	deadline := roundStart.Add(AccountShareModeSeatWaiverCompensationRoundBudget)
 	batchSize := AccountShareModeSeatWaiverCompensationBatchSize
@@ -1782,6 +1892,7 @@ func (s *AccountShareModeService) runSeatWaiverCompensationRound(taskCtx context
 			return fmt.Errorf("process seat waiver backlog compensations: %w", err)
 		}
 		if batch != nil {
+			round.observe(batch.Billing)
 			s.invalidateSeatBillingCaches(batch.Billing)
 		}
 		if batch == nil || batch.Matched < batchSize {
@@ -1809,6 +1920,7 @@ func (s *AccountShareModeService) runSeatWaiverCompensationRound(taskCtx context
 			return fmt.Errorf("process seat waiver late usage compensations: %w", err)
 		}
 		if batch != nil {
+			round.observe(batch.Billing)
 			s.invalidateSeatBillingCaches(batch.Billing)
 		}
 		if batch == nil || batch.Matched < batchSize {
@@ -1823,7 +1935,7 @@ func (s *AccountShareModeService) runSeatWaiverCompensationRound(taskCtx context
 	}
 }
 
-func (s *AccountShareModeService) processUnavailableMembershipsOnce(parentCtx context.Context) {
+func (s *AccountShareModeService) processUnavailableMembershipsOnce(parentCtx context.Context, round *accountShareWorkerRound) {
 	if s == nil || s.repo == nil {
 		return
 	}
@@ -1833,16 +1945,19 @@ func (s *AccountShareModeService) processUnavailableMembershipsOnce(parentCtx co
 		cancel()
 		if err != nil {
 			log.Printf("account_share_mode: process unavailable memberships failed: %v", err)
+			round.noteStepError("unavailable_end", err)
 			return
 		}
+		round.observe(result)
 		s.invalidateSeatBillingCaches(result)
-		if result == nil || result.Processed < AccountShareModeSeatBillingBatchSize {
+		if result == nil || result.Processed < AccountShareModeSeatBillingBatchSize ||
+			result.Unresolved() {
 			return
 		}
 	}
 }
 
-func (s *AccountShareModeService) processPermanentlyUnavailableListingsOnce(parentCtx context.Context) {
+func (s *AccountShareModeService) processPermanentlyUnavailableListingsOnce(parentCtx context.Context, round *accountShareWorkerRound) {
 	if s == nil || s.repo == nil {
 		return
 	}
@@ -1852,7 +1967,11 @@ func (s *AccountShareModeService) processPermanentlyUnavailableListingsOnce(pare
 		cancel()
 		if err != nil {
 			log.Printf("account_share_mode: disable permanently unavailable listings failed: %v", err)
+			round.noteStepError("disable_permanently_unavailable", err)
 			return
+		}
+		if result != nil {
+			round.add(result.Processed, 0)
 		}
 		if result == nil || result.Processed < AccountShareModeSeatBillingBatchSize {
 			return
@@ -1860,7 +1979,7 @@ func (s *AccountShareModeService) processPermanentlyUnavailableListingsOnce(pare
 	}
 }
 
-func (s *AccountShareModeService) processRecoverableUnavailableMembershipsOnce(parentCtx context.Context) {
+func (s *AccountShareModeService) processRecoverableUnavailableMembershipsOnce(parentCtx context.Context, round *accountShareWorkerRound) {
 	if s == nil || s.repo == nil {
 		return
 	}
@@ -1869,11 +1988,15 @@ func (s *AccountShareModeService) processRecoverableUnavailableMembershipsOnce(p
 	cancel()
 	if err != nil {
 		log.Printf("account_share_mode: suspend recoverable unavailable memberships failed: %v", err)
+		round.noteStepError("recoverable_suspend", err)
 		return
 	}
+	round.observe(result)
 	s.invalidateSeatBillingCaches(result)
 }
 
+// processRecoverableUnavailableMemberships 逐条隔离失败：单行失败记入
+// ItemFailures 并进入内存退避，不再中断整轮。
 func (s *AccountShareModeService) processRecoverableUnavailableMemberships(ctx context.Context, now time.Time, limit int) (*AccountShareSeatBillingResult, error) {
 	if s == nil || s.repo == nil {
 		return nil, ErrServiceUnavailable
@@ -1891,29 +2014,43 @@ func (s *AccountShareModeService) processRecoverableUnavailableMemberships(ctx c
 		if membershipID <= 0 {
 			continue
 		}
-		active, err := s.membershipHasActiveConcurrency(ctx, membershipID)
-		if err != nil {
-			return result, err
-		}
-		if active {
+		if !s.itemBackoff.Allow(AccountShareBackoffScopeRecoverable, membershipID, now) {
+			result.SkippedBackoff++
 			continue
 		}
-		membership, billing, err := s.repo.BeginUnavailableMembershipEnd(ctx, membershipID, now)
-		if err != nil {
-			if errors.Is(err, ErrAccountShareListingNotFound) {
-				continue
+		itemErr := func() error {
+			active, err := s.membershipHasActiveConcurrency(ctx, membershipID)
+			if err != nil {
+				return err
 			}
-			return result, err
-		}
-		if membership == nil {
+			if active {
+				return nil
+			}
+			membership, billing, err := s.repo.BeginUnavailableMembershipEnd(ctx, membershipID, now)
+			if err != nil {
+				if errors.Is(err, ErrAccountShareListingNotFound) {
+					return nil
+				}
+				return err
+			}
+			if membership == nil {
+				return nil
+			}
+			appendAccountShareSeatBillingResult(result, billing)
+			return nil
+		}()
+		if itemErr != nil {
+			delay := s.itemBackoff.OnFailure(AccountShareBackoffScopeRecoverable, membershipID, now)
+			result.ItemFailures = append(result.ItemFailures, AccountShareItemFailure{ItemID: membershipID, Err: itemErr})
+			log.Printf("account_share_mode: suspend recoverable membership %d failed (retry in %s): %v", membershipID, delay, itemErr)
 			continue
 		}
-		appendAccountShareSeatBillingResult(result, billing)
+		s.itemBackoff.OnSuccess(AccountShareBackoffScopeRecoverable, membershipID)
 	}
 	return result, nil
 }
 
-func (s *AccountShareModeService) processIdleMembershipsOnce(parentCtx context.Context) {
+func (s *AccountShareModeService) processIdleMembershipsOnce(parentCtx context.Context, round *accountShareWorkerRound) {
 	if s == nil || s.repo == nil {
 		return
 	}
@@ -1923,9 +2060,12 @@ func (s *AccountShareModeService) processIdleMembershipsOnce(parentCtx context.C
 		cancel()
 		if err != nil {
 			log.Printf("account_share_mode: process idle memberships failed: %v", err)
+			round.noteStepError("idle_end", err)
 			return
 		}
-		if result == nil || result.Processed < AccountShareModeSeatBillingBatchSize {
+		round.observe(result)
+		if result == nil || result.Processed < AccountShareModeSeatBillingBatchSize ||
+			result.Unresolved() {
 			return
 		}
 	}
@@ -1947,24 +2087,38 @@ func (s *AccountShareModeService) processIdleMemberships(ctx context.Context, no
 		if candidate.MembershipID <= 0 {
 			continue
 		}
-		active, err := s.membershipHasActiveConcurrency(ctx, candidate.MembershipID)
-		if err != nil {
-			return result, err
-		}
-		if active {
+		if !s.itemBackoff.Allow(AccountShareBackoffScopeIdle, candidate.MembershipID, now) {
+			result.SkippedBackoff++
 			continue
 		}
-		membership, billing, err := s.repo.EndIdleMembership(ctx, candidate.MembershipID, candidate.Deadline)
-		if err != nil {
-			if errors.Is(err, ErrAccountShareListingNotFound) {
-				continue
+		itemErr := func() error {
+			active, err := s.membershipHasActiveConcurrency(ctx, candidate.MembershipID)
+			if err != nil {
+				return err
 			}
-			return result, err
-		}
-		if membership == nil {
+			if active {
+				return nil
+			}
+			membership, billing, err := s.repo.EndIdleMembership(ctx, candidate.MembershipID, candidate.Deadline)
+			if err != nil {
+				if errors.Is(err, ErrAccountShareListingNotFound) {
+					return nil
+				}
+				return err
+			}
+			if membership == nil {
+				return nil
+			}
+			appendAccountShareSeatBillingResult(result, billing)
+			return nil
+		}()
+		if itemErr != nil {
+			delay := s.itemBackoff.OnFailure(AccountShareBackoffScopeIdle, candidate.MembershipID, now)
+			result.ItemFailures = append(result.ItemFailures, AccountShareItemFailure{ItemID: candidate.MembershipID, Err: itemErr})
+			log.Printf("account_share_mode: end idle membership %d failed (retry in %s): %v", candidate.MembershipID, delay, itemErr)
 			continue
 		}
-		appendAccountShareSeatBillingResult(result, billing)
+		s.itemBackoff.OnSuccess(AccountShareBackoffScopeIdle, candidate.MembershipID)
 	}
 	s.invalidateSeatBillingCaches(result)
 	return result, nil
@@ -2017,21 +2171,23 @@ func (s *AccountShareModeService) ListModeGroups(ctx context.Context) ([]Account
 		PlatformDeepseek,
 		PlatformMiniMax,
 		PlatformQwen,
+		PlatformDevin,
+		PlatformAPIAggregation,
 	}
 	groups := make([]AccountShareModeGroup, 0, len(platforms))
 	for _, platform := range platforms {
 		group, err := s.repo.GetModeGroup(ctx, platform)
 		if err != nil {
-			if IsCNProvider(platform) && errors.Is(err, ErrAccountShareModeGroupUnavailable) {
+			if (IsCNProvider(platform) || platform == PlatformDevin || IsAPIAggregationProvider(platform)) && errors.Is(err, ErrAccountShareModeGroupUnavailable) {
 				continue
 			}
 			return nil, err
 		}
 		if group == nil || group.ID <= 0 {
-			// 国产平台的模式分组可以随平台功能逐步启用。缺少配置时跳过
+			// 国产平台与 Devin 的模式分组可以随平台功能逐步启用。缺少配置时跳过
 			// 该平台，保留已有账号广场平台继续工作；数据库查询错误仍然
 			// 直接返回，避免把真实故障伪装成未配置。
-			if IsCNProvider(platform) {
+			if IsCNProvider(platform) || platform == PlatformDevin || IsAPIAggregationProvider(platform) {
 				continue
 			}
 			return nil, ErrAccountShareModeGroupUnavailable
@@ -2297,6 +2453,10 @@ func (s *AccountShareModeService) CreateOpenAIListingFromToken(ctx context.Conte
 	if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, account.Credentials, account.Extra); err != nil {
 		return nil, err
 	}
+	joinPasswordHash, err := hashAccountShareJoinPassword(input.JoinPassword)
+	if err != nil {
+		return nil, err
+	}
 	listing := &AccountShareListing{
 		OwnerUserID:            ownerUserID,
 		Status:                 s.initialListingStatus(),
@@ -2311,6 +2471,8 @@ func (s *AccountShareModeService) CreateOpenAIListingFromToken(ctx context.Conte
 		CodexCLIOnly:           input.CodexCLIOnly,
 		Codex5hLimitPercent:    normalizeCodexLimitPercent(input.Codex5hLimitPercent),
 		Codex7dLimitPercent:    normalizeCodexLimitPercent(input.Codex7dLimitPercent),
+		JoinPasswordHash:       joinPasswordHash,
+		HasJoinPassword:        joinPasswordHash != "",
 	}
 	created, err := s.repo.CreatePlatformListing(ctx, account, listing, modeGroup.ID)
 	if err != nil {
@@ -2403,6 +2565,10 @@ func (s *AccountShareModeService) CreateAnthropicListingFromToken(ctx context.Co
 	if err := validateOwnedAccountSourceForPlatform(account.Platform, account.Type, account.Credentials, account.Extra); err != nil {
 		return nil, err
 	}
+	joinPasswordHash, err := hashAccountShareJoinPassword(input.JoinPassword)
+	if err != nil {
+		return nil, err
+	}
 	listing := &AccountShareListing{
 		OwnerUserID:             ownerUserID,
 		Status:                  s.initialListingStatus(),
@@ -2418,6 +2584,8 @@ func (s *AccountShareModeService) CreateAnthropicListingFromToken(ctx context.Co
 		Codex7dLimitPercent:     input.Anthropic7dLimitPercent,
 		Anthropic5hLimitPercent: input.Anthropic5hLimitPercent,
 		Anthropic7dLimitPercent: input.Anthropic7dLimitPercent,
+		JoinPasswordHash:        joinPasswordHash,
+		HasJoinPassword:         joinPasswordHash != "",
 	}
 	created, err := s.repo.CreatePlatformListing(ctx, account, listing, modeGroup.ID)
 	if err != nil {
@@ -2471,6 +2639,10 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 		codex5hLimitPercent = normalizeAnthropicLimitPercent(input.Anthropic5hLimitPercent)
 		codex7dLimitPercent = normalizeAnthropicLimitPercent(input.Anthropic7dLimitPercent)
 	}
+	joinPasswordHash, err := hashAccountShareJoinPassword(input.JoinPassword)
+	if err != nil {
+		return nil, err
+	}
 	listing := &AccountShareListing{
 		AccountID:               account.ID,
 		AccountName:             account.Name,
@@ -2491,6 +2663,8 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 		Codex7dLimitPercent:     codex7dLimitPercent,
 		Anthropic5hLimitPercent: normalizeAnthropicLimitPercent(input.Anthropic5hLimitPercent),
 		Anthropic7dLimitPercent: normalizeAnthropicLimitPercent(input.Anthropic7dLimitPercent),
+		JoinPasswordHash:        joinPasswordHash,
+		HasJoinPassword:         joinPasswordHash != "",
 	}
 	if idempotencyRepo, ok := s.repo.(accountShareRoomCreationIdempotencyRepository); ok {
 		existing, findErr := idempotencyRepo.FindRoomCreationByIdempotency(
@@ -2531,8 +2705,8 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 		}
 		accountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
 	}
-	// OpenCode 与国产 API Key 平台没有账号等级概念，account_level 可为 unknown，允许上架。
-	if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode && !IsCNProvider(account.Platform) {
+	// OpenCode/Devin 与国产 API Key 平台没有账号等级概念，account_level 可为 unknown，允许上架。
+	if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode && account.Platform != PlatformDevin && !IsCNProvider(account.Platform) && !IsAPIAggregationProvider(account.Platform) {
 		return nil, ErrAccountShareRoomUnknownLevel
 	}
 	if err := validateAccountShareListingConfig(
@@ -3214,6 +3388,15 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 		}
 		input.AllowedModels = &normalized
 	}
+	if input.JoinPassword != nil {
+		// 明文校验后就地替换为 bcrypt 哈希,仓储层只负责持久化。
+		// 空串保留原样语义,由仓储层写成 NULL(清除密码)。
+		joinPasswordHash, err := hashAccountShareJoinPassword(*input.JoinPassword)
+		if err != nil {
+			return nil, err
+		}
+		input.JoinPassword = &joinPasswordHash
+	}
 	if !actorIsAdmin && !isAccountShareModeModelOnlyUpdate(input) && !isAccountShareModeOwnerConfigUpdate(input) {
 		return nil, ErrInsufficientPerms
 	}
@@ -3250,6 +3433,29 @@ func (s *AccountShareModeService) UpdateListing(ctx context.Context, actorUserID
 	}
 	if s == nil || s.repo == nil {
 		return nil, ErrServiceUnavailable
+	}
+	if input.AllowedModels != nil {
+		if s.pricedModelCatalog == nil {
+			return nil, ErrServiceUnavailable
+		}
+		current, err := s.repo.GetListingByID(ctx, listingID, actorUserID)
+		if err != nil {
+			return nil, err
+		}
+		if current == nil {
+			return nil, ErrAccountShareListingNotFound
+		}
+		// 与创建时同一约束：房间可选模型必须全部在平台定价目录内。
+		query := s.pricedModelQueryForPlatform(ctx, current.Platform)
+		for _, model := range *input.AllowedModels {
+			priced, err := s.pricedModelCatalog.IsModelPriced(ctx, query, model)
+			if err != nil {
+				return nil, fmt.Errorf("check room model pricing: %w", err)
+			}
+			if !priced {
+				return nil, accountShareModeUnsupportedModelError(model)
+			}
+		}
 	}
 	if input.PerUserConcurrency != nil {
 		current, err := s.repo.GetListingByID(ctx, listingID, actorUserID)
@@ -3336,6 +3542,7 @@ func isAccountShareModeModelOnlyUpdate(input UpdateAccountShareListingInput) boo
 		input.Anthropic5hLimitPercent == nil &&
 		input.Anthropic7dLimitPercent == nil &&
 		input.Concurrency == nil &&
+		input.JoinPassword == nil &&
 		!input.ForceActiveEdit
 }
 
@@ -3381,7 +3588,8 @@ func hasAccountShareModeConfigUpdate(input UpdateAccountShareListingInput) bool 
 		input.Codex7dLimitPercent != nil ||
 		input.Anthropic5hLimitPercent != nil ||
 		input.Anthropic7dLimitPercent != nil ||
-		input.Concurrency != nil
+		input.Concurrency != nil ||
+		input.JoinPassword != nil
 }
 
 func (s *AccountShareModeService) validateOwnerRelist(ctx context.Context, actorUserID, listingID int64) error {
@@ -3448,12 +3656,12 @@ func accountShareConnectivityTestTimeout(modelID string) time.Duration {
 }
 
 // accountShareRoomConnectivityTestModel returns the model used by room health
-// validation. OpenCode rooms deliberately use the stable default probe instead
-// of the first room allow-list model, which may be unavailable independently of
-// the account credentials.
+// validation. OpenCode rooms leave the model empty so the account tester can
+// choose the stable probe for the credential's GO/Zen mode; the first room
+// allow-list model may be unavailable independently of the account credentials.
 func accountShareRoomConnectivityTestModel(platform string, allowedModels []string) string {
 	if strings.EqualFold(strings.TrimSpace(platform), PlatformOpencode) {
-		return defaultOpencodeTestModel
+		return ""
 	}
 	return firstAllowedModel(allowedModels)
 }
@@ -3653,11 +3861,24 @@ func (s *AccountShareModeService) enrichListingsSupportedModels(
 
 // listRoomCatalogModels 返回平台定价目录全集，作为「账号均未配置显式映射」时房间的候选能力。
 // 目录未注入或读取失败返回 nil（保持「不限」降级，由前端兜底），目录为空返回空切片。
+// pricedModelQueryForPlatform 构造房间定价目录查询。api_aggregation 额外限定到
+// 「API聚合分组」（账号广场模式分组），保证 APIKEY 房间的可选模型与计费价卡
+// 统一来自该分组绑定的聚合渠道，而不是任意带 api_aggregation 定价的渠道。
+func (s *AccountShareModeService) pricedModelQueryForPlatform(ctx context.Context, platform string) PricedModelQuery {
+	query := PricedModelQuery{Platform: platform}
+	if platform == PlatformAPIAggregation && s != nil && s.repo != nil {
+		if group, err := s.repo.GetModeGroup(ctx, platform); err == nil && group != nil {
+			query.GroupID = &group.ID
+		}
+	}
+	return query
+}
+
 func (s *AccountShareModeService) listRoomCatalogModels(ctx context.Context, platform string) []string {
 	if s == nil || s.pricedModelCatalog == nil {
 		return nil
 	}
-	models, err := s.pricedModelCatalog.ListSelectablePricedModelIDs(ctx, PricedModelQuery{Platform: platform})
+	models, err := s.pricedModelCatalog.ListSelectablePricedModelIDs(ctx, s.pricedModelQueryForPlatform(ctx, platform))
 	if err != nil {
 		log.Printf("[AccountShareMode] list room catalog models failed: platform=%s err=%v", platform, err)
 		return nil
@@ -3712,8 +3933,9 @@ func (s *AccountShareModeService) applyAccountSharePricedCatalog(ctx context.Con
 		return accountModels
 	}
 	out := make([]string, 0, len(accountModels))
+	query := s.pricedModelQueryForPlatform(ctx, platform)
 	for _, model := range accountModels {
-		priced, err := s.pricedModelCatalog.IsModelPriced(ctx, PricedModelQuery{Platform: platform}, model)
+		priced, err := s.pricedModelCatalog.IsModelPriced(ctx, query, model)
 		if err != nil {
 			log.Printf("[AccountShareMode] check priced model failed: platform=%s model=%s err=%v", platform, model, err)
 			out = append(out, model) // 目录读取失败不收缩交集，避免定价服务抖动破坏展示
@@ -3834,12 +4056,54 @@ type accountShareJoinPreparation struct {
 	now          time.Time
 }
 
+// hashAccountShareJoinPassword 校验并按 bcrypt 哈希房间加入密码。
+// 空输入返回空串(表示无密码),长度按字节校验以避开 bcrypt 的 72 字节上限。
+func hashAccountShareJoinPassword(password string) (string, error) {
+	normalized := strings.TrimSpace(password)
+	if normalized == "" {
+		return "", nil
+	}
+	if len(normalized) < AccountShareJoinPasswordMinLength || len(normalized) > AccountShareJoinPasswordMaxLength {
+		return "", ErrAccountShareRoomPasswordInvalidLength
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(normalized), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(hash), nil
+}
+
+// verifyAccountShareJoinPassword 在创建 join intent 时校验房间密码。
+// 号主自用与管理员免密;无密码房间直接放行。校验通过即由签名 token
+// 承载授权,CompleteJoinListing 不再重复验密;此后房主改密会使
+// row_version 变化,已签发 intent 自然失效,满足"只影响新加入者"。
+func verifyAccountShareJoinPassword(preparation *accountShareJoinPreparation, password string, actorIsAdmin bool) error {
+	if preparation == nil || preparation.listing == nil {
+		return ErrAccountShareListingNotFound
+	}
+	if preparation.ownerSelfUse || actorIsAdmin {
+		return nil
+	}
+	hash := strings.TrimSpace(preparation.listing.JoinPasswordHash)
+	if hash == "" {
+		return nil
+	}
+	password = strings.TrimSpace(password)
+	if password == "" {
+		return ErrAccountShareRoomPasswordRequired
+	}
+	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
+		return ErrAccountShareRoomPasswordInvalid
+	}
+	return nil
+}
+
 func (s *AccountShareModeService) CreateJoinIntent(
 	ctx context.Context,
 	consumerUserID, listingID int64,
 	input CreateAccountShareJoinIntentInput,
 ) (*AccountShareJoinIntent, error) {
-	_, err := s.prepareAccountShareJoin(
+	preparation, err := s.prepareAccountShareJoin(
 		ctx,
 		consumerUserID,
 		listingID,
@@ -3847,6 +4111,9 @@ func (s *AccountShareModeService) CreateJoinIntent(
 		input.IdleTimeoutMinutes,
 	)
 	if err != nil {
+		return nil, err
+	}
+	if err := verifyAccountShareJoinPassword(preparation, input.Password, input.ActorIsAdmin); err != nil {
 		return nil, err
 	}
 	if len(s.actionTokenSecret) < 32 {
@@ -3862,7 +4129,7 @@ func (s *AccountShareModeService) CreateJoinIntent(
 	// Legacy listings may receive their first immutable revision while the
 	// intent is being created. Reload all join preconditions so the signed
 	// confirmation is based on the same revision the user sees.
-	preparation, err := s.prepareAccountShareJoin(
+	preparation, err = s.prepareAccountShareJoin(
 		ctx,
 		consumerUserID,
 		listingID,
@@ -3898,13 +4165,14 @@ func (s *AccountShareModeService) CreateJoinIntent(
 		return nil, err
 	}
 	return &AccountShareJoinIntent{
-		ListingID:          listingID,
-		APIKeyID:           input.APIKeyID,
-		Token:              token,
-		ExpiresAt:          expiresAt,
-		ExpectedVersion:    terms.RowVersion,
-		ExpectedRevisionID: terms.ListingRevisionID,
-		Terms:              terms,
+		ListingID:             listingID,
+		APIKeyID:              input.APIKeyID,
+		Token:                 token,
+		ExpiresAt:             expiresAt,
+		ExpectedVersion:       terms.RowVersion,
+		ExpectedRevisionID:    terms.ListingRevisionID,
+		Terms:                 terms,
+		RequiresUnverifiedAck: normalizeAccountShareListingPlatform(preparation.listing.Platform) == PlatformAPIAggregation,
 	}, nil
 }
 
@@ -3992,6 +4260,16 @@ func (s *AccountShareModeService) CompleteJoinListing(
 			"actual_version":   fmt.Sprintf("%d", preparation.listing.RowVersion),
 		})
 	}
+	// API聚合房间：必须在计费前拿到「已知晓未验证渠道」的显式确认，
+	// 防止绕过前端直接调用 join 接口。
+	var unverifiedAckAt *time.Time
+	if normalizeAccountShareListingPlatform(preparation.listing.Platform) == PlatformAPIAggregation {
+		if !input.AcknowledgedUnverified {
+			return nil, ErrAccountShareUnverifiedAckRequired
+		}
+		ackAt := now
+		unverifiedAckAt = &ackAt
+	}
 
 	result, err := s.repo.ProcessSeatBillingForJoin(ctx, now, consumerUserID, input.APIKeyID, listingID)
 	if err != nil {
@@ -4014,15 +4292,16 @@ func (s *AccountShareModeService) CompleteJoinListing(
 	}
 	issuedAt := time.Unix(0, claims.IssuedAt).UTC()
 	membership, err := s.repo.JoinListing(ctx, AccountShareJoinRepositoryInput{
-		ConsumerUserID:     consumerUserID,
-		APIKeyID:           input.APIKeyID,
-		ListingID:          listingID,
-		IdleTimeoutMinutes: input.IdleTimeoutMinutes,
-		ExpectedVersion:    claims.ExpectedVersion,
-		ExpectedRevisionID: claims.ExpectedRevisionID,
-		IntentIssuedAt:     issuedAt,
-		IntentNonce:        claims.Nonce,
-		AcceptedTerms:      &claims.Terms,
+		ConsumerUserID:           consumerUserID,
+		APIKeyID:                 input.APIKeyID,
+		ListingID:                listingID,
+		IdleTimeoutMinutes:       input.IdleTimeoutMinutes,
+		ExpectedVersion:          claims.ExpectedVersion,
+		ExpectedRevisionID:       claims.ExpectedRevisionID,
+		IntentIssuedAt:           issuedAt,
+		IntentNonce:              claims.Nonce,
+		AcceptedTerms:            &claims.Terms,
+		AcknowledgedUnverifiedAt: unverifiedAckAt,
 	})
 	if err != nil {
 		log.Printf("account_share_mode: join failed stage=repo_join user_id=%d listing_id=%d api_key_id=%d account_id=%d err=%v",
@@ -5032,13 +5311,25 @@ func AccountShareModeAllowedModelsMapping(models []string) map[string]any {
 // 目录为空或不可用时返回错误，不再回退到已漂移的静态默认列表。
 func (s *AccountShareModeService) resolveAccountShareRoomDefaultModels(ctx context.Context, platform string, models []string) ([]string, error) {
 	normalized := normalizeAllowedModels(models)
-	if len(normalized) > 0 {
-		return normalized, nil
-	}
 	if s == nil || s.pricedModelCatalog == nil {
 		return nil, ErrServiceUnavailable
 	}
-	catalogModels, err := s.pricedModelCatalog.ListSelectablePricedModelIDs(ctx, PricedModelQuery{Platform: platform})
+	query := s.pricedModelQueryForPlatform(ctx, platform)
+	if len(normalized) > 0 {
+		// 房间可选模型必须全部落在平台定价目录内（含通配符定价授权），
+		// 保证所有上游渠道的可选模型由平台定价统一管理。
+		for _, model := range normalized {
+			priced, err := s.pricedModelCatalog.IsModelPriced(ctx, query, model)
+			if err != nil {
+				return nil, fmt.Errorf("check room model pricing: %w", err)
+			}
+			if !priced {
+				return nil, accountShareModeUnsupportedModelError(model)
+			}
+		}
+		return normalized, nil
+	}
+	catalogModels, err := s.pricedModelCatalog.ListSelectablePricedModelIDs(ctx, query)
 	if err != nil {
 		return nil, fmt.Errorf("resolve room default models from pricing catalog: %w", err)
 	}
@@ -5207,6 +5498,10 @@ func normalizeAccountShareListingPlatform(platform string) string {
 		return PlatformMiniMax
 	case PlatformQwen:
 		return PlatformQwen
+	case PlatformDevin:
+		return PlatformDevin
+	case PlatformAPIAggregation:
+		return PlatformAPIAggregation
 	default:
 		return ""
 	}

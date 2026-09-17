@@ -1,8 +1,8 @@
 <template>
   <div class="w-full">
-    <label v-if="label" :for="id" class="input-label mb-1.5 block">
+    <label v-if="label" :for="inputId" class="input-label mb-1.5 block">
       {{ label }}
-      <span v-if="required" class="text-red-500">*</span>
+      <span v-if="required" class="text-red-500" aria-hidden="true">*</span>
     </label>
     <div class="relative">
       <!-- Prefix Icon Slot -->
@@ -14,7 +14,7 @@
       </div>
 
       <input
-        :id="id"
+        :id="inputId"
         ref="inputRef"
         :type="type"
         :value="modelValue"
@@ -23,6 +23,8 @@
         :placeholder="placeholderText"
         :autocomplete="autocomplete"
         :readonly="readonly"
+        :aria-invalid="error ? true : undefined"
+        :aria-describedby="describedBy || undefined"
         :class="[
           'input w-full transition-all duration-200',
           $slots.prefix ? 'pl-11' : '',
@@ -46,10 +48,10 @@
       </div>
     </div>
     <!-- Hint / Error Text -->
-    <p v-if="error" class="input-error-text mt-1.5">
+    <p v-if="error" :id="errorId" class="input-error-text mt-1.5" role="alert">
       {{ error }}
     </p>
-    <p v-else-if="hint" class="input-hint mt-1.5">
+    <p v-else-if="hint" :id="hintId" class="input-hint mt-1.5">
       {{ hint }}
     </p>
   </div>
@@ -57,6 +59,8 @@
 
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+
+let inputIdCounter = 0
 
 interface Props {
   modelValue: string | number | null | undefined
@@ -89,6 +93,17 @@ const emit = defineEmits<{
 
 const inputRef = ref<HTMLInputElement | null>(null)
 const placeholderText = computed(() => props.placeholder || '')
+
+// 未传入 id 时自动生成稳定 id，保证 label/for 与 aria-describedby 始终有效
+const autoId = `input-${++inputIdCounter}`
+const inputId = computed(() => props.id || autoId)
+const errorId = computed(() => `${inputId.value}-error`)
+const hintId = computed(() => `${inputId.value}-hint`)
+const describedBy = computed(() => {
+  if (props.error) return errorId.value
+  if (props.hint) return hintId.value
+  return ''
+})
 
 const onInput = (event: Event) => {
   const value = (event.target as HTMLInputElement).value

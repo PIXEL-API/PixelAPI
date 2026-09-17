@@ -15,6 +15,10 @@ func openAICompatiblePlatformFromContext(ctx context.Context) string {
 			return PlatformGrok
 		case PlatformOpencode:
 			return PlatformOpencode
+		case PlatformDevin:
+			return PlatformDevin
+		case PlatformAPIAggregation:
+			return PlatformAPIAggregation
 		}
 		if platform, _ := ctx.Value(ctxkey.ForcePlatform).(string); IsCNProvider(platform) {
 			return platform
@@ -126,4 +130,44 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForGrok(
 		selection.ReleaseFunc()
 	}
 	return nil, decision, ErrNoAvailableAccounts
+}
+
+// SelectGrokMediaVideoRequestAccount admits only the account that created the
+// async video task. A busy owner returns a bounded WaitPlan rather than letting
+// generic load balancing select a different account and then fail ownership.
+func (s *OpenAIGatewayService) SelectGrokMediaVideoRequestAccount(
+	ctx context.Context,
+	groupID *int64,
+	sessionHash string,
+	accountID int64,
+	requestedModel string,
+) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+	decision := OpenAIAccountScheduleDecision{Layer: openAIAccountScheduleLayerSessionSticky}
+	if accountID <= 0 || s == nil {
+		return nil, decision, ErrNoAvailableAccounts
+	}
+	scheduler := &defaultOpenAIAccountScheduler{service: s}
+	selection, decision, err := scheduler.Select(withGrokPlatform(ctx), OpenAIAccountScheduleRequest{
+		GroupID:           groupID,
+		SessionHash:       sessionHash,
+		StickyAccountID:   accountID,
+		StickyOnly:        true,
+		RequestedModel:    requestedModel,
+		RequiredTransport: OpenAIUpstreamTransportHTTPSSE,
+	})
+	if err != nil || selection == nil || selection.Account == nil {
+		return selection, decision, err
+	}
+	if selection.Account.Platform != PlatformGrok {
+		if selection.ReleaseFunc != nil {
+			selection.ReleaseFunc()
+		}
+		return nil, decision, ErrNoAvailableAccounts
+	}
+	selection.OpenAIDispatchRequirements = &OpenAIAccountDispatchRequirements{
+		RequestedModel:    requestedModel,
+		RequiredTransport: OpenAIUpstreamTransportHTTPSSE,
+		RequiredPlatform:  PlatformGrok,
+	}
+	return selection, decision, nil
 }

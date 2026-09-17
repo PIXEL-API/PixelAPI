@@ -1,6 +1,9 @@
 package apicompat
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestAnthropicEventToResponsesTextEmitsOrderedContentPartEvents(t *testing.T) {
 	state := NewAnthropicEventToResponsesState()
@@ -163,6 +166,23 @@ func TestFinalizeAnthropicResponsesStreamCarriesAccumulatedOutput(t *testing.T) 
 	}
 	if got := completed.Response.Output[0].Content[0].Text; got != "partial" {
 		t.Fatalf("synthetic terminal output text = %q, want partial", got)
+	}
+}
+
+func TestResponsesStreamEventMarshalIncludesZeroSequenceNumber(t *testing.T) {
+	payload, err := json.Marshal(ResponsesStreamEvent{
+		Type:     "response.created",
+		Response: &ResponsesResponse{ID: "resp_1", Object: "response", Status: "in_progress"},
+	})
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal event: %v", err)
+	}
+	if value, ok := decoded["sequence_number"]; !ok || value != float64(0) {
+		t.Fatalf("sequence_number = %#v, found=%v; want explicit zero", value, ok)
 	}
 }
 

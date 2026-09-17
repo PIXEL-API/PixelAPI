@@ -6,6 +6,21 @@
         <LoadingSpinner />
       </div>
 
+      <!-- Error State：首次加载失败且无旧数据时显示错误卡 -->
+      <div
+        v-else-if="loadError && !stats"
+        class="rounded-xl border border-red-200 bg-red-50 px-6 py-10 text-center dark:border-red-900/60 dark:bg-red-950/30"
+        role="alert"
+      >
+        <Icon name="exclamationCircle" size="lg" class="mx-auto text-red-500 dark:text-red-400" />
+        <p class="mt-3 text-sm font-medium text-red-800 dark:text-red-200">
+          {{ t('admin.dashboard.failedToLoad') }}
+        </p>
+        <button type="button" class="btn btn-primary mt-5" @click="loadDashboardStats">
+          {{ t('common.tryAgain') }}
+        </button>
+      </div>
+
       <template v-else-if="stats">
         <!-- Row 1: Core Stats -->
         <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
@@ -322,6 +337,7 @@ import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import Select from '@/components/common/Select.vue'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'
 import TokenUsageTrend from '@/components/charts/TokenUsageTrend.vue'
+import { useDarkMode } from '@/composables/useDarkMode'
 
 import {
   Chart as ChartJS,
@@ -350,6 +366,7 @@ const appStore = useAppStore()
 const router = useRouter()
 const stats = ref<DashboardStats | null>(null)
 const loading = ref(false)
+const loadError = ref(false)
 const chartsLoading = ref(false)
 const userTrendLoading = ref(false)
 const rankingLoading = ref(false)
@@ -424,10 +441,8 @@ const granularityOptions = computed(() => [
   { value: 'hour', label: t('admin.dashboard.hour') }
 ])
 
-// Dark mode detection
-const isDarkMode = computed(() => {
-  return document.documentElement.classList.contains('dark')
-})
+// Dark mode detection (reactive — updates chart colors on theme toggle)
+const isDarkMode = useDarkMode()
 
 // Chart colors
 const chartColors = computed(() => ({
@@ -639,7 +654,11 @@ const loadDashboardOverviewStats = async (currentSeq: number, signal: AbortSigna
     stats.value = response
   } catch (error) {
     if (currentSeq !== dashboardLoadSeq || signal.aborted) return
-    appStore.showError(t('admin.dashboard.failedToLoad'))
+    if (stats.value) {
+      appStore.showError(t('admin.dashboard.failedToLoad'))
+    } else {
+      loadError.value = true
+    }
     console.error('Error loading dashboard overview statistics:', error)
   } finally {
     if (currentSeq === dashboardLoadSeq && !signal.aborted) {
@@ -681,7 +700,11 @@ const loadDashboardSnapshot = async (
     }
   } catch (error) {
     if (currentSeq !== dashboardLoadSeq || signal.aborted) return
-    appStore.showError(t('admin.dashboard.failedToLoad'))
+    if (stats.value) {
+      appStore.showError(t('admin.dashboard.failedToLoad'))
+    } else {
+      loadError.value = true
+    }
     console.error('Error loading dashboard snapshot:', error)
   } finally {
     if (currentSeq === dashboardLoadSeq && !signal.aborted) {
@@ -762,6 +785,7 @@ const beginDashboardLoad = () => {
 }
 
 const loadDashboardData = async (includeOverview: boolean) => {
+  loadError.value = false
   const rangeParams = buildDashboardRangeParams()
   const { currentSeq, signal } = beginDashboardLoad()
   lastLoadedRange = rangeParams

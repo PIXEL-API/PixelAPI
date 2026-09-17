@@ -6,6 +6,10 @@ import { mount } from '@vue/test-utils'
 import { ref } from 'vue'
 import NavigationProgress from '../../common/NavigationProgress.vue'
 
+vi.mock('vue-i18n', () => ({
+  useI18n: () => ({ t: (key: string) => key })
+}))
+
 // Mock useNavigationLoadingState
 const mockIsLoading = ref(false)
 
@@ -46,7 +50,7 @@ describe('NavigationProgress', () => {
 
     const progressBar = wrapper.find('.navigation-progress')
     expect(progressBar.attributes('role')).toBe('progressbar')
-    expect(progressBar.attributes('aria-label')).toBe('Loading')
+    expect(progressBar.attributes('aria-label')).toBe('common.loading')
     expect(progressBar.attributes('aria-valuemin')).toBe('0')
     expect(progressBar.attributes('aria-valuemax')).toBe('100')
   })

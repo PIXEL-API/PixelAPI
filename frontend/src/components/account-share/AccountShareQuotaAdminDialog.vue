@@ -1,7 +1,7 @@
 <template>
   <BaseDialog
     :show="show"
-    title="账号广场 · 房间配额管理"
+    :title="t('accountShare.quotaAdmin.title')"
     width="extra-wide"
     :close-disabled="submitting"
     :close-on-escape="!submitting"
@@ -15,13 +15,13 @@
           <Icon name="cog" size="md" />
         </span>
         <div>
-          <span>仅管理员可见</span>
-          <strong>房间容量与创建频率</strong>
-          <p>所有修改都需要原因、明确确认、状态版本和幂等键；房主覆盖必须设置有效期。</p>
+          <span>{{ t('accountShare.quotaAdmin.adminOnly') }}</span>
+          <strong>{{ t('accountShare.quotaAdmin.subtitle') }}</strong>
+          <p>{{ t('accountShare.quotaAdmin.auditNote') }}</p>
         </div>
       </header>
 
-      <div class="quota-admin-tabs" role="tablist" aria-label="配额管理范围">
+      <div class="quota-admin-tabs" role="tablist" :aria-label="t('accountShare.quotaAdmin.scopeLabel')">
         <button
           type="button"
           role="tab"
@@ -30,7 +30,7 @@
           data-testid="quota-global-tab"
           @click="setScope('global')"
         >
-          全局默认
+          {{ t('accountShare.quotaAdmin.scopeGlobal') }}
         </button>
         <button
           type="button"
@@ -40,7 +40,7 @@
           data-testid="quota-owner-tab"
           @click="setScope('owner')"
         >
-          房主覆盖
+          {{ t('accountShare.quotaAdmin.scopeOwner') }}
         </button>
         <button
           type="button"
@@ -50,7 +50,7 @@
           data-testid="quota-batch-tab"
           @click="setScope('batch')"
         >
-          批量历史保留
+          {{ t('accountShare.quotaAdmin.scopeBatch') }}
         </button>
       </div>
 
@@ -59,19 +59,19 @@
         <span>{{ loadError }}</span>
       </div>
 
-      <section v-if="activeScope === 'global'" class="quota-admin-workspace" aria-label="全局房间配额">
+      <section v-if="activeScope === 'global'" class="quota-admin-workspace" :aria-label="t('accountShare.quotaAdmin.globalSectionLabel')">
         <div class="quota-admin-editor">
           <div class="quota-section-heading">
             <div>
-              <strong>全局默认配额</strong>
-              <span v-if="globalPolicy">当前版本 v{{ globalPolicy.version }} · {{ formatDateTime(globalPolicy.effective_at) }} 生效</span>
-              <span v-else>读取当前全局策略后才能修改</span>
+              <strong>{{ t('accountShare.quotaAdmin.globalTitle') }}</strong>
+              <span v-if="globalPolicy">{{ t('accountShare.quotaAdmin.globalVersion', { version: globalPolicy.version, effectiveAt: formatDateTime(globalPolicy.effective_at) }) }}</span>
+              <span v-else>{{ t('accountShare.quotaAdmin.globalReadHint') }}</span>
             </div>
             <button
               type="button"
               class="quota-icon-button"
               :disabled="loadingGlobal || submitting"
-              aria-label="刷新全局配额"
+              :aria-label="t('accountShare.quotaAdmin.refreshGlobal')"
               @click="loadGlobal"
             >
               <Icon name="refresh" size="sm" :class="{ 'animate-spin': loadingGlobal }" />
@@ -79,21 +79,21 @@
           </div>
 
           <div v-if="loadingGlobal && !globalPolicy" class="quota-empty" role="status">
-            正在读取全局配额…
+            {{ t('accountShare.quotaAdmin.globalLoading') }}
           </div>
           <template v-else-if="globalPolicy">
             <QuotaLimitsEditor v-model="globalLimits" :disabled="submitting" prefix="global" />
             <label class="quota-field">
-              <span>修改原因</span>
+              <span>{{ t('accountShare.quotaAdmin.reasonLabel') }}</span>
               <textarea
                 v-model="globalReason"
                 class="input min-h-24"
                 maxlength="1000"
                 :disabled="submitting"
-                placeholder="请说明调整依据和预期影响"
+                :placeholder="t('accountShare.quotaAdmin.reasonPlaceholder')"
                 data-testid="global-quota-reason"
               ></textarea>
-              <small>{{ globalReason.trim().length }}/1000 · 将写入不可变审计记录</small>
+              <small>{{ t('accountShare.quotaAdmin.reasonCounter', { length: globalReason.trim().length }) }}</small>
             </label>
             <button
               type="button"
@@ -102,7 +102,7 @@
               data-testid="prepare-global-quota-update"
               @click="prepareGlobalUpdate"
             >
-              复核全局修改
+              {{ t('accountShare.quotaAdmin.reviewGlobal') }}
             </button>
           </template>
         </div>
@@ -117,25 +117,25 @@
         />
       </section>
 
-      <section v-else-if="activeScope === 'owner'" class="quota-admin-workspace" aria-label="房主房间配额">
+      <section v-else-if="activeScope === 'owner'" class="quota-admin-workspace" :aria-label="t('accountShare.quotaAdmin.dialogAria')">
         <div class="quota-admin-editor">
           <div class="quota-section-heading">
             <div>
-              <strong>指定房主</strong>
-              <span>输入房主用户 ID 后读取实时用量、有效配额和覆盖版本</span>
+              <strong>{{ t('accountShare.quotaAdmin.pickOwner') }}</strong>
+              <span>{{ t('accountShare.quotaAdmin.pickOwnerDesc') }}</span>
             </div>
           </div>
 
           <form class="quota-owner-search" @submit.prevent="loadOwner">
             <label class="quota-field">
-              <span>房主用户 ID</span>
+              <span>{{ t('accountShare.quotaAdmin.ownerUserId') }}</span>
               <input
                 v-model.trim="ownerIDInput"
                 class="input min-h-11"
                 inputmode="numeric"
                 pattern="[0-9]*"
                 :disabled="loadingOwner || submitting"
-                placeholder="例如：1024"
+                :placeholder="t('accountShare.quotaAdmin.ownerIdPlaceholder')"
                 data-testid="quota-owner-id"
               />
             </label>
@@ -146,34 +146,34 @@
               data-testid="load-owner-quota"
             >
               <Icon name="search" size="sm" class="mr-2" :class="{ 'animate-pulse': loadingOwner }" />
-              {{ loadingOwner ? '读取中…' : '读取房主配额' }}
+              {{ loadingOwner ? t('accountShare.quotaAdmin.reading') : t('accountShare.quotaAdmin.readQuota') }}
             </button>
           </form>
 
           <template v-if="ownerState">
             <div class="quota-owner-state">
               <div>
-                <span>当前来源</span>
+                <span>{{ t('accountShare.quotaAdmin.currentSource') }}</span>
                 <strong>{{ quotaSourceLabel(ownerState.effective_quota) }}</strong>
               </div>
               <div>
-                <span>有效版本</span>
+                <span>{{ t('accountShare.quotaAdmin.effectiveVersion') }}</span>
                 <strong>v{{ ownerState.effective_quota.policy_version }}</strong>
               </div>
               <div>
-                <span>未删除房间</span>
+                <span>{{ t('accountShare.quotaAdmin.liveRooms') }}</span>
                 <strong>{{ ownerState.usage.live_rooms }}/{{ ownerState.effective_quota.limits.max_live_rooms }}</strong>
               </div>
               <div>
-                <span>24 小时创建</span>
+                <span>{{ t('accountShare.quotaAdmin.creates24h') }}</span>
                 <strong>{{ ownerState.usage.room_creates_24_hours }}/{{ ownerState.effective_quota.limits.max_room_creates_24_hours }}</strong>
               </div>
               <div>
-                <span>房间账号总数</span>
+                <span>{{ t('accountShare.quotaAdmin.totalRoomAccounts') }}</span>
                 <strong>{{ ownerState.usage.owner_room_accounts }}/{{ ownerState.effective_quota.limits.max_room_accounts_per_owner }}</strong>
               </div>
               <div>
-                <span>最大单房间账号</span>
+                <span>{{ t('accountShare.quotaAdmin.maxAccountsPerRoom') }}</span>
                 <strong>{{ ownerState.usage.largest_room_accounts }}/{{ ownerState.effective_quota.limits.max_accounts_per_room }}</strong>
               </div>
             </div>
@@ -185,13 +185,13 @@
               data-testid="quota-growth-blocked"
             >
               <Icon name="exclamationTriangle" size="sm" />
-              <span>该房主处于历史保留模式：只能收缩、排空或删除现有房间，不能新增房间、增加房间账号或扩大配额。</span>
+              <span>{{ t('accountShare.quotaAdmin.holdModeBanner') }}</span>
             </div>
 
             <QuotaLimitsEditor v-model="ownerLimits" :disabled="submitting" prefix="owner" />
 
             <label class="quota-field">
-              <span>覆盖有效期</span>
+              <span>{{ t('accountShare.quotaAdmin.overrideExpiry') }}</span>
               <input
                 v-model="ownerExpiresAt"
                 class="input min-h-11"
@@ -200,20 +200,20 @@
                 :disabled="submitting"
                 data-testid="owner-quota-expiry"
               />
-              <small>房主覆盖不能永久生效；到期后自动回落到全局默认。</small>
+              <small>{{ t('accountShare.quotaAdmin.overrideExpiryHint') }}</small>
             </label>
 
             <label class="quota-field">
-              <span>处置原因</span>
+              <span>{{ t('accountShare.quotaAdmin.reason') }}</span>
               <textarea
                 v-model="ownerReason"
                 class="input min-h-24"
                 maxlength="1000"
                 :disabled="submitting"
-                placeholder="请说明临时覆盖、历史保留或撤销的依据"
+                :placeholder="t('accountShare.quotaAdmin.reasonPlaceholder')"
                 data-testid="owner-quota-reason"
               ></textarea>
-              <small>{{ ownerReason.trim().length }}/1000 · 本次确认内三个动作共用该原因</small>
+              <small>{{ t('accountShare.quotaAdmin.reasonCounter', { length: ownerReason.trim().length }) }}</small>
             </label>
 
             <div class="quota-owner-actions">
@@ -224,7 +224,7 @@
                 data-testid="prepare-owner-quota-update"
                 @click="prepareOwnerUpdate"
               >
-                临时覆盖配额
+                {{ t('accountShare.quotaAdmin.tempOverride') }}
               </button>
               <button
                 type="button"
@@ -233,7 +233,7 @@
                 data-testid="prepare-owner-grandfather"
                 @click="prepareOwnerGrandfather"
               >
-                设为历史保留
+                {{ t('accountShare.quotaAdmin.setHold') }}
               </button>
               <button
                 type="button"
@@ -242,15 +242,15 @@
                 data-testid="prepare-owner-quota-revoke"
                 @click="prepareOwnerRevoke"
               >
-                撤销房主覆盖
+                {{ t('accountShare.quotaAdmin.revokeOverride') }}
               </button>
             </div>
           </template>
 
           <div v-else class="quota-empty">
             <Icon name="user" size="md" />
-            <strong>尚未选择房主</strong>
-            <span>读取后才能创建临时覆盖、历史保留策略或撤销现有覆盖。</span>
+            <strong>{{ t('accountShare.quotaAdmin.noOwner') }}</strong>
+            <span>{{ t('accountShare.quotaAdmin.noOwnerDesc') }}</span>
           </div>
         </div>
 
@@ -264,18 +264,18 @@
         />
       </section>
 
-      <section v-else class="quota-batch-workspace" aria-label="批量历史保留">
+      <section v-else class="quota-batch-workspace" :aria-label="t('accountShare.quotaAdmin.batchAria')">
         <div class="quota-batch-candidates">
           <div class="quota-section-heading">
             <div>
-              <strong>历史超限候选</strong>
-              <span>候选由服务端按当前用量、有效配额和策略版本实时生成；单次最多处理 100 位房主。</span>
+              <strong>{{ t('accountShare.quotaAdmin.candidatesTitle') }}</strong>
+              <span>{{ t('accountShare.quotaAdmin.candidatesDesc') }}</span>
             </div>
             <button
               type="button"
               class="quota-icon-button"
               :disabled="loadingCandidates || submitting"
-              aria-label="刷新历史超限候选"
+              :aria-label="t('accountShare.quotaAdmin.refreshCandidates')"
               @click="refreshCandidates"
             >
               <Icon name="refresh" size="sm" :class="{ 'animate-spin': loadingCandidates }" />
@@ -284,7 +284,7 @@
 
           <div class="quota-alert quota-alert-warning" role="status">
             <Icon name="exclamationTriangle" size="sm" />
-            <span>历史保留只冻结当前规模，不能继续增长；到期后自动回落到全局默认。执行前请核对建议上限和有效期。</span>
+            <span>{{ t('accountShare.quotaAdmin.holdExplainer') }}</span>
           </div>
 
           <div v-if="candidateError" class="quota-alert quota-alert-error" role="alert">
@@ -294,8 +294,8 @@
 
           <div class="quota-batch-toolbar">
             <div>
-              <strong>已选择 {{ selectedCandidateCount }}/100</strong>
-              <span>共 {{ candidateTotal }} 位当前候选</span>
+              <strong>{{ t('accountShare.quotaAdmin.selectedCount', { selectedCandidateCount }) }}</strong>
+              <span>{{ t('accountShare.quotaAdmin.totalCandidates', { candidateTotal }) }}</span>
             </div>
             <div>
               <button
@@ -305,7 +305,7 @@
                 data-testid="toggle-page-candidates"
                 @click="toggleCurrentPageCandidates"
               >
-                {{ allPageCandidatesSelected ? '取消本页' : '选择本页' }}
+                {{ allPageCandidatesSelected ? t('accountShare.quotaAdmin.deselectPage') : t('accountShare.quotaAdmin.selectPage') }}
               </button>
               <button
                 type="button"
@@ -314,18 +314,18 @@
                 data-testid="clear-batch-candidates"
                 @click="clearBatchSelection"
               >
-                清空选择
+                {{ t('accountShare.quotaAdmin.clearSelection') }}
               </button>
             </div>
           </div>
 
           <div v-if="loadingCandidates && batchCandidates.length === 0" class="quota-empty" role="status">
-            正在生成候选快照…
+            {{ t('accountShare.quotaAdmin.candidatesLoading') }}
           </div>
           <div v-else-if="batchCandidates.length === 0" class="quota-empty">
             <Icon name="checkCircle" size="md" />
-            <strong>当前没有历史超限房主</strong>
-            <span>所有房主均在有效配额内，或已经处于有效的历史保留策略中。</span>
+            <strong>{{ t('accountShare.quotaAdmin.noCandidates') }}</strong>
+            <span>{{ t('accountShare.quotaAdmin.noCandidatesDesc') }}</span>
           </div>
           <div v-else class="quota-candidate-list" data-testid="quota-candidate-list">
             <article
@@ -339,17 +339,17 @@
                   type="checkbox"
                   :checked="isCandidateSelected(candidate.owner_user_id)"
                   :disabled="!canSelectCandidate(candidate.owner_user_id) || submitting"
-                  :aria-label="`选择房主 ${candidate.owner_user_id}`"
+                  :aria-:label="t('accountShare.quotaAdmin.selectOwnerAria')"
                   :data-testid="`candidate-${candidate.owner_user_id}`"
                   @change="toggleCandidate(candidate)"
                 />
                 <span>
-                  <strong>房主 #{{ candidate.owner_user_id }}</strong>
-                  <small>快照 {{ formatDateTime(candidate.as_of) }} · 策略版本 v{{ candidate.latest_owner_version }}</small>
+                  <strong>{{ t('accountShare.quotaAdmin.ownerRef', { ownerUserId: candidate.owner_user_id }) }}</strong>
+                  <small>{{ t('accountShare.quotaAdmin.snapshotInfo', { asOf: formatDateTime(candidate.as_of), latestOwnerVersion: candidate.latest_owner_version }) }}</small>
                 </span>
               </label>
 
-              <div class="quota-candidate-dimensions" aria-label="超限维度">
+              <div class="quota-candidate-dimensions" :aria-label="t('accountShare.quotaAdmin.dimensionAria')">
                 <span v-for="dimension in candidate.exceeded_dimensions" :key="dimension">
                   {{ quotaDimensionLabel(dimension) }}
                 </span>
@@ -357,24 +357,24 @@
 
               <dl class="quota-candidate-metrics">
                 <div>
-                  <dt>未删除房间</dt>
+                  <dt>{{ t('accountShare.quotaAdmin.liveRooms') }}</dt>
                   <dd>{{ candidate.usage.live_rooms }} / {{ candidate.effective_quota.limits.max_live_rooms }}</dd>
-                  <small>保留 {{ candidate.suggested_limits.max_live_rooms }}</small>
+                  <small>{{ t('accountShare.quotaAdmin.keepLiveRooms', { maxLiveRooms: candidate.suggested_limits.max_live_rooms }) }}</small>
                 </div>
                 <div>
-                  <dt>24 小时创建</dt>
+                  <dt>{{ t('accountShare.quotaAdmin.creates24h') }}</dt>
                   <dd>{{ candidate.usage.room_creates_24_hours }} / {{ candidate.effective_quota.limits.max_room_creates_24_hours }}</dd>
-                  <small>保留 {{ candidate.suggested_limits.max_room_creates_24_hours }}</small>
+                  <small>{{ t('accountShare.quotaAdmin.keepCreates24h', { maxRoomCreates_24Hours: candidate.suggested_limits.max_room_creates_24_hours }) }}</small>
                 </div>
                 <div>
-                  <dt>房间账号总数</dt>
+                  <dt>{{ t('accountShare.quotaAdmin.totalRoomAccounts') }}</dt>
                   <dd>{{ candidate.usage.owner_room_accounts }} / {{ candidate.effective_quota.limits.max_room_accounts_per_owner }}</dd>
-                  <small>保留 {{ candidate.suggested_limits.max_room_accounts_per_owner }}</small>
+                  <small>{{ t('accountShare.quotaAdmin.keepRoomAccounts', { maxRoomAccountsPerOwner: candidate.suggested_limits.max_room_accounts_per_owner }) }}</small>
                 </div>
                 <div>
-                  <dt>最大单房间账号</dt>
+                  <dt>{{ t('accountShare.quotaAdmin.maxAccountsPerRoom') }}</dt>
                   <dd>{{ candidate.usage.largest_room_accounts }} / {{ candidate.effective_quota.limits.max_accounts_per_room }}</dd>
-                  <small>保留 {{ candidate.suggested_limits.max_accounts_per_room }}</small>
+                  <small>{{ t('accountShare.quotaAdmin.keepAccountsPerRoom', { maxAccountsPerRoom: candidate.suggested_limits.max_accounts_per_room }) }}</small>
                 </div>
               </dl>
             </article>
@@ -387,37 +387,37 @@
               :disabled="loadingCandidates || candidatePage <= 1 || submitting"
               @click="loadCandidates(candidatePage - 1)"
             >
-              上一页
+              {{ t('pagination.prev') }}
             </button>
-            <span>第 {{ candidatePage }} / {{ candidatePages }} 页</span>
+            <span>{{ t('accountShare.quotaAdmin.pageInfo', { candidatePage, candidatePages }) }}</span>
             <button
               type="button"
               class="btn btn-secondary min-h-11"
               :disabled="loadingCandidates || candidatePage >= candidatePages || submitting"
               @click="loadCandidates(candidatePage + 1)"
             >
-              下一页
+              {{ t('pagination.next') }}
             </button>
           </div>
         </div>
 
-        <aside class="quota-batch-control" aria-label="批量执行设置">
+        <aside class="quota-batch-control" :aria-label="t('accountShare.quotaAdmin.batchSettings')">
           <div class="quota-section-heading">
             <div>
-              <strong>批量执行设置</strong>
-              <span>原因和有效期将应用于本次选中的全部候选。</span>
+              <strong>{{ t('accountShare.quotaAdmin.batchSettings') }}</strong>
+              <span>{{ t('accountShare.quotaAdmin.batchSettingsDesc') }}</span>
             </div>
           </div>
 
           <div class="quota-batch-selection-summary">
-            <span>待处理房主</span>
-            <strong>{{ selectedCandidateCount }} 位</strong>
+            <span>{{ t('accountShare.quotaAdmin.pendingOwners') }}</span>
+            <strong>{{ t('accountShare.quotaAdmin.ownerCount', { selectedCandidateCount }) }}</strong>
             <small v-if="selectedCandidateCount > 0">{{ selectedOwnerSummary }}</small>
-            <small v-else>请先从候选列表选择房主</small>
+            <small v-else>{{ t('accountShare.quotaAdmin.selectFirst') }}</small>
           </div>
 
           <label class="quota-field">
-            <span>历史保留有效期</span>
+            <span>{{ t('accountShare.quotaAdmin.holdExpiry') }}</span>
             <input
               v-model="batchExpiresAt"
               class="input min-h-11"
@@ -426,20 +426,20 @@
               :disabled="submitting"
               data-testid="batch-quota-expiry"
             />
-            <small>到期后自动使用当时生效的全局默认配额。</small>
+            <small>{{ t('accountShare.quotaAdmin.holdExpiryHint') }}</small>
           </label>
 
           <label class="quota-field">
-            <span>批量处置原因</span>
+            <span>{{ t('accountShare.quotaAdmin.batchReason') }}</span>
             <textarea
               v-model="batchReason"
               class="input min-h-24"
               maxlength="1000"
               :disabled="submitting"
-              placeholder="请说明本批历史超限的处置依据"
+              :placeholder="t('accountShare.quotaAdmin.batchReasonPlaceholder')"
               data-testid="batch-quota-reason"
             ></textarea>
-            <small>{{ batchReason.trim().length }}/1000 · 每位房主都会生成独立审计版本</small>
+            <small>{{ t('accountShare.quotaAdmin.batchReasonCounter', { length: batchReason.trim().length }) }}</small>
           </label>
 
           <button
@@ -449,24 +449,24 @@
             data-testid="prepare-batch-grandfather"
             @click="prepareBatchGrandfather"
           >
-            复核并批量执行
+            {{ t('accountShare.quotaAdmin.reviewAndRun') }}
           </button>
         </aside>
 
         <section
           v-if="batchResults.length > 0"
           class="quota-batch-results"
-          aria-label="批量执行结果"
+          :aria-label="t('accountShare.quotaAdmin.batchResultAria')"
           aria-live="polite"
           data-testid="batch-grandfather-results"
         >
           <div class="quota-section-heading">
             <div>
-              <strong>最近一次执行结果</strong>
+              <strong>{{ t('accountShare.quotaAdmin.lastResult') }}</strong>
               <span>{{ batchResultSummary }}</span>
             </div>
             <button type="button" class="btn btn-secondary min-h-11" @click="batchResults = []">
-              清除结果
+              {{ t('accountShare.quotaAdmin.clearResult') }}
             </button>
           </div>
 
@@ -477,15 +477,15 @@
               class="quota-result-card"
             >
               <div>
-                <strong>房主 #{{ result.owner_user_id }}</strong>
+                <strong>{{ t('accountShare.quotaAdmin.ownerRef', { ownerUserId: result.owner_user_id }) }}</strong>
                 <span class="quota-result-status" :class="batchResultStatusClass(result.status)">
                   {{ batchResultStatusLabel(result.status) }}
                 </span>
               </div>
               <p>{{ batchResultMessage(result) }}</p>
               <small v-if="result.policy_version">
-                策略 v{{ result.policy_version }}
-                <template v-if="result.expires_at"> · 有效期至 {{ formatDateTime(result.expires_at) }}</template>
+                {{ t('accountShare.quotaAdmin.policyVersion', { policyVersion: result.policy_version }) }}
+                <template v-if="result.expires_at"> {{ t('accountShare.quotaAdmin.expiresAt', { expiresAt: formatDateTime(result.expires_at) }) }}</template>
               </small>
               <button
                 type="button"
@@ -494,7 +494,7 @@
                 :data-testid="`view-owner-${result.owner_user_id}`"
                 @click="openBatchResultOwner(result.owner_user_id)"
               >
-                查看房主状态与审计
+                {{ t('accountShare.quotaAdmin.viewOwnerStatus') }}
               </button>
             </article>
           </div>
@@ -504,14 +504,14 @@
 
     <template #footer>
       <button type="button" class="btn btn-secondary min-h-11" :disabled="submitting" @click="requestClose">
-        关闭
+        {{ t('common.close') }}
       </button>
     </template>
   </BaseDialog>
 
   <BaseDialog
     :show="pendingMutation !== null"
-    title="最终确认房间配额修改"
+    :title="t('accountShare.quotaAdmin.finalConfirmTitle')"
     width="narrow"
     :z-index="75"
     :close-disabled="submitting"
@@ -530,27 +530,27 @@
 
       <dl>
         <div>
-          <dt>操作</dt>
+          <dt>{{ t('common.actions') }}</dt>
           <dd>{{ mutationKindLabel(pendingMutation.kind) }}</dd>
         </div>
         <div v-if="pendingMutation.ownerID">
-          <dt>房主</dt>
+          <dt>{{ t('accountShare.quotaAdmin.owner') }}</dt>
           <dd>#{{ pendingMutation.ownerID }}</dd>
         </div>
         <div v-if="pendingMutation.expectedVersion !== undefined">
-          <dt>期望版本</dt>
+          <dt>{{ t('accountShare.quotaAdmin.expectedVersion') }}</dt>
           <dd>v{{ pendingMutation.expectedVersion }}</dd>
         </div>
         <div v-if="pendingMutation.items">
-          <dt>处理数量</dt>
-          <dd>{{ pendingMutation.items.length }} 位房主</dd>
+          <dt>{{ t('accountShare.quotaAdmin.itemCount') }}</dt>
+          <dd>{{ t('accountShare.quotaAdmin.ownerCountSuffix', { length: pendingMutation.items.length }) }}</dd>
         </div>
         <div v-if="pendingMutation.expiresAt">
-          <dt>有效期至</dt>
+          <dt>{{ t('accountShare.quotaAdmin.expiresAtLabel') }}</dt>
           <dd>{{ formatDateTime(pendingMutation.expiresAt) }}</dd>
         </div>
         <div class="quota-confirmation-wide">
-          <dt>原因</dt>
+          <dt>{{ t('accountShare.quotaAdmin.reasonLabel') }}</dt>
           <dd>{{ pendingMutation.reason }}</dd>
         </div>
       </dl>
@@ -563,8 +563,8 @@
           data-testid="quota-mutation-confirmed"
         />
         <span>
-          <strong>我已核对影响范围和当前版本</strong>
-          <small>确认服务端应按该版本执行；若版本已变化，操作必须失败并重新核对。</small>
+          <strong>{{ t('accountShare.quotaAdmin.confirmCheck') }}</strong>
+          <small>{{ t('accountShare.quotaAdmin.confirmCheckDesc') }}</small>
         </span>
       </label>
 
@@ -577,7 +577,7 @@
     <template #footer>
       <div class="quota-confirm-footer">
         <button type="button" class="btn btn-secondary min-h-11" :disabled="submitting" @click="cancelMutation">
-          返回检查
+          {{ t('accountShare.quotaAdmin.backToCheck') }}
         </button>
         <button
           type="button"
@@ -593,7 +593,7 @@
             class="mr-2"
             :class="{ 'animate-spin': submitting }"
           />
-          {{ submitting ? '提交中…' : '确认执行' }}
+          {{ submitting ? t('common.submitting') : t('accountShare.quotaAdmin.confirmExecute') }}
         </button>
       </div>
     </template>
@@ -601,7 +601,7 @@
 
   <BaseDialog
     :show="discardDraftRequested"
-    title="放弃未提交的配额修改？"
+    :title="t('accountShare.quotaAdmin.abandonTitle')"
     width="narrow"
     :z-index="85"
     :close-on-click-outside="false"
@@ -610,13 +610,13 @@
     <div class="quota-confirmation">
       <div class="quota-alert quota-alert-warning" role="alert">
         <Icon name="exclamationTriangle" size="sm" />
-        <span>当前填写的原因、有效期或候选选择尚未提交，关闭后将无法恢复。</span>
+        <span>{{ t('accountShare.quotaAdmin.abandonDesc') }}</span>
       </div>
     </div>
     <template #footer>
       <div class="quota-confirm-footer">
         <button type="button" class="btn btn-secondary min-h-11" @click="discardDraftRequested = false">
-          继续编辑
+          {{ t('accountShare.quotaAdmin.continueEdit') }}
         </button>
         <button
           type="button"
@@ -624,7 +624,7 @@
           data-testid="discard-quota-draft"
           @click="confirmDiscardAndClose"
         >
-          放弃并关闭
+          {{ t('accountShare.quotaAdmin.abandonConfirm') }}
         </button>
       </div>
     </template>
@@ -648,6 +648,9 @@ import Icon from '@/components/icons/Icon.vue'
 import { useAppStore } from '@/stores/app'
 import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
 import { formatDateTime } from '@/utils/format'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 type QuotaAdminView = AccountShareQuotaScope | 'batch'
 type QuotaMutationKind = 'global' | 'owner' | 'grandfather' | 'revoke' | 'batch-grandfather'
@@ -678,10 +681,10 @@ const QuotaLimitsEditor = defineComponent({
   emits: ['update:modelValue'],
   setup(componentProps, { emit }) {
     const fields: Array<{ key: keyof AccountShareQuotaLimits; label: string; help: string }> = [
-      { key: 'max_live_rooms', label: '未删除房间上限', help: '包含运行、暂停、排空和管理员暂停房间。' },
-      { key: 'max_room_creates_24_hours', label: '24 小时创建上限', help: '按滚动 24 小时窗口累计。' },
-      { key: 'max_accounts_per_room', label: '单房间账号上限', help: '与成员上限 1～30 人相互独立。' },
-      { key: 'max_room_accounts_per_owner', label: '房间账号总上限', help: '不得小于单房间账号上限。' }
+      { key: 'max_live_rooms', label: t('accountShare.quotaAdmin.fieldMaxLiveRooms'), help: t('accountShare.quotaAdmin.fieldMaxLiveRoomsHelp') },
+      { key: 'max_room_creates_24_hours', label: t('accountShare.quotaAdmin.fieldMaxCreates'), help: t('accountShare.quotaAdmin.fieldMaxCreatesHelp') },
+      { key: 'max_accounts_per_room', label: t('accountShare.quotaAdmin.fieldMaxPerRoom'), help: t('accountShare.quotaAdmin.fieldMaxPerRoomHelp') },
+      { key: 'max_room_accounts_per_owner', label: t('accountShare.quotaAdmin.fieldMaxOwnerTotal'), help: t('accountShare.quotaAdmin.fieldMaxOwnerTotalHelp') }
     ]
     const update = (key: keyof AccountShareQuotaLimits, event: Event) => {
       const target = event.target as HTMLInputElement
@@ -730,26 +733,26 @@ const QuotaAuditPanel = defineComponent({
   },
   emits: ['refresh', 'page'],
   setup(componentProps, { emit }) {
-    return () => h('aside', { class: 'quota-audit-panel', 'aria-label': '配额审计记录' }, [
+    return () => h('aside', { class: 'quota-audit-panel', 'aria-label': t('accountShare.quotaAdmin.auditLabel') }, [
       h('div', { class: 'quota-section-heading' }, [
-        h('div', [h('strong', '审计记录'), h('span', '每次修改都会追加新版本')]),
+        h('div', [h('strong', t('accountShare.quotaAdmin.auditTitle')), h('span', t('accountShare.quotaAdmin.auditSub'))]),
         h('button', {
           type: 'button',
           class: 'quota-icon-button',
           disabled: componentProps.loading,
-          'aria-label': '刷新配额审计',
+          'aria-label': t('accountShare.quotaAdmin.auditRefresh'),
           onClick: () => emit('refresh')
         }, [h(Icon, { name: 'refresh', size: 'sm', class: componentProps.loading ? 'animate-spin' : '' })])
       ]),
       componentProps.loading && componentProps.items.length === 0
-        ? h('div', { class: 'quota-empty' }, '正在读取审计记录…')
+        ? h('div', { class: 'quota-empty' }, t('accountShare.quotaAdmin.auditLoading'))
         : componentProps.items.length === 0
-          ? h('div', { class: 'quota-empty' }, '暂无审计记录')
+          ? h('div', { class: 'quota-empty' }, t('accountShare.quotaAdmin.auditEmpty'))
           : h('div', { class: 'quota-audit-list' }, componentProps.items.map(item =>
               h('article', { class: 'quota-audit-card', key: item.id }, [
                 h('div', [h('strong', `v${item.version} · ${policyKindLabel(item.override_kind)}`), h('span', policyStatusLabel(item.status))]),
-                h('p', item.reason || '未记录原因'),
-                h('small', `${formatDateTime(item.created_at)} · 操作者 #${item.actor_user_id_snapshot || item.actor_user_id || '—'}`)
+                h('p', item.reason || t('accountShare.quotaAdmin.noReason')),
+                h('small', t('accountShare.quotaAdmin.auditMeta', { time: formatDateTime(item.created_at), actor: item.actor_user_id_snapshot || item.actor_user_id || '—' }))
               ])
             )),
       componentProps.pages > 1
@@ -759,14 +762,14 @@ const QuotaAuditPanel = defineComponent({
               class: 'btn btn-secondary min-h-11',
               disabled: componentProps.loading || componentProps.page <= 1,
               onClick: () => emit('page', componentProps.page - 1)
-            }, '上一页'),
-            h('span', `第 ${componentProps.page} / ${componentProps.pages} 页`),
+            }, t('accountShare.quotaAdmin.prevPage')),
+            h('span', t('accountShare.quotaAdmin.pageInfo', { page: componentProps.page, pages: componentProps.pages })),
             h('button', {
               type: 'button',
               class: 'btn btn-secondary min-h-11',
               disabled: componentProps.loading || componentProps.page >= componentProps.pages,
               onClick: () => emit('page', componentProps.page + 1)
-            }, '下一页')
+            }, t('accountShare.quotaAdmin.nextPage'))
           ])
         : null
     ])
@@ -784,22 +787,22 @@ const emit = defineEmits<{
 
 const QUOTA_PAGE_SIZE = 12
 const QUOTA_ERROR_MESSAGES: Record<string, string> = {
-  ACCOUNT_SHARE_QUOTA_ADMIN_REQUIRED: '管理员身份已失效，请重新登录后再试。',
-  ACCOUNT_SHARE_QUOTA_INVALID: '配额配置无效；所有上限必须是 1～1,000,000 的整数，且房主账号总上限不能小于单房间上限。',
-  ACCOUNT_SHARE_QUOTA_REASON_REQUIRED: '请填写清晰、可审计的修改原因。',
-  ACCOUNT_SHARE_QUOTA_CONFIRMATION_REQUIRED: '必须完成最终确认后才能修改配额。',
-  ACCOUNT_SHARE_QUOTA_EXPECTED_VERSION_REQUIRED: '当前配额版本无效，请刷新后重新确认。',
-  ACCOUNT_SHARE_QUOTA_VERSION_CONFLICT: '配额已被其他管理员修改，请刷新最新版本后重新确认。',
-  ACCOUNT_SHARE_QUOTA_CONFIGURATION_UNAVAILABLE: '配额配置暂时不可用，请稍后重试。',
-  ACCOUNT_SHARE_QUOTA_OVERRIDE_NOT_FOUND: '该房主没有可撤销的覆盖策略。',
-  ACCOUNT_SHARE_QUOTA_OVERRIDE_NOT_ACTIVE: '该房主覆盖已经失效或被撤销。',
-  ACCOUNT_SHARE_QUOTA_GRANDFATHER_GROWTH_BLOCKED: '历史保留策略只允许收缩、排空和删除，不能扩大容量。',
-  ACCOUNT_SHARE_QUOTA_HISTORICAL_GROWTH_BLOCKED: '该房主当前用量已超过有效配额，只能收缩、排空或删除现有资源。',
-  ACCOUNT_SHARE_QUOTA_NOT_A_CANDIDATE: '该房主已不再超限，未创建历史保留策略。',
-  ACCOUNT_SHARE_QUOTA_GRANDFATHER_ALREADY_ACTIVE: '该房主已有有效的历史保留策略，本次已跳过。',
-  ACCOUNT_SHARE_QUOTA_CANDIDATE_STALE: '候选快照已变化，请刷新后重新选择。',
-  ACCOUNT_SHARE_QUOTA_APPLY_FAILED: '创建历史保留策略失败，请刷新候选后重试。',
-  OWNER_NOT_FOUND: '房主账号已不存在，本次已跳过。'
+  ACCOUNT_SHARE_QUOTA_ADMIN_REQUIRED: t('accountShare.quotaAdmin.errors.authExpired'),
+  ACCOUNT_SHARE_QUOTA_INVALID: t('accountShare.quotaAdmin.errors.invalidConfig'),
+  ACCOUNT_SHARE_QUOTA_REASON_REQUIRED: t('accountShare.quotaAdmin.errors.reasonRequired'),
+  ACCOUNT_SHARE_QUOTA_CONFIRMATION_REQUIRED: t('accountShare.quotaAdmin.errors.confirmRequired'),
+  ACCOUNT_SHARE_QUOTA_EXPECTED_VERSION_REQUIRED: t('accountShare.quotaAdmin.errors.staleVersion'),
+  ACCOUNT_SHARE_QUOTA_VERSION_CONFLICT: t('accountShare.quotaAdmin.errors.conflict'),
+  ACCOUNT_SHARE_QUOTA_CONFIGURATION_UNAVAILABLE: t('accountShare.quotaAdmin.errors.unavailable'),
+  ACCOUNT_SHARE_QUOTA_OVERRIDE_NOT_FOUND: t('accountShare.quotaAdmin.errors.noOverride'),
+  ACCOUNT_SHARE_QUOTA_OVERRIDE_NOT_ACTIVE: t('accountShare.quotaAdmin.errors.overrideGone'),
+  ACCOUNT_SHARE_QUOTA_GRANDFATHER_GROWTH_BLOCKED: t('accountShare.quotaAdmin.errors.grandfatherShrinkOnly'),
+  ACCOUNT_SHARE_QUOTA_HISTORICAL_GROWTH_BLOCKED: t('accountShare.quotaAdmin.errors.overLimit'),
+  ACCOUNT_SHARE_QUOTA_NOT_A_CANDIDATE: t('accountShare.quotaAdmin.errors.notOverLimit'),
+  ACCOUNT_SHARE_QUOTA_GRANDFATHER_ALREADY_ACTIVE: t('accountShare.quotaAdmin.errors.alreadyGrandfathered'),
+  ACCOUNT_SHARE_QUOTA_CANDIDATE_STALE: t('accountShare.quotaAdmin.errors.snapshotStale'),
+  ACCOUNT_SHARE_QUOTA_APPLY_FAILED: t('accountShare.quotaAdmin.errors.grandfatherFailed'),
+  OWNER_NOT_FOUND: t('accountShare.quotaAdmin.errors.ownerGone')
 }
 
 const appStore = useAppStore()
@@ -874,7 +877,7 @@ const batchCanPrepare = computed(() => (
 const selectedOwnerSummary = computed(() => {
   const ownerIDs = [...selectedCandidates.value.keys()].sort((left, right) => left - right)
   const visible = ownerIDs.slice(0, 6).map(ownerID => `#${ownerID}`).join('、')
-  return ownerIDs.length > 6 ? `${visible} 等 ${ownerIDs.length} 位` : visible
+  return ownerIDs.length > 6 ? t('accountShare.quotaAdmin.ownerCount', { visible, count: ownerIDs.length }) : visible
 })
 const batchResultSummary = computed(() => {
   const counts = batchResults.value.reduce<Record<string, number>>((result, item) => {
@@ -882,10 +885,10 @@ const batchResultSummary = computed(() => {
     return result
   }, {})
   return [
-    `成功 ${counts.applied || 0}`,
-    `跳过 ${counts.skipped || 0}`,
-    `冲突 ${counts.conflict || 0}`,
-    `失败 ${counts.failed || 0}`
+    t('accountShare.quotaAdmin.countApplied', { count: counts.applied || 0 }),
+    t('accountShare.quotaAdmin.countSkipped', { count: counts.skipped || 0 }),
+    t('accountShare.quotaAdmin.countConflict', { count: counts.conflict || 0 }),
+    t('accountShare.quotaAdmin.countFailed', { count: counts.failed || 0 })
   ].join(' · ')
 })
 const hasUnsavedDraft = computed(() => Boolean(
@@ -1065,7 +1068,7 @@ async function loadGlobal(): Promise<void> {
     globalLimitsBaseline.value = cloneLimits(policy.limits)
   } catch (error: unknown) {
     if (controller.signal.aborted || version !== globalRequestVersion || isCanceledRequest(error)) return
-    loadError.value = quotaErrorMessage(error, '读取全局房间配额失败，请稍后重试。')
+    loadError.value = quotaErrorMessage(error, t('accountShare.quotaAdmin.errLoadGlobal'))
   } finally {
     if (version === globalRequestVersion) {
       loadingGlobal.value = false
@@ -1103,7 +1106,7 @@ async function loadOwner(): Promise<void> {
     ownerLimitsBaseline.value = null
     ownerExpiresAtBaseline.value = null
     auditItems.value = []
-    loadError.value = quotaErrorMessage(error, '读取房主配额失败，请核对用户 ID 后重试。')
+    loadError.value = quotaErrorMessage(error, t('accountShare.quotaAdmin.errLoadOwner'))
   } finally {
     if (version === ownerRequestVersion) {
       loadingOwner.value = false
@@ -1138,7 +1141,7 @@ async function loadAudit(targetPage = auditPage.value): Promise<void> {
     auditPages.value = Math.max(1, Number(result.pages || 1))
   } catch (error: unknown) {
     if (controller.signal.aborted || version !== auditRequestVersion || isCanceledRequest(error)) return
-    loadError.value = quotaErrorMessage(error, '读取配额审计记录失败，请稍后重试。')
+    loadError.value = quotaErrorMessage(error, t('accountShare.quotaAdmin.errLoadAudit'))
   } finally {
     if (version === auditRequestVersion) {
       loadingAudit.value = false
@@ -1169,7 +1172,7 @@ async function loadCandidates(targetPage = candidatePage.value): Promise<void> {
     candidatesLoaded.value = true
   } catch (error: unknown) {
     if (controller.signal.aborted || version !== candidateRequestVersion || isCanceledRequest(error)) return
-    candidateError.value = quotaErrorMessage(error, '生成历史超限候选失败，请稍后重试。')
+    candidateError.value = quotaErrorMessage(error, t('accountShare.quotaAdmin.errCandidates'))
   } finally {
     if (version === candidateRequestVersion) {
       loadingCandidates.value = false
@@ -1187,10 +1190,10 @@ function refreshCandidates(): void {
 function validateLimits(limits: AccountShareQuotaLimits): string {
   const values = Object.values(limits)
   if (values.some(value => !Number.isSafeInteger(value) || value <= 0 || value > 1_000_000)) {
-    return '所有配额必须是 1～1,000,000 的整数。'
+    return t('accountShare.quotaAdmin.errRange')
   }
   if (limits.max_room_accounts_per_owner < limits.max_accounts_per_room) {
-    return '房间账号总上限不能小于单房间账号上限。'
+    return t('accountShare.quotaAdmin.errTotalLtRoom')
   }
   return ''
 }
@@ -1222,7 +1225,7 @@ function toggleCandidate(candidate: AccountShareGrandfatherCandidate): void {
   } else if (next.size < 100) {
     next.set(candidate.owner_user_id, candidate)
   } else {
-    appStore.showWarning('单次最多选择 100 位房主，请先执行或减少选择。')
+    appStore.showWarning(t('accountShare.quotaAdmin.errMaxOwners'))
   }
   selectedCandidates.value = next
 }
@@ -1244,7 +1247,7 @@ function toggleCurrentPageCandidates(): void {
       next.set(candidate.owner_user_id, candidate)
     }
     if (reachedLimit) {
-      appStore.showWarning('已达到单次 100 位房主的处理上限。')
+      appStore.showWarning(t('accountShare.quotaAdmin.errMaxOwnersReached'))
     }
   }
   selectedCandidates.value = next
@@ -1276,11 +1279,11 @@ function prepareGlobalUpdate(): void {
   const reason = globalReason.value.trim()
   const limitsError = validateLimits(globalLimits.value)
   if (!policy || policy.version <= 0) {
-    loadError.value = '当前全局配额版本无效，请刷新后重试。'
+    loadError.value = t('accountShare.quotaAdmin.errStaleGlobalVersion')
     return
   }
   if (limitsError || !reason) {
-    loadError.value = limitsError || '请填写全局配额修改原因。'
+    loadError.value = limitsError || t('accountShare.quotaAdmin.errGlobalReason')
     return
   }
   prepareMutation({
@@ -1296,7 +1299,7 @@ function prepareOwnerUpdate(): void {
   const limitsError = validateLimits(ownerLimits.value)
   const expiresAt = normalizedExpiry()
   if (limitsError || !reason || !expiresAt || loadedOwnerID.value <= 0 || !ownerState.value) {
-    loadError.value = limitsError || (!expiresAt ? '房主覆盖有效期必须晚于当前时间。' : '请完整填写房主覆盖信息。')
+    loadError.value = limitsError || (!expiresAt ? t('accountShare.quotaAdmin.errOverrideExpiry') : t('accountShare.quotaAdmin.errOverrideFields'))
     return
   }
   prepareMutation({
@@ -1313,7 +1316,7 @@ function prepareOwnerGrandfather(): void {
   const reason = ownerReason.value.trim()
   const expiresAt = normalizedExpiry()
   if (!reason || !expiresAt || loadedOwnerID.value <= 0 || !ownerState.value) {
-    loadError.value = !expiresAt ? '历史保留策略有效期必须晚于当前时间。' : '请填写历史保留原因。'
+    loadError.value = !expiresAt ? t('accountShare.quotaAdmin.errGrandfatherExpiry') : t('accountShare.quotaAdmin.errGrandfatherReason')
     return
   }
   prepareMutation({
@@ -1329,7 +1332,7 @@ function prepareOwnerRevoke(): void {
   const policy = ownerState.value?.owner_policy
   const reason = ownerReason.value.trim()
   if (!policy || policy.status !== 'active' || policy.version <= 0 || !reason || loadedOwnerID.value <= 0) {
-    loadError.value = '该房主没有可撤销的有效覆盖，或尚未填写撤销原因。'
+    loadError.value = t('accountShare.quotaAdmin.errRevokeMissing')
     return
   }
   prepareMutation({
@@ -1344,13 +1347,13 @@ function prepareBatchGrandfather(): void {
   const reason = batchReason.value.trim()
   const expiresAt = normalizeDateTimeInput(batchExpiresAt.value)
   if (selectedCandidateCount.value <= 0 || selectedCandidateCount.value > 100) {
-    candidateError.value = '请选择 1～100 位历史超限房主。'
+    candidateError.value = t('accountShare.quotaAdmin.errSelectOwners')
     return
   }
   if (!reason || !expiresAt) {
     candidateError.value = !expiresAt
-      ? '历史保留有效期必须晚于当前时间。'
-      : '请填写批量处置原因。'
+      ? t('accountShare.quotaAdmin.errBatchExpiry')
+      : t('accountShare.quotaAdmin.errBatchReason')
     return
   }
   candidateError.value = ''
@@ -1382,7 +1385,7 @@ function mutationIdempotency(mutation: PendingQuotaMutation): string {
   const signature = JSON.stringify(mutation)
   if (mutationSignature === signature && mutationIdempotencyKey) return mutationIdempotencyKey
   const requestID = globalThis.crypto?.randomUUID?.()
-  if (!requestID) throw new Error('当前浏览器无法生成安全幂等键，请升级浏览器后重试。')
+  if (!requestID) throw new Error(t('accountShare.quotaAdmin.errNoCrypto'))
   mutationSignature = signature
   mutationIdempotencyKey = `account-share-quota-${mutation.kind}-${requestID}`
   return mutationIdempotencyKey
@@ -1397,7 +1400,7 @@ async function submitMutation(): Promise<void> {
     const idempotencyKey = mutationIdempotency(mutation)
     if (mutation.kind === 'batch-grandfather') {
       if (!mutation.items?.length || !mutation.expiresAt) {
-        throw new Error('批量历史保留请求缺少候选快照或有效期。')
+        throw new Error(t('accountShare.quotaAdmin.errMissingSnapshot'))
       }
       const results = await accountShareQuotaAdminAPI.batchGrandfather({
         items: mutation.items,
@@ -1415,11 +1418,11 @@ async function submitMutation(): Promise<void> {
       const applied = results.filter(result => result.status === 'applied').length
       const unresolved = results.length - applied
       if (applied > 0 && unresolved === 0) {
-        appStore.showSuccess(`已为 ${applied} 位房主创建历史保留策略`)
+        appStore.showSuccess(t('accountShare.quotaAdmin.batchApplied', { applied }))
       } else if (applied > 0) {
-        appStore.showWarning(`成功 ${applied} 位，另有 ${unresolved} 位需要查看结果`)
+        appStore.showWarning(t('accountShare.quotaAdmin.batchPartial', { applied, unresolved }))
       } else {
-        appStore.showWarning('本批次没有创建新策略，请查看逐项结果并刷新候选。')
+        appStore.showWarning(t('accountShare.quotaAdmin.batchNone'))
       }
       await loadCandidates(1)
       return
@@ -1459,7 +1462,7 @@ async function submitMutation(): Promise<void> {
     const scope = mutation.kind
     clearMutation()
     emit('updated', policy)
-    appStore.showSuccess(`${mutationKindLabel(scope)}已生效并写入审计记录`)
+    appStore.showSuccess(t('accountShare.quotaAdmin.mutationApplied', { kind: mutationKindLabel(scope) }))
     if (scope === 'global') {
       globalReason.value = ''
       await Promise.all([loadGlobal(), loadAudit(1)])
@@ -1468,7 +1471,7 @@ async function submitMutation(): Promise<void> {
       await loadOwner()
     }
   } catch (error: unknown) {
-    mutationError.value = quotaErrorMessage(error, '房间配额修改失败，请核对当前状态后重试。')
+    mutationError.value = quotaErrorMessage(error, t('accountShare.quotaAdmin.errMutation'))
     const code = extractApiErrorCode(error)
     if (
       code === 'ACCOUNT_SHARE_QUOTA_VERSION_CONFLICT'
@@ -1529,47 +1532,47 @@ function toDateTimeInput(date: Date): string {
 }
 
 function mutationKindLabel(kind: QuotaMutationKind): string {
-  if (kind === 'global') return '更新全局默认配额'
-  if (kind === 'owner') return '创建/更新房主临时覆盖'
-  if (kind === 'grandfather') return '创建房主历史保留策略'
-  if (kind === 'batch-grandfather') return '批量创建房主历史保留策略'
-  return '撤销房主覆盖'
+  if (kind === 'global') return t('accountShare.quotaAdmin.kindGlobal')
+  if (kind === 'owner') return t('accountShare.quotaAdmin.kindOwner')
+  if (kind === 'grandfather') return t('accountShare.quotaAdmin.kindGrandfather')
+  if (kind === 'batch-grandfather') return t('accountShare.quotaAdmin.kindBatchGrandfather')
+  return t('accountShare.quotaAdmin.kindRevoke')
 }
 
 function mutationWarning(mutation: PendingQuotaMutation): string {
   if (mutation.kind === 'grandfather' || mutation.kind === 'batch-grandfather') {
-    return '历史保留只允许管理、收缩、排空和删除现有资源，不能增长；到期后自动回落到全局默认。'
+    return t('accountShare.quotaAdmin.warnGrandfather')
   }
   if (mutation.kind === 'revoke') {
-    return '撤销后该房主将立即回落到全局默认配额；若现有用量超限，只允许收缩，不能继续增长。'
+    return t('accountShare.quotaAdmin.warnRevoke')
   }
-  return '新配额会影响后续创建房间和添加房间账号；已存在的资源不会被自动删除。'
+  return t('accountShare.quotaAdmin.warnNew')
 }
 
 function quotaSourceLabel(quota: AccountShareResolvedQuota): string {
-  if (quota.override_kind === 'grandfather') return '历史保留'
-  if (quota.override_kind === 'manual') return '房主临时覆盖'
-  return '全局默认'
+  if (quota.override_kind === 'grandfather') return t('accountShare.quotaAdmin.sourceGrandfather')
+  if (quota.override_kind === 'manual') return t('accountShare.quotaAdmin.sourceOverride')
+  return t('accountShare.quotaAdmin.scopeGlobal')
 }
 
 function policyKindLabel(kind: string): string {
-  if (kind === 'grandfather') return '历史保留'
-  if (kind === 'manual') return '房主覆盖'
-  return '全局默认'
+  if (kind === 'grandfather') return t('accountShare.quotaAdmin.sourceGrandfather')
+  if (kind === 'manual') return t('accountShare.quotaAdmin.scopeOwner')
+  return t('accountShare.quotaAdmin.scopeGlobal')
 }
 
 function policyStatusLabel(status: string): string {
-  if (status === 'active') return '生效'
-  if (status === 'revoked') return '已撤销'
-  return status || '未知'
+  if (status === 'active') return t('accountShare.quotaAdmin.statusActive')
+  if (status === 'revoked') return t('accountShare.quotaAdmin.statusRevoked')
+  return status || t('accountShare.quotaAdmin.statusUnknown')
 }
 
 function quotaDimensionLabel(dimension: string): string {
   const labels: Record<string, string> = {
-    max_live_rooms: '未删除房间超限',
-    max_room_creates_24_hours: '24 小时创建超限',
-    max_accounts_per_room: '单房间账号超限',
-    max_room_accounts_per_owner: '房间账号总数超限'
+    max_live_rooms: t('accountShare.quotaAdmin.dimLiveRooms'),
+    max_room_creates_24_hours: t('accountShare.quotaAdmin.dimCreates24h'),
+    max_accounts_per_room: t('accountShare.quotaAdmin.dimAccountsPerRoom'),
+    max_room_accounts_per_owner: t('accountShare.quotaAdmin.dimOwnerAccounts')
   }
   return labels[dimension] || dimension
 }
@@ -1577,10 +1580,10 @@ function quotaDimensionLabel(dimension: string): string {
 function batchResultStatusLabel(
   status: AccountShareGrandfatherBatchItemResult['status']
 ): string {
-  if (status === 'applied') return '已创建'
-  if (status === 'skipped') return '已跳过'
-  if (status === 'conflict') return '需刷新'
-  return '失败'
+  if (status === 'applied') return t('accountShare.quotaAdmin.resultApplied')
+  if (status === 'skipped') return t('accountShare.quotaAdmin.resultSkipped')
+  if (status === 'conflict') return t('accountShare.quotaAdmin.resultConflict')
+  return t('accountShare.quotaAdmin.resultFailed')
 }
 
 function batchResultStatusClass(
@@ -1595,10 +1598,10 @@ function batchResultMessage(result: AccountShareGrandfatherBatchItemResult): str
   }
   if (result.status === 'applied') {
     return result.policy_version
-      ? `历史保留策略 v${result.policy_version} 已生效并写入审计记录。`
-      : '历史保留策略已生效并写入审计记录。'
+      ? t('accountShare.quotaAdmin.appliedVersion', { version: result.policy_version })
+      : t('accountShare.quotaAdmin.appliedGeneric')
   }
-  return result.message?.trim() || '服务端未返回详细原因，请刷新候选后重试。'
+  return result.message?.trim() || t('accountShare.quotaAdmin.noDetailReason')
 }
 </script>
 

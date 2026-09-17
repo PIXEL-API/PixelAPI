@@ -65,4 +65,29 @@ export const persistThemeMode = (mode: ThemeMode): void => {
   localStorage.setItem('theme', mode)
 }
 
+/** Apply + persist a light/dark mode without touching the theme suite. */
+export const setThemeMode = (mode: ThemeMode): void => {
+  document.documentElement.classList.toggle('dark', resolveDarkMode(mode))
+  persistThemeMode(mode)
+}
+
+/** Flip between explicit light/dark. System mode resolves first, then flips. */
+export const toggleThemeMode = (): void => {
+  setThemeMode(document.documentElement.classList.contains('dark') ? 'light' : 'dark')
+}
+
+/**
+ * Follow OS theme changes while the stored preference is `system`.
+ * Explicit light/dark choices are left untouched.
+ */
+export const bindSystemThemeListener = (): void => {
+  window
+    .matchMedia('(prefers-color-scheme: dark)')
+    .addEventListener('change', () => {
+      if (readThemeMode() === 'system') {
+        activateTheme(readThemeId(), 'system')
+      }
+    })
+}
+
 export const listThemes = (): ThemeDefinition[] => Object.values(themeDefinitions)

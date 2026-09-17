@@ -800,6 +800,7 @@ func ProvideAccountShareModeService(
 	settingRepo SettingRepository,
 	settingService *SettingService,
 	taskExecutor *ClusterTaskExecutor,
+	opsRepo OpsRepository,
 ) *AccountShareModeService {
 	svc := NewAccountShareModeService(repo, accountRepo, apiKeyRepo, userRepo, proxyRepo, openaiOAuthService, oauthService)
 	if cfg != nil {
@@ -812,6 +813,7 @@ func ProvideAccountShareModeService(
 	svc.SetSettingService(settingService)
 	svc.SetRecommendationUsageProfileRepository(usageLogRepo)
 	svc.SetReviewModerationSettingRepository(settingRepo)
+	svc.SetJobHeartbeatSink(opsRepo)
 	svc.taskExecutor = taskExecutor
 	svc.StartSeatBillingWorker()
 	svc.StartReviewModerationWorker()
@@ -1132,6 +1134,7 @@ var ProviderSet = wire.NewSet(
 	ProvideAdminService,
 	ProvideGatewayService,
 	ProvideOpenAIGatewayService,
+	NewDevinGatewayService,
 	NewAgentIdentityWSInvalidatorProxy,
 	NewGrokSchedulingBlockCleanerProxy,
 	NewOAuthService,

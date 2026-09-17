@@ -53,3 +53,24 @@ func TestNormalizeOpenAIPassthroughOAuthBody_PreservesCustomCompatibleModel(t *t
 	require.False(t, changed)
 	require.Equal(t, "custom-compatible-model", gjson.GetBytes(normalized, "model").String())
 }
+
+func TestNormalizeOpenAIPassthroughOAuthBody_StripsOnlyInputItemInternalMetadata(t *testing.T) {
+	const field = "internal_chat_message_metadata_passthrough"
+	body := []byte(`{
+		"model":"gpt-5.4",
+		"input":[{
+			"type":"message",
+			"role":"user",
+			"content":[{"type":"input_text","text":"hello","internal_chat_message_metadata_passthrough":{"keep":true}}],
+			"internal_chat_message_metadata_passthrough":{"content_item_kinds":["text"]}
+		}],
+		"internal_chat_message_metadata_passthrough":{"top_level":true}
+	}`)
+
+	normalized, changed, err := normalizeOpenAIPassthroughOAuthBody(body, false)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(normalized, "input.0."+field).Exists())
+	require.True(t, gjson.GetBytes(normalized, "input.0.content.0."+field+".keep").Bool())
+	require.True(t, gjson.GetBytes(normalized, field+".top_level").Bool())
+}

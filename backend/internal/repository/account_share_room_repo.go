@@ -214,7 +214,7 @@ func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Cont
 		return r.GetListingByID(ctx, idempotentListingID, ownerUserID)
 	}
 	accountLevel = service.NormalizeAccountLevel(accountLevel)
-	if accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode && !service.IsCNProvider(platform) {
+	if accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode && !service.IsCNProvider(platform) && !service.IsAPIAggregationProvider(platform) {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 	if accountStatus != service.StatusActive || !accountSchedulable {
@@ -294,14 +294,14 @@ func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Cont
 			status, seat_limit, rate_multiplier, allowed_models,
 			per_user_concurrency, hourly_rate, hourly_fee_waiver_minimum,
 			min_balance_required, codex_cli_only, codex_5h_limit_percent,
-			codex_7d_limit_percent, account_identity_id, created_at, updated_at
+			codex_7d_limit_percent, account_identity_id, join_password_hash, created_at, updated_at
 		)
 		VALUES (
 			$1, $2, $3, $4,
 			$5, $6, $7, $8::jsonb,
 			$9, $10, $11,
 			$12, $13, $14,
-			$15, $16, NOW(), NOW()
+			$15, $16, $17, NOW(), NOW()
 		)
 		RETURNING id
 	`,
@@ -321,6 +321,7 @@ func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Cont
 		listing.Codex5hLimitPercent,
 		listing.Codex7dLimitPercent,
 		nullableInt64(accountIdentityID),
+		nullableEmptyString(listing.JoinPasswordHash),
 	).Scan(&listingID)
 	if err != nil {
 		return nil, translateAccountShareRoomPersistenceError(err)
@@ -606,7 +607,7 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 	}
 	roomPlatform := strings.ToLower(strings.TrimSpace(room.Platform))
 	roomAccountLevel := service.NormalizeAccountLevel(room.AccountLevel)
-	if roomAccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode && !service.IsCNProvider(roomPlatform) {
+	if roomAccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode && !service.IsCNProvider(roomPlatform) && !service.IsAPIAggregationProvider(roomPlatform) {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 
@@ -628,7 +629,7 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 			})
 			continue
 		}
-		if candidate.Snapshot.AccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode && !service.IsCNProvider(roomPlatform) {
+		if candidate.Snapshot.AccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode && !service.IsCNProvider(roomPlatform) && !service.IsAPIAggregationProvider(roomPlatform) {
 			recordFailure(accountID, service.ErrAccountShareRoomUnknownLevel, nil)
 			continue
 		}
@@ -1862,7 +1863,7 @@ func (r *accountShareModeRepository) ConvertExternalPlacement(ctx context.Contex
 	}
 	platform = strings.ToLower(strings.TrimSpace(platform))
 	accountLevel = service.NormalizeAccountLevel(accountLevel)
-	if target == service.AccountExternalPlacementRoom && accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode && !service.IsCNProvider(platform) {
+	if target == service.AccountExternalPlacementRoom && accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode && !service.IsCNProvider(platform) && !service.IsAPIAggregationProvider(platform) {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 

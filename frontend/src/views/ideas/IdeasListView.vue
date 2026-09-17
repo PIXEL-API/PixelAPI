@@ -167,7 +167,7 @@ onUnmounted(() => clearTimeout(debounceTimer))
       </section>
 
       <!-- Toolbar -->
-      <div class="sticky top-16 z-20 mt-6 rounded-panel border border-line bg-surface/90 p-3 backdrop-blur-md md:p-4">
+      <div class="sticky top-16 z-[var(--ui-z-toolbar)] mt-6 rounded-panel border border-line bg-surface/90 p-3 backdrop-blur-md md:p-4">
         <div class="flex flex-col gap-3 md:flex-row md:items-center">
           <div class="relative flex-1">
             <svg class="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-content-subtle" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">

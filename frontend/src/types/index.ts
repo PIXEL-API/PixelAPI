@@ -800,7 +800,7 @@ export interface PaginationConfig {
 
 // ==================== API Key & Group Types ====================
 
-export type GroupPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "opencode" | "kimi" | "zhipu" | "deepseek" | "minimax" | "qwen";
+export type GroupPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "opencode" | "kimi" | "zhipu" | "deepseek" | "minimax" | "qwen" | "devin" | "api_aggregation";
 export type GrokVideoModelFamily =
   | "grok-imagine-video"
   | "grok-imagine-video-1.5";
@@ -1068,7 +1068,7 @@ export interface UpdateGroupRequest {
 
 // ==================== Account & Proxy Types ====================
 
-export type AccountPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "opencode" | "kimi" | "zhipu" | "deepseek" | "minimax" | "qwen";
+export type AccountPlatform = "anthropic" | "openai" | "gemini" | "antigravity" | "grok" | "opencode" | "kimi" | "zhipu" | "deepseek" | "minimax" | "qwen" | "devin" | "api_aggregation";
 export type AccountType =
   | "oauth"
   | "setup-token"

@@ -49,6 +49,8 @@ const (
 	PlatformDeepseek           = domain.PlatformDeepseek
 	PlatformMiniMax            = domain.PlatformMiniMax
 	PlatformQwen               = domain.PlatformQwen
+	PlatformDevin              = domain.PlatformDevin
+	PlatformAPIAggregation     = domain.PlatformAPIAggregation
 	PlatformComposite          = domain.PlatformComposite
 	AccountModePayG            = domain.AccountModePayG
 	AccountModeCoding          = domain.AccountModeCoding
@@ -71,6 +73,8 @@ var supportedAccountPlatforms = [...]string{
 	PlatformDeepseek,
 	PlatformMiniMax,
 	PlatformQwen,
+	PlatformDevin,
+	PlatformAPIAggregation,
 }
 
 // IsCNProvider reports whether platform is a mainland China OpenAI-compatible provider.
@@ -81,6 +85,21 @@ func IsCNProvider(platform string) bool {
 	default:
 		return false
 	}
+}
+
+// IsAPIAggregationProvider reports whether platform is the account-share
+// "API聚合" channel. It is NOT a CN provider: no official default endpoints,
+// no balance/quota probes. It only shares the relay-style credential shape
+// (api_key + base_url + api_base_urls + api_protocol).
+func IsAPIAggregationProvider(platform string) bool {
+	return platform == PlatformAPIAggregation
+}
+
+// IsRelayUpstreamProvider reports whether the platform forwards requests to a
+// user-configured upstream via api_key + base_url credentials. CN providers
+// and the API aggregation channel both qualify.
+func IsRelayUpstreamProvider(platform string) bool {
+	return IsCNProvider(platform) || IsAPIAggregationProvider(platform)
 }
 
 const (

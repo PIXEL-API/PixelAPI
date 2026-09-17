@@ -108,6 +108,11 @@ func (s *AccountShareModeService) processReviewModerationOnce() {
 	if s == nil || s.repo == nil || s.reviewSettingRepo == nil {
 		return
 	}
+	startedAt := time.Now().UTC()
+	var runErr error
+	defer func() {
+		s.recordShareJobHeartbeat(accountShareReviewModerationTaskName, startedAt, "", runErr)
+	}()
 	ctx, cancel := context.WithTimeout(s.reviewWorkerContext(), time.Minute)
 	defer cancel()
 	_, err := s.taskExecutor.Run(ctx, accountShareReviewModerationTaskName, func(taskCtx context.Context, guard *ClusterLeaseGuard) error {
@@ -115,6 +120,7 @@ func (s *AccountShareModeService) processReviewModerationOnce() {
 	})
 	if err != nil {
 		log.Printf("[AccountShareReview] moderation lease failed: %v", err)
+		runErr = err
 	}
 }
 

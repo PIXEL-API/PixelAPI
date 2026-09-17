@@ -19,6 +19,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// accountSharePricedCatalogStub 是 handler 测试用的定价目录桩：默认放行所有模型。
+type accountSharePricedCatalogStub struct{}
+
+func (accountSharePricedCatalogStub) ListPricedModelIDs(context.Context, []string) ([]string, error) {
+	return nil, nil
+}
+
+func (accountSharePricedCatalogStub) ListSelectablePricedModelIDs(context.Context, service.PricedModelQuery) ([]string, error) {
+	return nil, nil
+}
+
+func (accountSharePricedCatalogStub) IsModelPriced(context.Context, service.PricedModelQuery, string) (bool, error) {
+	return true, nil
+}
+
 type accountShareUpdateRepositoryStub struct {
 	service.AccountShareModeRepository
 
@@ -282,6 +297,17 @@ func (s *accountShareUpdateRepositoryStub) UpdateListing(
 		ID:         listingID,
 		RowVersion: *input.ExpectedVersion + 1,
 		RoomName:   "updated-room",
+	}, nil
+}
+
+func (s *accountShareUpdateRepositoryStub) GetListingByID(
+	_ context.Context,
+	listingID int64,
+	_ int64,
+) (*service.AccountShareListing, error) {
+	return &service.AccountShareListing{
+		ID:       listingID,
+		Platform: service.PlatformOpenAI,
 	}, nil
 }
 
@@ -719,6 +745,7 @@ func TestAccountShareModeHandlerUpdateListingRejectsIncompleteAdminForceConfirma
 func TestAccountShareModeHandlerUpdateListingPassesVersionAndAdminAuditFields(t *testing.T) {
 	repo := &accountShareUpdateRepositoryStub{}
 	svc := service.NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
+	svc.SetPricedModelCatalog(accountSharePricedCatalogStub{})
 	handler := NewAccountShareModeHandler(svc)
 
 	recorder := performAccountShareListingUpdate(t, handler, service.RoleAdmin, `{

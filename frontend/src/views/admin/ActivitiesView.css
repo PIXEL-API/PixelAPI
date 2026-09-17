@@ -1080,7 +1080,7 @@
 .activity-dialog-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: var(--ui-z-modal-stacked);
   display: flex;
   align-items: stretch;
   justify-content: flex-end;
@@ -1523,7 +1523,7 @@
 }
 
 .activity-dialog-backdrop {
-  z-index: 70;
+  z-index: calc(var(--ui-z-modal-stacked) + 10);
   align-items: center;
   justify-content: center;
   padding: 1rem;

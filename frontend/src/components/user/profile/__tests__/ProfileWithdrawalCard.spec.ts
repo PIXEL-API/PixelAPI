@@ -43,11 +43,18 @@ vi.mock('@/stores/app', () => ({
 
 vi.mock('vue-i18n', async (importOriginal) => {
   const actual = await importOriginal<typeof import('vue-i18n')>()
+  const { default: zh } = await import('@/i18n/locales/zh')
+  const resolve = (key: string): unknown =>
+    key.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), zh)
+  const t = (key: string, params?: Record<string, unknown>): string => {
+    const v = resolve(key)
+    if (typeof v !== 'string') return key
+    if (!params) return v
+    return Object.entries(params).reduce((s, [k, val]) => s.replaceAll(`{${k}}`, String(val)), v)
+  }
   return {
     ...actual,
-    useI18n: () => ({
-      t: (key: string) => key
-    })
+    useI18n: () => ({ t }),
   }
 })
 

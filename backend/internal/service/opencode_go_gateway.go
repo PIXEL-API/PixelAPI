@@ -9,9 +9,12 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
 
@@ -19,38 +22,163 @@ const opencodeResponsesRawEndpoint = "/v1/responses"
 
 // ensureOpencodeSessionHeader preserves the client's real conversation identity
 // across protocol conversion. A random ID per request defeats upstream prompt
-// cache affinity; requests without a session must retain the upstream error.
+// cache affinity; when no explicit ID exists, a deterministic content anchor is
+// used only if it contains a first-user conversation root.
 func ensureOpencodeSessionHeader(c *gin.Context, account *Account, req *http.Request, body []byte) {
 	if account == nil || req == nil || !account.IsOpencode() {
 		return
 	}
-	if strings.TrimSpace(req.Header.Get("x-opencode-session")) != "" {
-		return
-	}
-	if c == nil || c.Request == nil {
-		return
-	}
-	if sessionID := strings.TrimSpace(c.GetHeader("x-opencode-session")); sessionID != "" {
-		req.Header.Set("x-opencode-session", sessionID)
-		return
-	}
-	apiKeyID := getAPIKeyIDFromContext(c)
-	if apiKeyID <= 0 {
-		return
-	}
-	sessionID := extractClaudeCodeSessionID(c, body)
-	if sessionID == "" {
-		for _, header := range []string{"session-id", "thread-id", "x-deepseek-harness-session-id"} {
-			if sessionID = strings.TrimSpace(c.GetHeader(header)); sessionID != "" {
-				break
-			}
+	existing := validOpencodeSessionHeader(req.Header.Get("x-opencode-session"))
+	for key := range req.Header {
+		if strings.EqualFold(key, "x-opencode-session") {
+			delete(req.Header, key)
 		}
 	}
-	if sessionID == "" {
-		sessionID = explicitOpenAIHeaderSessionID(c)
+	if c != nil && c.Request != nil {
+		inbound := validOpencodeSessionHeader(c.GetHeader("x-opencode-session"))
+		if apiKeyID := getAPIKeyIDFromContext(c); apiKeyID > 0 {
+			sessionID := inbound
+			if sessionID == "" {
+				sessionID = opencodeHeaderSessionID(c)
+			}
+			if sessionID == "" {
+				sessionID = validOpencodeSessionValue(c.GetString("opencode_inbound_session"))
+			}
+			if sessionID == "" {
+				sessionID = opencodeInboundSessionID(body)
+			}
+			if sessionID != "" {
+				req.Header.Set("x-opencode-session", isolateOpenAISessionID(apiKeyID, "opencode-session:"+sessionID))
+				return
+			}
+		}
+		if inbound != "" {
+			req.Header.Set("x-opencode-session", inbound)
+			return
+		}
 	}
-	if sessionID != "" {
-		req.Header.Set("x-opencode-session", isolateOpenAISessionID(apiKeyID, "opencode-session:"+sessionID))
+	if existing != "" && !account.IsOpencodeGoPlan() {
+		req.Header.Set("x-opencode-session", existing)
+	}
+}
+
+func validOpencodeSessionHeader(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) > 512 {
+		return ""
+	}
+	for _, ch := range value {
+		if ch < 0x20 || ch > 0x7e {
+			return ""
+		}
+	}
+	return value
+}
+
+func validOpencodeSessionValue(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 512 || !utf8.ValidString(value) {
+		return ""
+	}
+	for _, ch := range value {
+		if unicode.IsControl(ch) {
+			return ""
+		}
+	}
+	return value
+}
+
+func opencodeHeaderSessionID(c *gin.Context) string {
+	if sessionID := validOpencodeSessionValue(extractClaudeCodeSessionID(c, nil)); sessionID != "" {
+		return sessionID
+	}
+	for _, header := range []string{"session-id", "thread-id", "x-deepseek-harness-session-id"} {
+		if sessionID := validOpencodeSessionValue(c.GetHeader(header)); sessionID != "" {
+			return sessionID
+		}
+	}
+	if sessionID := validOpencodeSessionValue(explicitOpenAIHeaderSessionID(c)); sessionID != "" {
+		return sessionID
+	}
+	if sessionID := opencodeCodexTurnMetadataSessionID(c.GetHeader("x-codex-turn-metadata")); sessionID != "" {
+		return sessionID
+	}
+	return validOpencodeSessionValue(c.GetHeader("x-codex-window-id"))
+}
+
+func opencodePayloadSessionID(body []byte) string {
+	if sessionID := validOpencodeSessionValue(gjson.GetBytes(body, "prompt_cache_key").String()); sessionID != "" {
+		return sessionID
+	}
+	if sessionID := validOpencodeSessionValue(extractClaudeCodeSessionIDFromPayload(body)); sessionID != "" {
+		return sessionID
+	}
+	if sessionID := validOpencodeSessionValue(gjson.GetBytes(body, "metadata.user_id").String()); sessionID != "" {
+		return sessionID
+	}
+	if sessionID := validOpencodeSessionValue(gjson.GetBytes(body, "client_metadata.session_id").String()); sessionID != "" {
+		return sessionID
+	}
+	if sessionID := validOpencodeSessionValue(gjson.GetBytes(body, "client_metadata.conversation_id").String()); sessionID != "" {
+		return sessionID
+	}
+	if sessionID := validOpencodeSessionValue(gjson.GetBytes(body, "client_metadata.thread_id").String()); sessionID != "" {
+		return sessionID
+	}
+	if sessionID := opencodeCodexTurnMetadataSessionID(gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String()); sessionID != "" {
+		return sessionID
+	}
+	for _, field := range []string{"session_id", "conversation_id", "thread_id", "metadata.session_id", "metadata.conversation_id"} {
+		if sessionID := validOpencodeSessionValue(gjson.GetBytes(body, field).String()); sessionID != "" {
+			return sessionID
+		}
+	}
+	return ""
+}
+
+func opencodeCodexTurnMetadataSessionID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || raw[0] != '{' {
+		return ""
+	}
+	for _, field := range []string{"session_id", "conversation_id", "thread_id"} {
+		if sessionID := validOpencodeSessionValue(gjson.Get(raw, field).String()); sessionID != "" {
+			return sessionID
+		}
+	}
+	return ""
+}
+
+func opencodeInboundSessionID(body []byte) string {
+	if sessionID := opencodePayloadSessionID(body); sessionID != "" {
+		return sessionID
+	}
+	seed := deriveOpencodeContentSessionSeed(body)
+	if seed == "" {
+		return ""
+	}
+	return "content-anchor:" + generateSessionUUID(seed)
+}
+
+func deriveOpencodeContentSessionSeed(body []byte) string {
+	seed := deriveOpenAIAnchoredContentSessionSeed(body)
+	if seed == "" {
+		return ""
+	}
+	if system := gjson.GetBytes(body, "system"); system.Exists() {
+		if normalized, ok := normalizeNonEmptyCompatSeedJSON(system); ok {
+			seed += "|anthropic_system=" + normalized
+		}
+	}
+	return seed
+}
+
+func rememberOpencodeSession(c *gin.Context, account *Account, body []byte) {
+	if c == nil || !account.IsOpencode() || c.GetString("opencode_inbound_session") != "" {
+		return
+	}
+	if sessionID := opencodeInboundSessionID(body); sessionID != "" {
+		c.Set("opencode_inbound_session", strings.Clone(sessionID))
 	}
 }
 
@@ -149,7 +277,7 @@ func resolveOpencodeGoForwardModel(account *Account, requestedModel, defaultMapp
 	// provider-prefix normalization. Lookup must be exact here; calling the
 	// public normalizing resolver again would accept double-prefixed mappings
 	// while the forwarding path only strips one prefix.
-	spec, ok := opencodeGoModelByID[upstreamModel]
+	spec, ok := opencodeModelSpec(account, upstreamModel)
 	if !ok {
 		return OpencodeGoResolvedModel{}, &opencodeGoRoutingError{
 			kind:          "unknown_model",
@@ -1294,7 +1422,7 @@ func applyOpencodeGoResolvedModelToResult(result *OpenAIForwardResult, resolved 
 
 func (s *OpenAIGatewayService) resolveOpenAIAPIKeyResponsesURL(account *Account) (string, error) {
 	baseURL := account.GetOpenAIBaseURL()
-	if account.IsCNProvider() && account.GetAPIProtocol() == APIProtocolAdaptive {
+	if account.IsRelayUpstream() && account.GetAPIProtocol() == APIProtocolAdaptive {
 		if protocolURL := account.GetCNProtocolBaseURL(APIProtocolResponses); strings.TrimSpace(protocolURL) != "" {
 			baseURL = protocolURL
 		}
@@ -1303,6 +1431,10 @@ func (s *OpenAIGatewayService) resolveOpenAIAPIKeyResponsesURL(account *Account)
 		baseURL = account.GetOpencodeBaseURL()
 	}
 	if strings.TrimSpace(baseURL) == "" {
+		if account.IsAPIAggregation() {
+			// 聚合渠道缺失 base_url 是数据异常，不能静默回落到 OpenAI 官方地址。
+			return "", fmt.Errorf("account %d missing base_url", account.ID)
+		}
 		return openaiPlatformAPIURL, nil
 	}
 	validatedURL, err := s.validateUpstreamBaseURL(baseURL)

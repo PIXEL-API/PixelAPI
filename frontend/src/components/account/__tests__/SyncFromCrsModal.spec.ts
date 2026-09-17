@@ -32,11 +32,22 @@ vi.mock('@/stores/app', () => ({
   }),
 }))
 
-vi.mock('vue-i18n', () => ({
-  useI18n: () => ({
-    t: (key: string) => key,
-  }),
-}))
+vi.mock('vue-i18n', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('vue-i18n')>()
+  const { default: zh } = await import('@/i18n/locales/zh')
+  const resolve = (key: string): unknown =>
+    key.split('.').reduce<unknown>((o, k) => (o && typeof o === 'object' ? (o as Record<string, unknown>)[k] : undefined), zh)
+  const t = (key: string, params?: Record<string, unknown>): string => {
+    const v = resolve(key)
+    if (typeof v !== 'string') return key
+    if (!params) return v
+    return Object.entries(params).reduce((s, [k, val]) => s.replaceAll(`{${k}}`, String(val)), v)
+  }
+  return {
+    ...actual,
+    useI18n: () => ({ t }),
+  }
+})
 
 const BaseDialogStub = {
   props: ['show'],
@@ -139,7 +150,7 @@ describe('SyncFromCrsModal room mutation guard', () => {
     await submitPreview(wrapper)
 
     const syncButton = wrapper.findAll('button').find(button =>
-      button.text().includes('admin.accounts.syncNow')
+      button.text().includes('开始同步')
     )
     expect(wrapper.get('[data-testid="crs-force-confirmation"]').text()).toContain('检测到 1 个房间账号')
     expect(syncButton?.attributes('disabled')).toBeDefined()
@@ -190,7 +201,7 @@ describe('SyncFromCrsModal room mutation guard', () => {
     expect(wrapper.get('[data-testid="crs-force-preview-error"]').text())
       .toContain('预览包含无效的房间版本')
     const syncButton = wrapper.findAll('button').find(button =>
-      button.text().includes('admin.accounts.syncNow')
+      button.text().includes('开始同步')
     )
     expect(syncButton?.attributes('disabled')).toBeDefined()
     expect(syncFromCrs).not.toHaveBeenCalled()
@@ -216,7 +227,7 @@ describe('SyncFromCrsModal room mutation guard', () => {
     const wrapper = mountModal()
     await submitPreview(wrapper)
     const syncButton = wrapper.findAll('button').find(button =>
-      button.text().includes('admin.accounts.syncNow')
+      button.text().includes('开始同步')
     )
     expect(syncButton?.attributes('disabled')).toBeUndefined()
     await syncButton?.trigger('click')
@@ -269,7 +280,7 @@ describe('SyncFromCrsModal room mutation guard', () => {
     const reason = wrapper.get('[data-testid="crs-force-reason"]')
     await reason.setValue('第一次核对原因')
     const syncButton = wrapper.findAll('button').find(button =>
-      button.text().includes('admin.accounts.syncNow')
+      button.text().includes('开始同步')
     )!
 
     await syncButton.trigger('click')
@@ -331,7 +342,7 @@ describe('SyncFromCrsModal room mutation guard', () => {
     expect(showError).toHaveBeenCalledWith(expect.stringContaining('安全令牌'))
     expect(syncFromCrs).not.toHaveBeenCalled()
     expect(wrapper.findAll('button').some(button =>
-      button.text().includes('admin.accounts.syncNow')
+      button.text().includes('开始同步')
     )).toBe(false)
     wrapper.unmount()
   })
@@ -358,7 +369,7 @@ describe('SyncFromCrsModal room mutation guard', () => {
     const wrapper = mountModal()
     await submitPreview(wrapper)
     const syncButton = wrapper.findAll('button').find(button =>
-      button.text().includes('admin.accounts.syncNow')
+      button.text().includes('开始同步')
     )!
 
     await syncButton.trigger('click')
@@ -401,7 +412,7 @@ describe('SyncFromCrsModal room mutation guard', () => {
     await flushPromises()
 
     const syncButton = wrapper.findAll('button').find(button =>
-      button.text().includes('admin.accounts.syncNow')
+      button.text().includes('开始同步')
     )!
     await syncButton.trigger('click')
     await flushPromises()

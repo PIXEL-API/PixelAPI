@@ -33,11 +33,16 @@ func TestSupportedUserPrivateGroupPlatformsIncludesAllAccountPlatforms(t *testin
 		PlatformDeepseek,
 		PlatformMiniMax,
 		PlatformQwen,
+		PlatformDevin,
+		PlatformAPIAggregation,
 	}, SupportedUserPrivateGroupPlatforms())
 	require.True(t, IsSupportedUserPrivateGroupPlatform(PlatformGrok))
 	require.True(t, IsSupportedUserPrivateGroupPlatform(" Grok "))
 	require.True(t, IsSupportedUserPrivateGroupPlatform(PlatformOpencode))
-	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformQwen} {
+	require.True(t, IsSupportedUserPrivateGroupPlatform(PlatformDevin))
+	// Devin 桥接只实现 /v1/chat/completions，私有分组不放行 /v1/messages 调度。
+	require.False(t, defaultPrivateGroupAllowMessagesDispatch(PlatformDevin))
+	for _, platform := range []string{PlatformKimi, PlatformZhipu, PlatformDeepseek, PlatformMiniMax, PlatformQwen, PlatformAPIAggregation} {
 		require.True(t, IsSupportedUserPrivateGroupPlatform(platform))
 		require.True(t, defaultPrivateGroupAllowMessagesDispatch(platform))
 	}

@@ -15,7 +15,29 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/crypto/bcrypt"
 )
+
+// accountSharePricedCatalogStub 是本文件（非 unit tag）测试用的定价目录桩：
+// 默认放行所有模型的定价校验。
+type accountSharePricedCatalogStub struct {
+	priced func(ctx context.Context, query PricedModelQuery, modelID string) (bool, error)
+}
+
+func (s *accountSharePricedCatalogStub) ListPricedModelIDs(_ context.Context, _ []string) ([]string, error) {
+	return nil, nil
+}
+
+func (s *accountSharePricedCatalogStub) ListSelectablePricedModelIDs(_ context.Context, _ PricedModelQuery) ([]string, error) {
+	return nil, nil
+}
+
+func (s *accountSharePricedCatalogStub) IsModelPriced(ctx context.Context, query PricedModelQuery, modelID string) (bool, error) {
+	if s.priced != nil {
+		return s.priced(ctx, query, modelID)
+	}
+	return true, nil
+}
 
 type accountShareModeRepoStub struct {
 	ensureNameErr         error
@@ -1135,6 +1157,7 @@ func TestCreateRoomFromOwnedAccountPublicPoolSkipsIdleGuard(t *testing.T) {
 		},
 	}
 	svc := NewAccountShareModeService(roomRepo, accountRepo, nil, nil, nil, nil)
+	svc.SetPricedModelCatalog(&accountSharePricedCatalogStub{})
 	// 模拟账号正被公共调度：Redis 槽位里有在途请求。修复前这里会 ErrAccountExternalPlacementBusy。
 	svc.SetRuntimeDependencies(
 		&ConcurrencyService{cache: &accountShareRuntimeLoadCacheStub{loads: map[int64]*AccountLoadInfo{
@@ -1195,6 +1218,7 @@ func TestCreateRoomFromOwnedAccountReplaysBeforeCurrentAccountAvailabilityChecks
 		},
 	}
 	svc := NewAccountShareModeService(roomRepo, accountRepo, nil, nil, nil, nil)
+	svc.SetPricedModelCatalog(&accountSharePricedCatalogStub{})
 
 	listing, err := svc.CreateRoomFromOwnedAccount(
 		context.Background(),
@@ -1242,6 +1266,7 @@ func TestCreateRoomFromOwnedAccountRejectsDynamicallyUnavailableAccount(t *testi
 		},
 	}
 	svc := NewAccountShareModeService(roomRepo, accountRepo, nil, nil, nil, nil)
+	svc.SetPricedModelCatalog(&accountSharePricedCatalogStub{})
 
 	listing, err := svc.CreateRoomFromOwnedAccount(
 		context.Background(),
@@ -1420,6 +1445,7 @@ func TestCreateRoomFromOwnedAccountRejectsUnsupportedModelBeforeRuntimeMutation(
 		},
 	}
 	svc := NewAccountShareModeService(roomRepo, accountRepo, nil, nil, nil, nil)
+	svc.SetPricedModelCatalog(&accountSharePricedCatalogStub{})
 
 	listing, err := svc.CreateRoomFromOwnedAccount(
 		context.Background(),
@@ -1458,6 +1484,7 @@ func TestCreateRoomFromOwnedAccountRejectsUnsupportedPlatformBeforeRuntimeMutati
 		},
 	}
 	svc := NewAccountShareModeService(roomRepo, accountRepo, nil, nil, nil, nil)
+	svc.SetPricedModelCatalog(&accountSharePricedCatalogStub{})
 
 	listing, err := svc.CreateRoomFromOwnedAccount(
 		context.Background(),
@@ -1910,7 +1937,7 @@ func TestAccountShareModeSeatBillingDoesNotRunRoomLifecycle(t *testing.T) {
 	repo := &accountShareBillingLifecycleRepoStub{AccountShareModeRepository: baseRepo}
 	svc := NewAccountShareModeService(repo, nil, nil, nil, nil, nil)
 
-	err := svc.processSeatBillingOnceLeased(context.Background(), &ClusterLeaseGuard{})
+	err := svc.processSeatBillingOnceLeased(context.Background(), &ClusterLeaseGuard{}, nil)
 
 	require.NoError(t, err)
 	require.Zero(t, repo.endingCalls)
@@ -2111,6 +2138,7 @@ func TestAccountShareModeListModeGroupsUsesReadOnlyLookup(t *testing.T) {
 		PlatformDeepseek:  {ID: 606, Platform: PlatformDeepseek},
 		PlatformMiniMax:   {ID: 707, Platform: PlatformMiniMax},
 		PlatformQwen:      {ID: 808, Platform: PlatformQwen},
+		PlatformDevin:     {ID: 909, Platform: PlatformDevin},
 	}}
 	svc := &AccountShareModeService{repo: repo}
 
@@ -2118,10 +2146,10 @@ func TestAccountShareModeListModeGroupsUsesReadOnlyLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list mode groups failed: %v", err)
 	}
-	if len(groups) != 8 || groups[0].GroupID != 101 || groups[0].Platform != PlatformOpenAI || groups[1].GroupID != 202 || groups[1].Platform != PlatformAnthropic || groups[2].GroupID != 303 || groups[2].Platform != PlatformOpencode || groups[3].GroupID != 404 || groups[3].Platform != PlatformKimi || groups[4].GroupID != 505 || groups[4].Platform != PlatformZhipu || groups[5].GroupID != 606 || groups[5].Platform != PlatformDeepseek || groups[6].GroupID != 707 || groups[6].Platform != PlatformMiniMax || groups[7].GroupID != 808 || groups[7].Platform != PlatformQwen {
+	if len(groups) != 9 || groups[0].GroupID != 101 || groups[0].Platform != PlatformOpenAI || groups[1].GroupID != 202 || groups[1].Platform != PlatformAnthropic || groups[2].GroupID != 303 || groups[2].Platform != PlatformOpencode || groups[3].GroupID != 404 || groups[3].Platform != PlatformKimi || groups[4].GroupID != 505 || groups[4].Platform != PlatformZhipu || groups[5].GroupID != 606 || groups[5].Platform != PlatformDeepseek || groups[6].GroupID != 707 || groups[6].Platform != PlatformMiniMax || groups[7].GroupID != 808 || groups[7].Platform != PlatformQwen || groups[8].GroupID != 909 || groups[8].Platform != PlatformDevin {
 		t.Fatalf("unexpected mode groups: %#v", groups)
 	}
-	if len(repo.modeGroupGetCalls) != 8 || repo.modeGroupGetCalls[0] != PlatformOpenAI || repo.modeGroupGetCalls[1] != PlatformAnthropic || repo.modeGroupGetCalls[2] != PlatformOpencode || repo.modeGroupGetCalls[3] != PlatformKimi || repo.modeGroupGetCalls[4] != PlatformZhipu || repo.modeGroupGetCalls[5] != PlatformDeepseek || repo.modeGroupGetCalls[6] != PlatformMiniMax || repo.modeGroupGetCalls[7] != PlatformQwen {
+	if len(repo.modeGroupGetCalls) != 10 || repo.modeGroupGetCalls[0] != PlatformOpenAI || repo.modeGroupGetCalls[1] != PlatformAnthropic || repo.modeGroupGetCalls[2] != PlatformOpencode || repo.modeGroupGetCalls[3] != PlatformKimi || repo.modeGroupGetCalls[4] != PlatformZhipu || repo.modeGroupGetCalls[5] != PlatformDeepseek || repo.modeGroupGetCalls[6] != PlatformMiniMax || repo.modeGroupGetCalls[7] != PlatformQwen || repo.modeGroupGetCalls[8] != PlatformDevin || repo.modeGroupGetCalls[9] != PlatformAPIAggregation {
 		t.Fatalf("unexpected read-only lookup calls: %#v", repo.modeGroupGetCalls)
 	}
 	if len(repo.modeGroupEnsureCalls) != 0 {
@@ -2146,7 +2174,9 @@ func TestAccountShareModeListModeGroupsFailsWhenMappingMissing(t *testing.T) {
 
 func TestAccountShareModeExchangePreflightsDuplicateNameBeforeOAuth(t *testing.T) {
 	repo := &accountShareModeRepoStub{ensureNameErr: ErrAccountShareModeDuplicateName}
-	svc := &AccountShareModeService{repo: repo, proxyRepo: &accountShareModeProxyRepoStub{}}
+	svc := &AccountShareModeService{repo: repo, proxyRepo: &accountShareModeProxyRepoStub{}, pricedModelCatalog: &accountSharePricedCatalogStub{priced: func(_ context.Context, _ PricedModelQuery, _ string) (bool, error) {
+		return true, nil
+	}}}
 
 	_, err := svc.ExchangeOpenAICodeAndCreateListing(context.Background(), 10, &OpenAIExchangeCodeInput{
 		SessionID: "session",
@@ -2226,6 +2256,9 @@ func TestAccountShareModeCreateOpenAIListingStartsValidating(t *testing.T) {
 		repo:               repo,
 		proxyRepo:          proxyRepo,
 		openaiOAuthService: &OpenAIOAuthService{},
+		pricedModelCatalog: &accountSharePricedCatalogStub{priced: func(_ context.Context, _ PricedModelQuery, _ string) (bool, error) {
+			return true, nil
+		}},
 	}
 
 	created, err := service.CreateOpenAIListingFromToken(
@@ -2265,6 +2298,9 @@ func TestAccountShareModeCreateAnthropicListingDefaultsQuotaLimitPercents(t *tes
 		repo:         repo,
 		proxyRepo:    proxyRepo,
 		oauthService: &OAuthService{},
+		pricedModelCatalog: &accountSharePricedCatalogStub{priced: func(_ context.Context, _ PricedModelQuery, _ string) (bool, error) {
+			return true, nil
+		}},
 	}
 
 	got, err := svc.CreateAnthropicListingFromToken(context.Background(), 42, CreateAccountShareListingInput{
@@ -3176,8 +3212,11 @@ func TestAccountShareModeUpdateListingRejectsRoomLevelAccountConcurrencyEdit(t *
 func TestAccountShareModeUpdateListingOwnerPermissions(t *testing.T) {
 	repo := &accountShareModeRepoStub{
 		updateListing: &AccountShareListing{ID: 7, AccountID: 9, OwnerUserID: 42},
+		listing:       &AccountShareListing{ID: 7, AccountID: 9, OwnerUserID: 42, Platform: PlatformOpenAI},
 	}
-	svc := &AccountShareModeService{repo: repo}
+	svc := &AccountShareModeService{repo: repo, pricedModelCatalog: &accountSharePricedCatalogStub{priced: func(_ context.Context, _ PricedModelQuery, _ string) (bool, error) {
+		return true, nil
+	}}}
 	models := []string{" gpt-5.5 ", "", "gpt-5.4", "gpt-5.5"}
 	expectedVersion := int64(1)
 
@@ -4170,7 +4209,7 @@ func TestAccountShareModeEndingWorkerRunsDespiteRepeatedSeatBillingErrors(t *tes
 	svc.taskExecutor = &ClusterTaskExecutor{}
 	svc.concurrencyService = NewConcurrencyService(&accountShareMembershipConcurrencyCacheStub{})
 	for i := 0; i < 3; i++ {
-		require.ErrorIs(t, svc.processSeatBillingOnceLeased(context.Background(), nil), repo.seatBillingErr)
+		require.ErrorIs(t, svc.processSeatBillingOnceLeased(context.Background(), nil, nil), repo.seatBillingErr)
 		svc.processMembershipEndingOnce()
 	}
 	require.Equal(t, 3, repo.finalizeCalls, "each independent ending round must still run")
@@ -4949,4 +4988,184 @@ func TestValidateAccountShareAccountNameRejectsNamesLongerThanDatabaseLimit(t *t
 		validateAccountShareAccountName(strings.Repeat("房", AccountShareRoomNameMaxRunes+1)),
 		ErrAccountShareModeInvalidName,
 	)
+}
+
+func accountShareJoinPasswordHashForTest(t *testing.T, password string) string {
+	t.Helper()
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	require.NoError(t, err)
+	return string(hash)
+}
+
+func TestHashAccountShareJoinPasswordValidation(t *testing.T) {
+	hash, err := hashAccountShareJoinPassword("")
+	require.NoError(t, err)
+	require.Empty(t, hash)
+
+	hash, err = hashAccountShareJoinPassword("room-pass")
+	require.NoError(t, err)
+	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(hash), []byte("room-pass")))
+	require.Error(t, bcrypt.CompareHashAndPassword([]byte(hash), []byte("wrong-pass")))
+
+	require.ErrorIs(t, hashAccountShareJoinPasswordErr("abc"), ErrAccountShareRoomPasswordInvalidLength)
+	require.ErrorIs(t, hashAccountShareJoinPasswordErr(strings.Repeat("a", AccountShareJoinPasswordMaxLength+1)), ErrAccountShareRoomPasswordInvalidLength)
+	// 中文按字节计长，64 字节上限同时低于 bcrypt 的 72 字节硬限制。
+	require.ErrorIs(t, hashAccountShareJoinPasswordErr(strings.Repeat("密", 30)), ErrAccountShareRoomPasswordInvalidLength)
+}
+
+func hashAccountShareJoinPasswordErr(password string) error {
+	_, err := hashAccountShareJoinPassword(password)
+	return err
+}
+
+func TestVerifyAccountShareJoinPassword(t *testing.T) {
+	hash := accountShareJoinPasswordHashForTest(t, "room-pass-1")
+	newPreparation := func(ownerSelfUse bool, passwordHash string) *accountShareJoinPreparation {
+		return &accountShareJoinPreparation{
+			listing:      &AccountShareListing{ID: 2, OwnerUserID: 42, JoinPasswordHash: passwordHash},
+			ownerSelfUse: ownerSelfUse,
+		}
+	}
+
+	require.NoError(t, verifyAccountShareJoinPassword(newPreparation(false, ""), "", false), "无密码房间直接放行")
+	require.ErrorIs(t, verifyAccountShareJoinPassword(newPreparation(false, hash), "", false), ErrAccountShareRoomPasswordRequired)
+	require.ErrorIs(t, verifyAccountShareJoinPassword(newPreparation(false, hash), "wrong", false), ErrAccountShareRoomPasswordInvalid)
+	require.NoError(t, verifyAccountShareJoinPassword(newPreparation(false, hash), "room-pass-1", false))
+	require.NoError(t, verifyAccountShareJoinPassword(newPreparation(false, hash), "  room-pass-1  ", false), "首尾空白不影响比对")
+	require.NoError(t, verifyAccountShareJoinPassword(newPreparation(true, hash), "", false), "号主自用免密")
+	require.NoError(t, verifyAccountShareJoinPassword(newPreparation(false, hash), "", true), "管理员免密")
+}
+
+func TestAccountShareJoinIntentPasswordGate(t *testing.T) {
+	groupID := int64(1)
+	revisionID := int64(91)
+	hash := accountShareJoinPasswordHashForTest(t, "room-pass-1")
+	newService := func() (*AccountShareModeService, *accountShareModeRepoStub) {
+		listing := &AccountShareListing{
+			ID:                               2,
+			RowVersion:                       7,
+			CurrentRevisionID:                &revisionID,
+			AccountID:                        10,
+			RoomName:                         "locked-room",
+			Platform:                         PlatformOpenAI,
+			OwnerUserID:                      42,
+			Status:                           AccountShareListingStatusActive,
+			SeatLimit:                        3,
+			ActiveSeats:                      1,
+			RateMultiplier:                   0.75,
+			AllowedModels:                    []string{"gpt-5.5"},
+			PerUserConcurrency:               2,
+			HourlyRate:                       0.3,
+			MinBalanceRequired:               1,
+			AccountStatus:                    StatusActive,
+			AccountSchedulable:               true,
+			RepresentativeAccountConcurrency: 5,
+			JoinPasswordHash:                 hash,
+			HasJoinPassword:                  true,
+		}
+		repo := &accountShareModeRepoStub{listing: listing}
+		svc := &AccountShareModeService{
+			repo: repo,
+			apiKeyRepo: &accountShareRecommendationAPIKeyRepoStub{key: &APIKey{
+				ID:      3,
+				UserID:  1,
+				Key:     "sk-account-share",
+				GroupID: &groupID,
+				Status:  StatusAPIKeyActive,
+			}},
+			userRepo: &accountShareJoinUserRepoStub{user: &User{ID: 1, Balance: 100}},
+		}
+		svc.SetActionTokenSecret(strings.Repeat("s", 32))
+		return svc, repo
+	}
+	newInput := func(password string, admin bool) CreateAccountShareJoinIntentInput {
+		return CreateAccountShareJoinIntentInput{
+			APIKeyID:           3,
+			IdleTimeoutMinutes: 30,
+			Password:           password,
+			ActorIsAdmin:       admin,
+		}
+	}
+
+	svc, _ := newService()
+	_, err := svc.CreateJoinIntent(context.Background(), 1, 2, newInput("", false))
+	require.ErrorIs(t, err, ErrAccountShareRoomPasswordRequired)
+
+	svc, _ = newService()
+	_, err = svc.CreateJoinIntent(context.Background(), 1, 2, newInput("bad-pass", false))
+	require.ErrorIs(t, err, ErrAccountShareRoomPasswordInvalid)
+
+	svc, _ = newService()
+	intent, err := svc.CreateJoinIntent(context.Background(), 1, 2, newInput("room-pass-1", false))
+	require.NoError(t, err)
+	require.NotEmpty(t, intent.Token)
+	require.Equal(t, int64(7), intent.ExpectedVersion)
+
+	svc, _ = newService()
+	_, err = svc.CreateJoinIntent(context.Background(), 1, 2, newInput("", true))
+	require.NoError(t, err, "管理员免密")
+
+	// 号主自用：consumerUserID == owner_user_id 时免密（需号主自己的 Key）。
+	svc, repo := newService()
+	repo.listing.OwnerUserID = 42
+	svc.apiKeyRepo = &accountShareRecommendationAPIKeyRepoStub{key: &APIKey{
+		ID:      9,
+		UserID:  42,
+		Key:     "sk-owner",
+		GroupID: &groupID,
+		Status:  StatusAPIKeyActive,
+	}}
+	svc.userRepo = &accountShareJoinUserRepoStub{user: &User{ID: 42, Balance: 0}}
+	_, err = svc.CreateJoinIntent(context.Background(), 42, 2, CreateAccountShareJoinIntentInput{
+		APIKeyID:           9,
+		IdleTimeoutMinutes: 30,
+	})
+	require.NoError(t, err, "号主自用免密")
+}
+
+func TestAccountShareUpdateListingHashesJoinPassword(t *testing.T) {
+	expectedVersion := int64(7)
+	repo := &accountShareModeRepoStub{updateListing: &AccountShareListing{ID: 2}}
+	svc := &AccountShareModeService{repo: repo}
+	newPassword := "new-room-pass"
+	listing, err := svc.UpdateListing(context.Background(), 42, false, 2, UpdateAccountShareListingInput{
+		JoinPassword:    &newPassword,
+		ExpectedVersion: &expectedVersion,
+		Reason:          "rotate join password",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, listing)
+	require.NotNil(t, repo.updateInput.JoinPassword)
+	// service 层必须把明文替换成 bcrypt 哈希后再交给仓储层。
+	require.NotEqual(t, newPassword, *repo.updateInput.JoinPassword)
+	require.NoError(t, bcrypt.CompareHashAndPassword([]byte(*repo.updateInput.JoinPassword), []byte(newPassword)))
+}
+
+func TestAccountShareUpdateListingClearsJoinPassword(t *testing.T) {
+	expectedVersion := int64(7)
+	repo := &accountShareModeRepoStub{updateListing: &AccountShareListing{ID: 2}}
+	svc := &AccountShareModeService{repo: repo}
+	empty := ""
+	_, err := svc.UpdateListing(context.Background(), 42, false, 2, UpdateAccountShareListingInput{
+		JoinPassword:    &empty,
+		ExpectedVersion: &expectedVersion,
+		Reason:          "clear join password",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, repo.updateInput.JoinPassword)
+	require.Empty(t, *repo.updateInput.JoinPassword, "空串原样透传给仓储层写成 NULL")
+}
+
+func TestAccountShareUpdateListingRejectsInvalidJoinPassword(t *testing.T) {
+	expectedVersion := int64(7)
+	repo := &accountShareModeRepoStub{updateListing: &AccountShareListing{ID: 2}}
+	svc := &AccountShareModeService{repo: repo}
+	short := "ab"
+	_, err := svc.UpdateListing(context.Background(), 42, false, 2, UpdateAccountShareListingInput{
+		JoinPassword:    &short,
+		ExpectedVersion: &expectedVersion,
+		Reason:          "set join password",
+	})
+	require.ErrorIs(t, err, ErrAccountShareRoomPasswordInvalidLength)
+	require.Zero(t, repo.updateCalls, "非法密码不应到达仓储层")
 }

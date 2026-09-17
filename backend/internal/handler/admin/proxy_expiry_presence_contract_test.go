@@ -60,6 +60,18 @@ func TestUpdateProxyLifecycleFieldsExplicitNullAndZeroRemainPresent(t *testing.T
 	require.Equal(t, int64(0), requiredField(t, value, "ExpiryWarnDays").Elem().Int(), "explicit zero must not be treated as omitted")
 }
 
+func TestUpdateProxyCredentialFieldsPreserveOmittedAndClearEmpty(t *testing.T) {
+	omitted := updateProxyWithLifecyclePayload(t, map[string]any{"status": "inactive"})
+	require.Nil(t, omitted.Username)
+	require.Nil(t, omitted.Password)
+
+	cleared := updateProxyWithLifecyclePayload(t, map[string]any{"username": "  ", "password": ""})
+	require.NotNil(t, cleared.Username)
+	require.NotNil(t, cleared.Password)
+	require.Empty(t, *cleared.Username)
+	require.Empty(t, *cleared.Password)
+}
+
 func requiredField(t *testing.T, value reflect.Value, name string) reflect.Value {
 	t.Helper()
 	field := value.FieldByName(name)

@@ -29,6 +29,7 @@ import (
 // OpenAIGatewayHandler handles OpenAI API gateway requests
 type OpenAIGatewayHandler struct {
 	gatewayService             *service.OpenAIGatewayService
+	devinGatewayService        *service.DevinGatewayService
 	billingCacheService        *service.BillingCacheService
 	apiKeyService              *service.APIKeyService
 	usageRecordWorkerPool      *service.UsageRecordWorkerPool
@@ -239,6 +240,11 @@ func NewOpenAIGatewayHandler(
 	}
 }
 
+// SetDevinGatewayService 注入 Devin 平台转发服务（wire 后装配，同 grok prober 模式）。
+func (h *OpenAIGatewayHandler) SetDevinGatewayService(devinGatewayService *service.DevinGatewayService) {
+	h.devinGatewayService = devinGatewayService
+}
+
 // noAccountBackoffThrottledMessage 命中"无可用账号"退避时的 429 提示。
 const noAccountBackoffThrottledMessage = "No available accounts for this group; requests are temporarily throttled, please retry later"
 
@@ -327,6 +333,10 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {
 		h.errorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
+		return
+	}
+	if isDevinGroupRequest(c) {
+		h.errorResponse(c, http.StatusNotImplemented, "unsupported_protocol", "Devin groups only support /v1/chat/completions")
 		return
 	}
 
@@ -1304,6 +1314,10 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		h.anthropicErrorResponse(c, http.StatusUnauthorized, "authentication_error", "Invalid API key")
 		return
 	}
+	if isDevinGroupRequest(c) {
+		h.anthropicErrorResponse(c, http.StatusNotImplemented, "unsupported_protocol", "Devin groups only support /v1/chat/completions")
+		return
+	}
 
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -2152,6 +2166,10 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// Grok has a separate xAI Responses WS protocol and must not be accepted
 		// here only to fail later in the OpenAI protocol resolver.
 		h.errorResponse(c, http.StatusNotImplemented, "unsupported_protocol", "Grok Responses WebSocket is not supported on this endpoint; use the Grok HTTP Responses or Voice Realtime endpoint")
+		return
+	}
+	if isDevinGroupRequest(c) {
+		h.errorResponse(c, http.StatusNotImplemented, "unsupported_protocol", "Devin groups only support /v1/chat/completions")
 		return
 	}
 	subject, ok := middleware2.GetAuthSubjectFromContext(c)
