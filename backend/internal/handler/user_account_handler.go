@@ -132,7 +132,7 @@ type createUserAccountRequest struct {
 
 type importUserAccountCredentialsRequest struct {
 	Contents           []string          `json:"contents" binding:"required"`
-	Platform           string            `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity grok opencode kimi zhipu deepseek minimax qwen"`
+	Platform           string            `json:"platform" binding:"required,oneof=anthropic openai gemini antigravity grok opencode kimi zhipu deepseek minimax qwen devin api_aggregation"`
 	OpenAIAuthMode     string            `json:"openai_auth_mode" binding:"omitempty,oneof=oauth personal_access_token agent_identity"`
 	AccountLevel       string            `json:"account_level"`
 	ProxyID            *int64            `json:"proxy_id"`
