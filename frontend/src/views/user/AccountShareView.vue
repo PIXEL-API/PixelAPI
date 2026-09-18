@@ -1677,286 +1677,6 @@
       </template>
     </BaseDialog>
 
-    <RoomAccountsDialog
-      :show="roomAccountsListing !== null"
-      :listing="roomAccountsListing"
-      :proxies="proxies"
-      @close="closeRoomAccountsDialog"
-      @changed="handleRoomAccountsChanged"
-    />
-
-    <BaseDialog
-      :show="showConfigEditDialog"
-      :title="t('accountShare.roomEdit.title')"
-      width="extra-wide"
-      :close-disabled="savingConfigEdit || pendingDraftDiscardTarget === 'config'"
-      @close="closeConfigEditDialog"
-    >
-      <div class="space-y-5">
-        <div v-if="editingConfigListing" class="edit-context-panel">
-          <div class="min-w-0">
-            <span class="edit-context-eyebrow">{{ t('accountShare.common.roomIdHash', { id: editingConfigListing.id }) }}</span>
-            <strong>{{ listingDisplayName(editingConfigListing) }}</strong>
-            <small>
-              {{ t('accountShare.roomEdit.seats', { activeSeats: editingConfigListing.active_seats, seatLimit: editingConfigListing.seat_limit }) }}
-            </small>
-          </div>
-          <span v-if="editForceActive" class="edit-force-badge">{{ t('accountShare.roomEdit.adminForce') }}</span>
-        </div>
-
-        <div
-          v-if="editForceActive"
-          class="notice-row border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-200"
-        >
-          <Icon name="exclamationTriangle" size="sm" class="mt-0.5 flex-shrink-0" />
-          <span>{{ t('accountShare.roomEdit.adminConfirmed') }}</span>
-        </div>
-        <div
-          v-else-if="editConsumerProtected"
-          class="notice-row border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200"
-        >
-          <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
-          <span>{{ t('accountShare.roomEdit.inUseLimits') }}</span>
-        </div>
-
-        <div v-if="editErrorMessage" data-testid="config-edit-error" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
-          <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
-          <div class="min-w-0 flex-1">
-            <span>{{ editErrorMessage }}</span>
-            <button
-              v-if="editVersionConflict"
-              type="button"
-              class="mt-2 min-h-11 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 dark:border-red-800 dark:bg-dark-900 dark:text-red-200"
-              data-testid="reload-conflicted-room-config"
-              @click="reloadConfigEditAfterConflict"
-            >
-              {{ t('accountShare.roomEdit.refreshReopen') }}
-            </button>
-          </div>
-        </div>
-
-        <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div class="space-y-5">
-            <div class="form-section">
-              <div class="section-heading">
-                <span>{{ t('accountShare.roomEdit.baseConfig') }}</span>
-                <small>{{ t('accountShare.roomEdit.baseConfigHint') }}</small>
-              </div>
-              <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <label class="field">
-                  <span>{{ t('accountShare.create.roomName') }}</span>
-                  <input v-model="editForm.name" class="input" :placeholder="ACCOUNT_NAME_BASE_BY_PLATFORM[listingPlatform(editingConfigListing)]" />
-                  <small :class="editAccountNameValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
-                    {{ editAccountNameValidationMessage || t('accountShare.roomEdit.nameHint') }}
-                  </small>
-                </label>
-
-                <label class="field">
-                  <span>{{ t('accountShare.create.seatLimit') }}</span>
-                  <input
-                    v-model.number="editForm.seat_limit"
-                    class="input"
-                    type="number"
-                    :min="ACCOUNT_SHARE_MIN_SEATS"
-                    :max="ACCOUNT_SHARE_MAX_SEATS"
-                    step="1"
-                    inputmode="numeric"
-                    data-testid="edit-room-seat-limit"
-                  />
-                  <small>{{ t('accountShare.memberLimitHelp') }}</small>
-                </label>
-
-                <label class="field">
-                  <span>{{ t('accountShare.create.perUserConcurrency') }}</span>
-                  <input v-model.number="editForm.per_user_concurrency" class="input" type="number" min="1" :max="editMaxPerUserConcurrency" step="1" />
-                  <small :class="editPerUserConcurrencyValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
-                    {{ editPerUserConcurrencyValidationMessage || editPerUserConcurrencyLimitTip }}
-                  </small>
-                </label>
-
-                <label class="field">
-                  <span>{{ t('usage.accountMultiplier') }}</span>
-                  <input v-model.number="editForm.rate_multiplier" class="input" type="number" min="0" step="0.01" />
-                </label>
-
-                <label class="field">
-                  <span>{{ t('accountShare.create.hourlyRate') }}</span>
-                  <input v-model.number="editForm.hourly_rate" class="input" type="number" min="0" step="0.0001" />
-                </label>
-
-                <label class="field">
-                  <span>{{ t('accountShare.featureTags.hourlyFeeWaiver') }}</span>
-                  <input v-model.number="editForm.hourly_fee_waiver_minimum" class="input" type="number" min="0" step="0.0001" />
-                </label>
-
-                <label class="field">
-                  <span>{{ t('accountShare.create.minBalance') }}</span>
-                  <input v-model.number="editForm.min_balance_required" class="input" type="number" min="0" step="0.01" />
-                </label>
-              </div>
-            </div>
-
-            <div class="form-section">
-              <div class="section-heading">
-                <span>{{ t('accountShare.roomEdit.modelsProtection') }}</span>
-                <small>{{ t('accountShare.roomEdit.modelsHint') }}</small>
-              </div>
-              <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
-                <div class="field">
-                  <span>{{ t('admin.accounts.modelWhitelist') }}</span>
-                  <div class="model-selector-shell">
-                    <ModelWhitelistSelector
-                      v-model="editAllowedModels"
-                      :platform="listingPlatform(editingConfigListing)"
-                      :allowed-options="editingConfigListing?.supported_models"
-                      :allow-custom="false"
-                    />
-                  </div>
-                </div>
-
-                <div v-if="listingPlatform(editingConfigListing) === 'openai'" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                  <label class="field">
-                    <span>{{ t('accountShare.create.codex5h') }}</span>
-                    <input v-model.number="editForm.codex_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
-                  </label>
-                  <label class="field">
-                    <span>{{ t('accountShare.create.codex7d') }}</span>
-                    <input v-model.number="editForm.codex_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
-                  </label>
-                </div>
-                <div v-else-if="listingPlatform(editingConfigListing) === 'anthropic'" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
-                  <label class="field">
-                    <span>{{ t('accountShare.create.claude5h') }}</span>
-                    <input v-model.number="editForm.anthropic_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
-                  </label>
-                  <label class="field">
-                    <span>{{ t('accountShare.create.claude7d') }}</span>
-                    <input v-model.number="editForm.anthropic_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
-                  </label>
-                </div>
-              </div>
-
-              <div v-if="editConcurrencyNotice" class="notice-row mt-3">
-                <Icon name="infoCircle" size="sm" class="mt-0.5 flex-shrink-0" />
-                <span>{{ editConcurrencyNotice }}</span>
-              </div>
-
-              <label v-if="listingPlatform(editingConfigListing) === 'openai'" class="toggle-row mt-3">
-                <input v-model="editForm.codex_cli_only" type="checkbox" />
-                <span>
-                  <strong>{{ t('admin.accounts.openai.codexCLIOnly') }}</strong>
-                  <small>{{ t('accountShare.create.cliOnlyHint') }}</small>
-                </span>
-              </label>
-            </div>
-
-            <div class="form-section">
-              <div class="section-heading">
-                <span>{{ t('accountShare.join.passwordLabel') }}</span>
-                <small>{{ t('accountShare.roomEdit.passwordHint') }}</small>
-              </div>
-              <label class="field">
-                <span>{{ editingConfigListing?.has_password ? t('accountShare.roomEdit.changePassword') : t('accountShare.roomEdit.setPassword') }}</span>
-                <input
-                  v-model="editForm.join_password"
-                  class="input"
-                  type="password"
-                  maxlength="64"
-                  autocomplete="new-password"
-                  :disabled="editJoinPasswordClear"
-                  :placeholder="editingConfigListing?.has_password ? t('accountShare.roomEdit.passwordKeepPlaceholder') : t('accountShare.create.passwordPlaceholder')"
-                  data-testid="edit-room-join-password"
-                />
-                <small>{{ editingConfigListing?.has_password ? t('accountShare.roomEdit.passwordSet') : t('accountShare.roomEdit.passwordUnset') }}</small>
-              </label>
-              <label v-if="editingConfigListing?.has_password" class="toggle-row mt-3">
-                <input v-model="editJoinPasswordClear" type="checkbox" data-testid="edit-room-join-password-clear" />
-                <span>
-                  <strong>{{ t('accountShare.roomEdit.removePassword') }}</strong>
-                  <small>{{ t('accountShare.roomEdit.removePasswordHint') }}</small>
-                </span>
-              </label>
-            </div>
-
-            <div class="form-section">
-              <div class="section-heading">
-                <span>{{ t('accountShare.quotaAdmin.reasonLabel') }}</span>
-                <small>{{ t('accountShare.roomEdit.reasonHint') }}</small>
-              </div>
-              <label class="field">
-                <span>{{ t('accountShare.roomEdit.reasonLabel') }}</span>
-                <textarea
-                  v-model="editReason"
-                  class="input min-h-24"
-                  maxlength="1000"
-                  :placeholder="t('accountShare.roomEdit.reasonPlaceholder')"
-                  data-testid="room-config-update-reason"
-                ></textarea>
-                <small :class="!editReason.trim() ? 'text-amber-700 dark:text-amber-300' : ''">
-                  {{ t('accountShare.roomEdit.reasonCount', { length: editReason.trim().length }) }}
-                </small>
-              </label>
-            </div>
-          </div>
-
-          <aside class="edit-summary-panel">
-            <span class="text-xs font-semibold text-gray-500 dark:text-dark-300">{{ t('accountShare.roomEdit.saveSummary') }}</span>
-            <div class="mt-3 grid gap-2">
-              <div class="compact-metric">
-                <span>{{ t('keyUsage.model') }}</span>
-                <strong>{{ editAllowedModels.length }}</strong>
-              </div>
-              <div class="compact-metric">
-                <span>{{ t('admin.accounts.quotaDashboard.schedulableAccounts') }}</span>
-                <strong>{{ editingConfigListing ? roomEligibleAccountCount(editingConfigListing) : 0 }}/{{ editingConfigListing ? roomAttachedAccountCount(editingConfigListing) : 0 }}</strong>
-              </div>
-              <div class="compact-metric">
-                <span>{{ t('accountShare.create.seatLimit') }}</span>
-                <strong>{{ editForm.seat_limit }}</strong>
-              </div>
-              <div class="compact-metric">
-                <span>{{ t('accountShare.join.perUserConcurrency') }}</span>
-                <strong>{{ editForm.per_user_concurrency }}</strong>
-              </div>
-              <div class="compact-metric">
-                <span>{{ t('accountShare.roomEdit.perUserCap') }}</span>
-                <strong>{{ editMaxPerUserConcurrency }}</strong>
-              </div>
-              <div class="compact-metric">
-                <span>{{ t('accountShare.membership.fieldHourlyRate') }}</span>
-                <strong>{{ formatNumber(editForm.hourly_rate) }}</strong>
-              </div>
-              <div class="compact-metric">
-                <span>{{ t('accountShare.membership.fieldFeeWaiver') }}</span>
-                <strong>{{ hourlyFeeWaiverLabel(editForm.hourly_fee_waiver_minimum) }}</strong>
-              </div>
-            </div>
-          </aside>
-        </div>
-      </div>
-
-      <template #footer>
-        <span
-          v-if="configEditBlockedReason"
-          class="mr-auto text-sm text-amber-700 dark:text-amber-300"
-          data-testid="config-edit-blocked-reason"
-        >{{ configEditBlockedReason }}</span>
-        <button type="button" class="btn-secondary" :disabled="savingConfigEdit" @click="() => closeConfigEditDialog()">{{ t('common.cancel') }}</button>
-        <button
-          type="button"
-          class="btn-primary"
-          :disabled="savingConfigEdit || editVersionConflict || !editReason.trim() || editAllowedModels.length === 0 || Boolean(editPerUserConcurrencyValidationMessage)"
-          @click="saveConfigEdit"
-        >
-          <Icon v-if="!savingConfigEdit" name="checkCircle" size="sm" class="mr-2" />
-          <svg v-else class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
-            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
-          {{ t('admin.dataManagement.actions.saveConfig') }}
-        </button>
-      </template>
-    </BaseDialog>
 
 <RoomDetailsDrawer
       :listing="detailListing"
@@ -2536,6 +2256,288 @@
         </div>
       </template>
     </RoomDetailsDrawer>
+
+    <!-- 同 z-index 下 #dialog-root 内的层叠顺序等于声明顺序：从详情抽屉内打开的弹窗必须声明在抽屉之后，否则其遮罩会被抽屉遮罩覆盖、无法交互 -->
+    <RoomAccountsDialog
+      :show="roomAccountsListing !== null"
+      :listing="roomAccountsListing"
+      :proxies="proxies"
+      @close="closeRoomAccountsDialog"
+      @changed="handleRoomAccountsChanged"
+    />
+
+    <BaseDialog
+      :show="showConfigEditDialog"
+      :title="t('accountShare.roomEdit.title')"
+      width="extra-wide"
+      :close-disabled="savingConfigEdit || pendingDraftDiscardTarget === 'config'"
+      @close="closeConfigEditDialog"
+    >
+      <div class="space-y-5">
+        <div v-if="editingConfigListing" class="edit-context-panel">
+          <div class="min-w-0">
+            <span class="edit-context-eyebrow">{{ t('accountShare.common.roomIdHash', { id: editingConfigListing.id }) }}</span>
+            <strong>{{ listingDisplayName(editingConfigListing) }}</strong>
+            <small>
+              {{ t('accountShare.roomEdit.seats', { activeSeats: editingConfigListing.active_seats, seatLimit: editingConfigListing.seat_limit }) }}
+            </small>
+          </div>
+          <span v-if="editForceActive" class="edit-force-badge">{{ t('accountShare.roomEdit.adminForce') }}</span>
+        </div>
+
+        <div
+          v-if="editForceActive"
+          class="notice-row border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/60 dark:bg-amber-900/20 dark:text-amber-200"
+        >
+          <Icon name="exclamationTriangle" size="sm" class="mt-0.5 flex-shrink-0" />
+          <span>{{ t('accountShare.roomEdit.adminConfirmed') }}</span>
+        </div>
+        <div
+          v-else-if="editConsumerProtected"
+          class="notice-row border-blue-200 bg-blue-50 text-blue-800 dark:border-blue-900/60 dark:bg-blue-900/20 dark:text-blue-200"
+        >
+          <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
+          <span>{{ t('accountShare.roomEdit.inUseLimits') }}</span>
+        </div>
+
+        <div v-if="editErrorMessage" data-testid="config-edit-error" class="notice-row border-red-200 bg-red-50 text-red-700 dark:border-red-900/60 dark:bg-red-900/20 dark:text-red-300">
+          <Icon name="exclamationCircle" size="sm" class="mt-0.5 flex-shrink-0" />
+          <div class="min-w-0 flex-1">
+            <span>{{ editErrorMessage }}</span>
+            <button
+              v-if="editVersionConflict"
+              type="button"
+              class="mt-2 min-h-11 rounded-lg border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-50 dark:border-red-800 dark:bg-dark-900 dark:text-red-200"
+              data-testid="reload-conflicted-room-config"
+              @click="reloadConfigEditAfterConflict"
+            >
+              {{ t('accountShare.roomEdit.refreshReopen') }}
+            </button>
+          </div>
+        </div>
+
+        <div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div class="space-y-5">
+            <div class="form-section">
+              <div class="section-heading">
+                <span>{{ t('accountShare.roomEdit.baseConfig') }}</span>
+                <small>{{ t('accountShare.roomEdit.baseConfigHint') }}</small>
+              </div>
+              <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <label class="field">
+                  <span>{{ t('accountShare.create.roomName') }}</span>
+                  <input v-model="editForm.name" class="input" :placeholder="ACCOUNT_NAME_BASE_BY_PLATFORM[listingPlatform(editingConfigListing)]" />
+                  <small :class="editAccountNameValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
+                    {{ editAccountNameValidationMessage || t('accountShare.roomEdit.nameHint') }}
+                  </small>
+                </label>
+
+                <label class="field">
+                  <span>{{ t('accountShare.create.seatLimit') }}</span>
+                  <input
+                    v-model.number="editForm.seat_limit"
+                    class="input"
+                    type="number"
+                    :min="ACCOUNT_SHARE_MIN_SEATS"
+                    :max="ACCOUNT_SHARE_MAX_SEATS"
+                    step="1"
+                    inputmode="numeric"
+                    data-testid="edit-room-seat-limit"
+                  />
+                  <small>{{ t('accountShare.memberLimitHelp') }}</small>
+                </label>
+
+                <label class="field">
+                  <span>{{ t('accountShare.create.perUserConcurrency') }}</span>
+                  <input v-model.number="editForm.per_user_concurrency" class="input" type="number" min="1" :max="editMaxPerUserConcurrency" step="1" />
+                  <small :class="editPerUserConcurrencyValidationMessage ? 'text-red-600 dark:text-red-300' : ''">
+                    {{ editPerUserConcurrencyValidationMessage || editPerUserConcurrencyLimitTip }}
+                  </small>
+                </label>
+
+                <label class="field">
+                  <span>{{ t('usage.accountMultiplier') }}</span>
+                  <input v-model.number="editForm.rate_multiplier" class="input" type="number" min="0" step="0.01" />
+                </label>
+
+                <label class="field">
+                  <span>{{ t('accountShare.create.hourlyRate') }}</span>
+                  <input v-model.number="editForm.hourly_rate" class="input" type="number" min="0" step="0.0001" />
+                </label>
+
+                <label class="field">
+                  <span>{{ t('accountShare.featureTags.hourlyFeeWaiver') }}</span>
+                  <input v-model.number="editForm.hourly_fee_waiver_minimum" class="input" type="number" min="0" step="0.0001" />
+                </label>
+
+                <label class="field">
+                  <span>{{ t('accountShare.create.minBalance') }}</span>
+                  <input v-model.number="editForm.min_balance_required" class="input" type="number" min="0" step="0.01" />
+                </label>
+              </div>
+            </div>
+
+            <div class="form-section">
+              <div class="section-heading">
+                <span>{{ t('accountShare.roomEdit.modelsProtection') }}</span>
+                <small>{{ t('accountShare.roomEdit.modelsHint') }}</small>
+              </div>
+              <div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_280px]">
+                <div class="field">
+                  <span>{{ t('admin.accounts.modelWhitelist') }}</span>
+                  <div class="model-selector-shell">
+                    <ModelWhitelistSelector
+                      v-model="editAllowedModels"
+                      :platform="listingPlatform(editingConfigListing)"
+                      :allowed-options="editingConfigListing?.supported_models"
+                      :allow-custom="false"
+                    />
+                  </div>
+                </div>
+
+                <div v-if="listingPlatform(editingConfigListing) === 'openai'" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <label class="field">
+                    <span>{{ t('accountShare.create.codex5h') }}</span>
+                    <input v-model.number="editForm.codex_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
+                  </label>
+                  <label class="field">
+                    <span>{{ t('accountShare.create.codex7d') }}</span>
+                    <input v-model.number="editForm.codex_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
+                  </label>
+                </div>
+                <div v-else-if="listingPlatform(editingConfigListing) === 'anthropic'" class="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
+                  <label class="field">
+                    <span>{{ t('accountShare.create.claude5h') }}</span>
+                    <input v-model.number="editForm.anthropic_5h_limit_percent" class="input" type="number" min="1" max="100" step="1" />
+                  </label>
+                  <label class="field">
+                    <span>{{ t('accountShare.create.claude7d') }}</span>
+                    <input v-model.number="editForm.anthropic_7d_limit_percent" class="input" type="number" min="1" max="100" step="1" />
+                  </label>
+                </div>
+              </div>
+
+              <div v-if="editConcurrencyNotice" class="notice-row mt-3">
+                <Icon name="infoCircle" size="sm" class="mt-0.5 flex-shrink-0" />
+                <span>{{ editConcurrencyNotice }}</span>
+              </div>
+
+              <label v-if="listingPlatform(editingConfigListing) === 'openai'" class="toggle-row mt-3">
+                <input v-model="editForm.codex_cli_only" type="checkbox" />
+                <span>
+                  <strong>{{ t('admin.accounts.openai.codexCLIOnly') }}</strong>
+                  <small>{{ t('accountShare.create.cliOnlyHint') }}</small>
+                </span>
+              </label>
+            </div>
+
+            <div class="form-section">
+              <div class="section-heading">
+                <span>{{ t('accountShare.join.passwordLabel') }}</span>
+                <small>{{ t('accountShare.roomEdit.passwordHint') }}</small>
+              </div>
+              <label class="field">
+                <span>{{ editingConfigListing?.has_password ? t('accountShare.roomEdit.changePassword') : t('accountShare.roomEdit.setPassword') }}</span>
+                <input
+                  v-model="editForm.join_password"
+                  class="input"
+                  type="password"
+                  maxlength="64"
+                  autocomplete="new-password"
+                  :disabled="editJoinPasswordClear"
+                  :placeholder="editingConfigListing?.has_password ? t('accountShare.roomEdit.passwordKeepPlaceholder') : t('accountShare.create.passwordPlaceholder')"
+                  data-testid="edit-room-join-password"
+                />
+                <small>{{ editingConfigListing?.has_password ? t('accountShare.roomEdit.passwordSet') : t('accountShare.roomEdit.passwordUnset') }}</small>
+              </label>
+              <label v-if="editingConfigListing?.has_password" class="toggle-row mt-3">
+                <input v-model="editJoinPasswordClear" type="checkbox" data-testid="edit-room-join-password-clear" />
+                <span>
+                  <strong>{{ t('accountShare.roomEdit.removePassword') }}</strong>
+                  <small>{{ t('accountShare.roomEdit.removePasswordHint') }}</small>
+                </span>
+              </label>
+            </div>
+
+            <div class="form-section">
+              <div class="section-heading">
+                <span>{{ t('accountShare.quotaAdmin.reasonLabel') }}</span>
+                <small>{{ t('accountShare.roomEdit.reasonHint') }}</small>
+              </div>
+              <label class="field">
+                <span>{{ t('accountShare.roomEdit.reasonLabel') }}</span>
+                <textarea
+                  v-model="editReason"
+                  class="input min-h-24"
+                  maxlength="1000"
+                  :placeholder="t('accountShare.roomEdit.reasonPlaceholder')"
+                  data-testid="room-config-update-reason"
+                ></textarea>
+                <small :class="!editReason.trim() ? 'text-amber-700 dark:text-amber-300' : ''">
+                  {{ t('accountShare.roomEdit.reasonCount', { length: editReason.trim().length }) }}
+                </small>
+              </label>
+            </div>
+          </div>
+
+          <aside class="edit-summary-panel">
+            <span class="text-xs font-semibold text-gray-500 dark:text-dark-300">{{ t('accountShare.roomEdit.saveSummary') }}</span>
+            <div class="mt-3 grid gap-2">
+              <div class="compact-metric">
+                <span>{{ t('keyUsage.model') }}</span>
+                <strong>{{ editAllowedModels.length }}</strong>
+              </div>
+              <div class="compact-metric">
+                <span>{{ t('admin.accounts.quotaDashboard.schedulableAccounts') }}</span>
+                <strong>{{ editingConfigListing ? roomEligibleAccountCount(editingConfigListing) : 0 }}/{{ editingConfigListing ? roomAttachedAccountCount(editingConfigListing) : 0 }}</strong>
+              </div>
+              <div class="compact-metric">
+                <span>{{ t('accountShare.create.seatLimit') }}</span>
+                <strong>{{ editForm.seat_limit }}</strong>
+              </div>
+              <div class="compact-metric">
+                <span>{{ t('accountShare.join.perUserConcurrency') }}</span>
+                <strong>{{ editForm.per_user_concurrency }}</strong>
+              </div>
+              <div class="compact-metric">
+                <span>{{ t('accountShare.roomEdit.perUserCap') }}</span>
+                <strong>{{ editMaxPerUserConcurrency }}</strong>
+              </div>
+              <div class="compact-metric">
+                <span>{{ t('accountShare.membership.fieldHourlyRate') }}</span>
+                <strong>{{ formatNumber(editForm.hourly_rate) }}</strong>
+              </div>
+              <div class="compact-metric">
+                <span>{{ t('accountShare.membership.fieldFeeWaiver') }}</span>
+                <strong>{{ hourlyFeeWaiverLabel(editForm.hourly_fee_waiver_minimum) }}</strong>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <template #footer>
+        <span
+          v-if="configEditBlockedReason"
+          class="mr-auto text-sm text-amber-700 dark:text-amber-300"
+          data-testid="config-edit-blocked-reason"
+        >{{ configEditBlockedReason }}</span>
+        <button type="button" class="btn-secondary" :disabled="savingConfigEdit" @click="() => closeConfigEditDialog()">{{ t('common.cancel') }}</button>
+        <button
+          type="button"
+          class="btn-primary"
+          :disabled="savingConfigEdit || editVersionConflict || !editReason.trim() || editAllowedModels.length === 0 || Boolean(editPerUserConcurrencyValidationMessage)"
+          @click="saveConfigEdit"
+        >
+          <Icon v-if="!savingConfigEdit" name="checkCircle" size="sm" class="mr-2" />
+          <svg v-else class="-ml-1 mr-2 h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          {{ t('admin.dataManagement.actions.saveConfig') }}
+        </button>
+      </template>
+    </BaseDialog>
 
     <BaseDialog
       :show="pendingEndUse !== null"
