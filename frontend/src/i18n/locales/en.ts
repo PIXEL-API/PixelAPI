@@ -1145,6 +1145,7 @@ export default {
       clearSelection: "Clear selection",
       removeHint: "Exiting only detaches the account from this room. It does not change its mode, status, groups, credentials, or proxy, and does not delete the account. The room pauses after its last account exits.",
       addHint: "Only accounts already set to the matching platform account mode in My Accounts, with the same owner, platform ({platform}), and level ({level}), can be added. The server validates these rules again.",
+      addHintWithoutLevel: "Only accounts already set to the matching platform account mode in My Accounts, with the same owner and platform ({platform}), can be added. The server validates these rules again.",
       removeSelected: "Exit room ({count})",
       addSelected: "Join room ({count})",
       currentMode: "Current mode",

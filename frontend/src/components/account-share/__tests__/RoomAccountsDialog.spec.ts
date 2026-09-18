@@ -328,6 +328,30 @@ describe('RoomAccountsDialog', () => {
     )).toHaveLength(1)
   })
 
+  it('enables unknown-level candidates for platforms without account levels', async () => {
+    listRoomAccounts.mockResolvedValueOnce([])
+    listAccounts.mockResolvedValue(paginatedAccounts([
+      account(51, 'Devin 账号', { platform: 'devin', account_level: 'unknown' }),
+      account(52, '聚合账号', { platform: 'api_aggregation', account_level: 'unknown' }),
+    ]))
+
+    const devinRoom = listing(1, 'Devin 房间')
+    devinRoom.platform = 'devin'
+    devinRoom.account_level = 'unknown'
+    const wrapper = mountDialog(devinRoom)
+    await flushPromises()
+    await wrapper.get('[data-testid="room-accounts-add-tab"]').trigger('click')
+
+    const setupState = (wrapper.vm as any).$?.setupState
+    const devinCandidate = setupState.candidates.find((item: Account) => item.platform === 'devin')
+    const aggCandidate = setupState.candidates.find((item: Account) => item.platform === 'api_aggregation')
+    expect(setupState.candidateDisabledReason(devinCandidate)).toBe('')
+    expect(setupState.candidateDisabledReason(aggCandidate)).toContain('平台不一致')
+    expect(wrapper.text()).not.toContain('当前房间等级未知')
+    expect(wrapper.text()).not.toContain('unknown')
+    wrapper.unmount()
+  })
+
   it('loads candidate pages with bounded request concurrency', async () => {
     let activeRequests = 0
     let maximumActiveRequests = 0

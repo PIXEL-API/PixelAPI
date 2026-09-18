@@ -1109,6 +1109,7 @@ export default {
       clearSelection: "取消全选",
       removeHint: "退出房间只会解除账号与当前房间的关系，不会改变账号模式、状态、分组、凭证或代理，也不会删除账号。最后一个账号退出后，房间将自动暂停。",
       addHint: "只有已在“我的账号”中设为对应平台账号模式、同一号主、同平台（{platform}）且同等级（{level}）的账号才能加入；服务端会再次校验。",
+      addHintWithoutLevel: "只有已在“我的账号”中设为对应平台账号模式、同一号主且同平台（{platform}）的账号才能加入；服务端会再次校验。",
       removeSelected: "退出房间（{count}）",
       addSelected: "加入房间（{count}）",
       currentMode: "当前模式",
