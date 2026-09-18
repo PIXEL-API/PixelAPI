@@ -438,7 +438,7 @@
                     :key="account.id"
                     :value="account.id"
                   >
-                    {{ account.name }} · {{ account.account_level }} · #{{ account.id }}
+                    {{ ownedAccountOptionLabel(account) }}
                   </option>
                 </select>
                 <small>{{ ownedAccountSelectionHint }}</small>
@@ -4350,6 +4350,15 @@ const eligibleOwnedAccounts = computed(() => (
     })
     .sort((left, right) => left.name.localeCompare(right.name, 'zh-CN') || left.id - right.id)
 ))
+
+// Account level is only meaningful for OpenAI/Anthropic subscription pools;
+// Devin, Opencode, CN providers and API aggregation have no level concept.
+const ACCOUNT_SHARE_LEVEL_PLATFORMS: ReadonlySet<string> = new Set(['openai', 'anthropic'])
+
+function ownedAccountOptionLabel(account: Account): string {
+  const level = ACCOUNT_SHARE_LEVEL_PLATFORMS.has(account.platform) ? ` · ${account.account_level}` : ''
+  return `${account.name}${level} · #${account.id}`
+}
 
 const selectedOwnedAccount = computed(() => (
   eligibleOwnedAccounts.value.find((account) => account.id === selectedOwnedAccountID.value) || null

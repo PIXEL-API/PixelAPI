@@ -2706,7 +2706,7 @@ func (s *AccountShareModeService) CreateRoomFromOwnedAccount(ctx context.Context
 		accountLevel = NormalizeOpenAIAccountLevelWithConfigs(account.Platform, account.AccountLevel, account.Credentials, account.Extra, levelConfigs)
 	}
 	// OpenCode/Devin 与国产 API Key 平台没有账号等级概念，account_level 可为 unknown，允许上架。
-	if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode && account.Platform != PlatformDevin && !IsCNProvider(account.Platform) && !IsAPIAggregationProvider(account.Platform) {
+	if accountLevel == AccountLevelUnknown && PlatformHasAccountLevel(account.Platform) {
 		return nil, ErrAccountShareRoomUnknownLevel
 	}
 	if err := validateAccountShareListingConfig(

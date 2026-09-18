@@ -102,6 +102,19 @@ func IsRelayUpstreamProvider(platform string) bool {
 	return IsCNProvider(platform) || IsAPIAggregationProvider(platform)
 }
 
+// PlatformHasAccountLevel reports whether the platform exposes a meaningful
+// account subscription level (e.g. OpenAI free/plus/pro/team). Opencode,
+// Devin, CN providers, and the API aggregation channel have no such concept,
+// so their accounts legitimately carry AccountLevelUnknown.
+func PlatformHasAccountLevel(platform string) bool {
+	switch platform {
+	case PlatformOpencode, PlatformDevin:
+		return false
+	default:
+		return !IsRelayUpstreamProvider(platform)
+	}
+}
+
 const (
 	DefaultKimiPayGBaseURL            = "https://api.moonshot.cn/v1"
 	DefaultKimiCodingBaseURL          = "https://api.kimi.com/coding/v1"

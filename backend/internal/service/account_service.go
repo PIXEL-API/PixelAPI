@@ -3915,7 +3915,7 @@ func (s *AccountService) ConvertOwnedExternalPlacement(ctx context.Context, owne
 		if err != nil {
 			return nil, err
 		}
-		if accountLevel == AccountLevelUnknown && account.Platform != PlatformOpencode && !IsCNProvider(account.Platform) && !IsAPIAggregationProvider(account.Platform) {
+		if accountLevel == AccountLevelUnknown && PlatformHasAccountLevel(account.Platform) {
 			return nil, ErrAccountShareRoomUnknownLevel
 		}
 		modeGroup, err := s.accountShareModeRepo.GetModeGroup(ctx, account.Platform)

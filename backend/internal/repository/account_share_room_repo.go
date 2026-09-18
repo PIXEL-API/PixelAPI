@@ -214,7 +214,7 @@ func (r *accountShareModeRepository) CreateRoomFromOwnedAccount(ctx context.Cont
 		return r.GetListingByID(ctx, idempotentListingID, ownerUserID)
 	}
 	accountLevel = service.NormalizeAccountLevel(accountLevel)
-	if accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode && !service.IsCNProvider(platform) && !service.IsAPIAggregationProvider(platform) {
+	if accountLevel == service.AccountLevelUnknown && service.PlatformHasAccountLevel(platform) {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 	if accountStatus != service.StatusActive || !accountSchedulable {
@@ -607,7 +607,7 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 	}
 	roomPlatform := strings.ToLower(strings.TrimSpace(room.Platform))
 	roomAccountLevel := service.NormalizeAccountLevel(room.AccountLevel)
-	if roomAccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode && !service.IsCNProvider(roomPlatform) && !service.IsAPIAggregationProvider(roomPlatform) {
+	if roomAccountLevel == service.AccountLevelUnknown && service.PlatformHasAccountLevel(roomPlatform) {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 
@@ -629,7 +629,7 @@ func (r *accountShareModeRepository) AttachRoomAccountsAtomic(
 			})
 			continue
 		}
-		if candidate.Snapshot.AccountLevel == service.AccountLevelUnknown && roomPlatform != service.PlatformOpencode && !service.IsCNProvider(roomPlatform) && !service.IsAPIAggregationProvider(roomPlatform) {
+		if candidate.Snapshot.AccountLevel == service.AccountLevelUnknown && service.PlatformHasAccountLevel(roomPlatform) {
 			recordFailure(accountID, service.ErrAccountShareRoomUnknownLevel, nil)
 			continue
 		}
@@ -1863,7 +1863,7 @@ func (r *accountShareModeRepository) ConvertExternalPlacement(ctx context.Contex
 	}
 	platform = strings.ToLower(strings.TrimSpace(platform))
 	accountLevel = service.NormalizeAccountLevel(accountLevel)
-	if target == service.AccountExternalPlacementRoom && accountLevel == service.AccountLevelUnknown && platform != service.PlatformOpencode && !service.IsCNProvider(platform) && !service.IsAPIAggregationProvider(platform) {
+	if target == service.AccountExternalPlacementRoom && accountLevel == service.AccountLevelUnknown && service.PlatformHasAccountLevel(platform) {
 		return nil, service.ErrAccountShareRoomUnknownLevel
 	}
 
