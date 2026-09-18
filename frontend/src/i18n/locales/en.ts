@@ -3680,6 +3680,8 @@ export default {
     noGroups: "No accessible groups",
     noPricing: "Pricing not configured",
     viewModelDetails: "View details for {model}",
+    copyModel: "Copy {model}",
+    copiedModel: "Copied {model}",
     monitor: {
       unmonitored: "Not monitored",
       sources: "{count} monitors",

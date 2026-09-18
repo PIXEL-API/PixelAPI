@@ -3607,6 +3607,8 @@ export default {
     noGroups: "暂无可访问分组",
     noPricing: "未配置定价",
     viewModelDetails: "查看 {model} 详情",
+    copyModel: "复制 {model}",
+    copiedModel: "已复制 {model}",
     monitor: {
       unmonitored: "未配置监控",
       sources: "{count} 个监控源",

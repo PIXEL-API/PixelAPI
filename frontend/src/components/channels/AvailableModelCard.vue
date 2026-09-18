@@ -1,11 +1,14 @@
 <template>
-  <button
-    type="button"
-    class="group flex min-h-16 w-full cursor-pointer items-center gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-left shadow-sm transition-[border-color,background-color,box-shadow] duration-200 hover:border-gray-300 hover:bg-gray-50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/60 dark:border-dark-700 dark:bg-dark-900/45 dark:hover:border-dark-600 dark:hover:bg-dark-800/70"
-    :aria-label="t('availableChannels.viewModelDetails', { model: model.name })"
-    :aria-expanded="expanded"
-    @click="$emit('select')"
+  <div
+    class="group relative flex min-h-16 w-full cursor-pointer items-center gap-3 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-left shadow-sm transition-[border-color,background-color,box-shadow] duration-200 hover:border-gray-300 hover:bg-gray-50 hover:shadow-md dark:border-dark-700 dark:bg-dark-900/45 dark:hover:border-dark-600 dark:hover:bg-dark-800/70"
   >
+    <button
+      type="button"
+      class="absolute inset-0 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500/60"
+      :aria-label="t('availableChannels.viewModelDetails', { model: model.name })"
+      :aria-expanded="expanded"
+      @click="$emit('select')"
+    />
     <span class="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gray-50 ring-1 ring-inset ring-gray-200 dark:bg-dark-800 dark:ring-dark-700">
       <ModelIcon :model="model.name" size="20px" />
     </span>
@@ -48,6 +51,19 @@
       </span>
     </span>
 
+    <button
+      type="button"
+      class="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/60"
+      :class="copied
+        ? 'text-emerald-500 dark:text-emerald-400'
+        : 'text-gray-300 hover:bg-gray-100 hover:text-gray-600 dark:text-dark-600 dark:hover:bg-dark-700 dark:hover:text-dark-300'"
+      :title="t('availableChannels.copyModel', { model: model.name })"
+      :aria-label="t('availableChannels.copyModel', { model: model.name })"
+      @click="copyModelName"
+    >
+      <Icon :name="copied ? 'check' : 'copy'" size="sm" />
+    </button>
+
     <Icon
       name="chevronRight"
       size="sm"
@@ -56,7 +72,7 @@
         expanded ? 'rotate-90' : '',
       ]"
     />
-  </button>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -66,6 +82,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ModelIcon from '@/components/common/ModelIcon.vue'
 import type { UserSupportedModel } from '@/api/channels'
 import type { MonitorStatus } from '@/api/channelMonitor'
+import { useClipboard } from '@/composables/useClipboard'
 import { availableModelPriceSummary } from '@/utils/availableModelPricing'
 
 export interface AvailableModelMonitorSummary {
@@ -97,6 +114,12 @@ const props = withDefaults(
 defineEmits<{ (event: 'select'): void }>()
 
 const { t } = useI18n()
+const { copied, copyToClipboard } = useClipboard()
+
+function copyModelName(): void {
+  void copyToClipboard(props.model.name, t('availableChannels.copiedModel', { model: props.model.name }))
+}
+
 const priceSummary = computed(() =>
   availableModelPriceSummary(
     props.model,
