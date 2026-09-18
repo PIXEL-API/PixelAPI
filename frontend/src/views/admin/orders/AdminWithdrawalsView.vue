@@ -29,7 +29,7 @@
         <template #cell-amount="{ value, row }">
           <div class="text-sm">
             <p class="font-semibold text-gray-900 dark:text-white">${{ value.toFixed(2) }}</p>
-            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.withdrawals.deductedAmount', { toFixed: row.total_deducted.toFixed(2) }) }}</p>
+            <p class="text-xs text-gray-500 dark:text-gray-400">{{ t('admin.withdrawals.deductedAmount', { amount: row.total_deducted.toFixed(2) }) }}</p>
           </div>
         </template>
         <template #cell-payment_method="{ value }">
@@ -84,7 +84,7 @@
           v-if="receiptTarget"
           class="inline-flex min-w-0 items-center rounded-md border border-blue-100 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 dark:border-blue-500/20 dark:bg-blue-500/10 dark:text-blue-300"
         >
-          {{ t('admin.withdrawals.pendingAmount', { toFixed: receiptTarget.amount.toFixed(2) }) }}
+          {{ t('admin.withdrawals.pendingAmount', { amount: receiptTarget.amount.toFixed(2) }) }}
         </span>
       </template>
       <div v-if="receiptTarget" class="space-y-4">
